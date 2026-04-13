@@ -41,11 +41,11 @@ jobs:
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0" \
-            "ndk;27.0.12077973"
+            "ndk;28.2.13676358"
 
       - name: Build xray.aar
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.1.8937393
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           XRAY_CORE_REF: main
         run: |
           chmod +x scripts/build-xray-aar.bash
