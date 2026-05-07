@@ -30,10 +30,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -50,7 +53,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,11 +65,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.justme.xtls_core_proxy.db.Profile
-import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.log.LogRepository
+import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.split.SplitTunnelSettingsActivity
+import com.justme.xtls_core_proxy.state.SubGroup
 import com.justme.xtls_core_proxy.state.VpnViewModel
+import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
+import com.justme.xtls_core_proxy.subs.SubscriptionsActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
 class MainActivity : ComponentActivity() {
@@ -135,6 +142,9 @@ class MainActivity : ComponentActivity() {
                     onOpenSplitTunnelSettings = {
                         startActivity(Intent(this, SplitTunnelSettingsActivity::class.java))
                     },
+                    onOpenSubscriptions = {
+                        startActivity(Intent(this, SubscriptionsActivity::class.java))
+                    },
                     onAddProfile = {
                         serverSettingsLauncher.launch(
                             ServerSettingsActivity.createIntent(
@@ -158,6 +168,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.refreshAllStaleSubscriptions()
     }
 
     private fun requestVpnPermissionAndConnect() {
@@ -185,22 +200,30 @@ private fun MainScreen(
     onConnect: (Long) -> Unit,
     onDisconnect: () -> Unit,
     onOpenSplitTunnelSettings: () -> Unit,
+    onOpenSubscriptions: () -> Unit,
     onAddProfile: () -> Unit,
     onEditProfile: (Profile) -> Unit
 ) {
-    val profiles by viewModel.profiles.collectAsState()
+    val view by viewModel.groupedProfiles.collectAsState()
     val activeId by viewModel.activeProfileId.collectAsState()
     val state by viewModel.connectionState.collectAsState()
     val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
 
     var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
+    val expanded = remember { mutableStateMapOf<Long, Boolean>() }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Xray Tun") },
                 actions = {
+                    IconButton(onClick = onOpenSubscriptions) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.List,
+                            contentDescription = "Subscriptions"
+                        )
+                    }
                     IconButton(onClick = onOpenSplitTunnelSettings) {
                         Icon(
                             imageVector = Icons.Default.Settings,
@@ -246,7 +269,8 @@ private fun MainScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (profiles.isEmpty()) {
+            val isEmpty = view.manual.isEmpty() && view.groups.all { it.profiles.isEmpty() }
+            if (isEmpty) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -254,7 +278,7 @@ private fun MainScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No profiles yet.\nTap + to add a server.",
+                        text = "No profiles yet.\nTap + to add a server, or use the cloud icon to add a subscription.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -266,18 +290,43 @@ private fun MainScreen(
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(profiles, key = { it.id }) { profile ->
-                        val isActive = profile.id == activeId &&
-                            (state == VpnConnectionState.CONNECTED || state == VpnConnectionState.CONNECTING)
-
-                        ProfileRow(
-                            profile = profile,
-                            isActive = isActive,
-                            isConnecting = isActive && state == VpnConnectionState.CONNECTING,
-                            canConnect = state != VpnConnectionState.CONNECTED && state != VpnConnectionState.CONNECTING,
-                            onConnect = { onConnect(profile.id) },
-                            onLongPress = { bottomSheetProfile = profile }
-                        )
+                    if (view.manual.isNotEmpty()) {
+                        item(key = "h-manual") { SectionHeader("My profiles") }
+                        items(view.manual, key = { "p-${it.id}" }) { profile ->
+                            ProfileRow(
+                                profile = profile,
+                                isActive = isActive(profile, activeId, state),
+                                isConnecting = isActive(profile, activeId, state) &&
+                                    state == VpnConnectionState.CONNECTING,
+                                canConnect = canConnect(state),
+                                onConnect = { onConnect(profile.id) },
+                                onLongPress = { bottomSheetProfile = profile }
+                            )
+                        }
+                    }
+                    view.groups.forEach { group ->
+                        val isExpanded = expanded[group.subscription.id] ?: true
+                        item(key = "h-${group.subscription.id}") {
+                            SubscriptionGroupHeader(
+                                group = group,
+                                isExpanded = isExpanded,
+                                onToggle = { expanded[group.subscription.id] = !isExpanded },
+                                onRefresh = { viewModel.refreshSubscription(group.subscription.id) }
+                            )
+                        }
+                        if (isExpanded) {
+                            items(group.profiles, key = { "p-${it.id}" }) { profile ->
+                                ProfileRow(
+                                    profile = profile,
+                                    isActive = isActive(profile, activeId, state),
+                                    isConnecting = isActive(profile, activeId, state) &&
+                                        state == VpnConnectionState.CONNECTING,
+                                    canConnect = canConnect(state),
+                                    onConnect = { onConnect(profile.id) },
+                                    onLongPress = { bottomSheetProfile = profile }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -317,27 +366,123 @@ private fun MainScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                TextButton(
-                    onClick = {
-                        bottomSheetProfile = null
-                        onEditProfile(profile)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Edit")
-                }
-                TextButton(
-                    onClick = {
-                        viewModel.deleteProfile(profile)
-                        bottomSheetProfile = null
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                if (profile.subscriptionId == null) {
+                    TextButton(
+                        onClick = {
+                            bottomSheetProfile = null
+                            onEditProfile(profile)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Edit")
+                    }
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteProfile(profile)
+                            bottomSheetProfile = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Text(
+                        text = "Subscription-managed profile. Edit or delete it via the subscription " +
+                            "that owns it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SubscriptionGroupHeader(
+    group: SubGroup,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onToggle, onLongClick = onToggle),
+        tonalElevation = 0.dp,
+        shape = MaterialTheme.shapes.small
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown
+                else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (isExpanded) "Collapse" else "Expand"
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = group.subscription.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "(${group.profiles.size})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (group.subscription.lastError != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        ErrorPill(group.subscription.lastError)
+                    }
+                }
+                Text(
+                    text = SubscriptionFormatting.lastSeenSummary(group.subscription),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh subscription")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ErrorPill(message: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.small
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -398,3 +543,11 @@ private fun ProfileRow(
     }
 }
 
+private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
+    return profile.id == activeId &&
+        (state == VpnConnectionState.CONNECTED || state == VpnConnectionState.CONNECTING)
+}
+
+private fun canConnect(state: VpnConnectionState): Boolean {
+    return state != VpnConnectionState.CONNECTED && state != VpnConnectionState.CONNECTING
+}
