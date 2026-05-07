@@ -2,9 +2,6 @@ package com.justme.xtls_core_proxy.config
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URI
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 object ConfigBuilder {
     fun buildRuntimeConfig(input: String): String {
@@ -19,7 +16,7 @@ object ConfigBuilder {
     }
 
     fun fromVlessUri(uri: String): String {
-        val profile = parseVlessUri(uri)
+        val profile = ProfileConfigCodec.parseVlessUri(uri)
         return buildXrayJson(profile).toString()
     }
 
@@ -49,66 +46,6 @@ object ConfigBuilder {
         } else {
             trimmed
         }
-    }
-
-    private fun parseVlessUri(uri: String): VlessProfile {
-        val parsed = URI(uri)
-        if (!parsed.scheme.equals("vless", ignoreCase = true)) {
-            throw IllegalArgumentException("Unsupported URI scheme: ${parsed.scheme}")
-        }
-
-        val uuid = parsed.userInfo?.trim().orEmpty()
-        require(uuid.isNotEmpty()) { "Missing UUID in vless link" }
-
-        val host = parsed.host?.trim().orEmpty()
-        require(host.isNotEmpty()) { "Missing host in vless link" }
-
-        val port = parsed.port
-        require(port in 1..65535) { "Missing or invalid port in vless link" }
-
-        val params = parseQuery(parsed.rawQuery)
-        val security = params["security"]?.ifBlank { null } ?: "none"
-        val network = params["type"]?.ifBlank { null } ?: "tcp"
-
-        return VlessProfile(
-            uuid = uuid,
-            host = host,
-            port = port,
-            flow = params["flow"].orEmpty(),
-            security = security,
-            publicKey = params["pbk"],
-            shortId = params["sid"],
-            fingerprint = params["fp"]?.ifBlank { null } ?: "chrome",
-            serverName = params["sni"]?.ifBlank { null } ?: host,
-            network = network,
-            alpn = params["alpn"].orEmpty(),
-            spiderX = params["spx"],
-            allowInsecure = params["allowInsecure"]?.equals("1") == true,
-            transportPath = params["path"],
-            transportHost = params["host"],
-            grpcServiceName = params["serviceName"],
-            kcpSeed = params["seed"],
-            quicKey = params["key"]
-        )
-    }
-
-    private fun parseQuery(rawQuery: String?): Map<String, String> {
-        if (rawQuery.isNullOrBlank()) return emptyMap()
-        return rawQuery.split("&")
-            .filter { it.isNotBlank() }
-            .mapNotNull { pair ->
-                val split = pair.split("=", limit = 2)
-                if (split.isEmpty()) return@mapNotNull null
-                val key = decode(split[0])
-                if (key.isBlank()) return@mapNotNull null
-                val value = if (split.size == 2) decode(split[1]) else ""
-                key to value
-            }
-            .toMap()
-    }
-
-    private fun decode(value: String): String {
-        return URLDecoder.decode(value, StandardCharsets.UTF_8.name())
     }
 
     private fun rejectLocalProxyInbounds(inbounds: JSONArray) {
