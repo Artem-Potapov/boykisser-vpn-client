@@ -8,6 +8,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.justme.xtls_core_proxy.BuildConfig
+import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
@@ -72,13 +73,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addProfile(name: String, config: String) {
         viewModelScope.launch {
-            dao.insert(Profile(name = name, config = config))
+            val storedConfig = ConfigBuilder.toProfileStorageConfig(config)
+            dao.insert(Profile(name = name, config = storedConfig))
         }
     }
 
     fun updateProfile(profile: Profile) {
         viewModelScope.launch {
-            dao.update(profile)
+            val storedConfig = ConfigBuilder.toProfileStorageConfig(profile.config)
+            dao.update(profile.copy(config = storedConfig))
         }
     }
 

@@ -36,7 +36,8 @@ object SubscriptionBodyParser {
             }
             val baseName = deriveDisplayName(candidate, index)
             val unique = uniquify(baseName, nameCounts)
-            parsed += ParsedConfig(displayName = unique, config = candidate)
+            val storedConfig = ConfigBuilder.toProfileStorageConfig(candidate)
+            parsed += ParsedConfig(displayName = unique, config = storedConfig)
         }
         return ParseOutcome(parsed = parsed, parseErrorCount = errors)
     }

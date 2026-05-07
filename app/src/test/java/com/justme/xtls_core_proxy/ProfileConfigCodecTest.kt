@@ -280,6 +280,144 @@ class ProfileConfigCodecTest {
         assertEquals("auth.com", profile.grpcAuthority)
     }
 
+    @Test
+    fun parseVlessProfileFromJson_readsXhttpExtraAndFinalmask() {
+        val json = """
+            {
+              "outbounds": [{
+                "protocol": "vless",
+                "settings": { "vnext": [{ "address": "a.com", "port": 443, "users": [{"id":"aaaa","encryption":"none"}] }] },
+                "streamSettings": {
+                  "network": "xhttp",
+                  "security": "none",
+                  "xhttpSettings": {
+                    "path": "/x",
+                    "host": "cdn.example.com",
+                    "mode": "auto",
+                    "extra": { "maxPaddingBytesObfs": "100-1000" }
+                  },
+                  "finalmask": {
+                    "udp": [{ "type": "mkcp-original", "settings": {} }]
+                  }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val profile = ProfileConfigCodec.parseVlessProfileFromJson(json)
+        assertEquals("xhttp", profile.network)
+        assertEquals("/x", profile.transportPath)
+        assertEquals("cdn.example.com", profile.transportHost)
+        assertEquals(
+            "100-1000",
+            JSONObject(requireNotNull(profile.xhttpExtraJson)).getString("maxPaddingBytesObfs")
+        )
+        assertEquals(
+            "mkcp-original",
+            JSONObject(requireNotNull(profile.finalmaskJson))
+                .getJSONArray("udp")
+                .getJSONObject(0)
+                .getString("type")
+        )
+    }
+
+    @Test
+    fun mergeVlessProfileIntoJson_xhttpPreservesUnknownKeysAndWritesExtra() {
+        val sourceJson = """
+            {
+              "outbounds": [{
+                "protocol": "vless",
+                "settings": { "vnext": [{ "address": "a.com", "port": 443, "users": [{"id":"aaaa","encryption":"none"}] }] },
+                "streamSettings": {
+                  "network": "xhttp",
+                  "security": "none",
+                  "xhttpSettings": {
+                    "mode": "auto",
+                    "uploadSettings": { "maxStreams": 6 },
+                    "extra": { "maxPaddingBytesObfs": "10-50" }
+                  }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val updated = VlessProfile(
+            uuid = "bbbb", host = "b.com", port = 443, flow = "",
+            security = "none", publicKey = null, shortId = null,
+            fingerprint = "chrome", serverName = "b.com", network = "xhttp",
+            transportPath = "/new",
+            transportHost = "new.example.com",
+            xhttpExtraJson = """{"maxPaddingBytesObfs":"100-1000"}"""
+        )
+
+        val merged = ProfileConfigCodec.mergeVlessProfileIntoJson(sourceJson, updated)
+        val xhttp = JSONObject(merged).getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("xhttpSettings")
+
+        assertEquals("/new", xhttp.getString("path"))
+        assertEquals("new.example.com", xhttp.getString("host"))
+        assertEquals("auto", xhttp.getString("mode"))
+        assertEquals(6, xhttp.getJSONObject("uploadSettings").getInt("maxStreams"))
+        assertEquals(
+            "100-1000",
+            xhttp.getJSONObject("extra").getString("maxPaddingBytesObfs")
+        )
+    }
+
+    @Test
+    fun mergeVlessProfileIntoJson_writesAndRemovesFinalmaskFromSimpleFields() {
+        val sourceJson = """
+            {
+              "outbounds": [{
+                "protocol": "vless",
+                "settings": { "vnext": [{ "address": "a.com", "port": 443, "users": [{"id":"aaaa","encryption":"none"}] }] },
+                "streamSettings": {
+                  "network": "kcp",
+                  "security": "none",
+                  "kcpSettings": { "seed": "legacy" }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val withFinalmask = ProfileConfigCodec.mergeVlessProfileIntoJson(
+            sourceJson,
+            VlessProfile(
+                uuid = "bbbb", host = "b.com", port = 443, flow = "",
+                security = "none", publicKey = null, shortId = null,
+                fingerprint = "chrome", serverName = "b.com", network = "kcp",
+                kcpSeed = "seed1",
+                finalmaskJson = """{"udp":[{"type":"mkcp-original","settings":{}}]}"""
+            )
+        )
+
+        val withFinalmaskSs = JSONObject(withFinalmask).getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+        assertEquals(
+            "mkcp-original",
+            withFinalmaskSs.getJSONObject("finalmask")
+                .getJSONArray("udp")
+                .getJSONObject(0)
+                .getString("type")
+        )
+
+        val withoutFinalmask = ProfileConfigCodec.mergeVlessProfileIntoJson(
+            withFinalmask,
+            VlessProfile(
+                uuid = "bbbb", host = "b.com", port = 443, flow = "",
+                security = "none", publicKey = null, shortId = null,
+                fingerprint = "chrome", serverName = "b.com", network = "kcp",
+                kcpSeed = "seed1",
+                finalmaskJson = ""
+            )
+        )
+
+        val withoutFinalmaskSs = JSONObject(withoutFinalmask).getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+        assertFalse(withoutFinalmaskSs.has("finalmask"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun realityConfigWithoutPublicKey_stillFailsValidation() {
         ConfigBuilder.buildRuntimeConfig(

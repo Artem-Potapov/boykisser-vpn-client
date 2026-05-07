@@ -31,7 +31,9 @@ data class SimpleServerFields(
     val grpcServiceName: String = "",
     val grpcAuthority: String = "",
     val kcpSeed: String = "",
-    val quicKey: String = ""
+    val quicKey: String = "",
+    val xhttpExtraJson: String = "",
+    val finalmaskJson: String = ""
 ) {
     fun toVlessProfile(): VlessProfile {
         val parsedPort = port.toIntOrNull()
@@ -43,6 +45,8 @@ data class SimpleServerFields(
         if (normalizedSecurity.equals("reality", ignoreCase = true)) {
             require(publicKey.isNotBlank()) { "Missing pbk for REALITY config" }
         }
+        val normalizedXhttpExtra = parseJsonObjectOrNull("XHTTP extra", xhttpExtraJson)
+        val normalizedFinalmask = parseJsonObjectOrNull("FinalMask", finalmaskJson)
         return VlessProfile(
             uuid = uuid.trim(),
             host = host.trim(),
@@ -62,8 +66,21 @@ data class SimpleServerFields(
             grpcServiceName = grpcServiceName.trim().ifBlank { null },
             grpcAuthority = grpcAuthority.trim().ifBlank { null },
             kcpSeed = kcpSeed.trim().ifBlank { null },
-            quicKey = quicKey.trim().ifBlank { null }
+            quicKey = quicKey.trim().ifBlank { null },
+            xhttpExtraJson = normalizedXhttpExtra,
+            finalmaskJson = normalizedFinalmask
         )
+    }
+
+    private fun parseJsonObjectOrNull(fieldLabel: String, rawValue: String): String? {
+        val trimmed = rawValue.trim()
+        if (trimmed.isBlank()) return null
+        return try {
+            JSONObject(trimmed)
+            trimmed
+        } catch (_: Exception) {
+            throw IllegalArgumentException("$fieldLabel must be a valid JSON object")
+        }
     }
 
     companion object {
@@ -87,7 +104,9 @@ data class SimpleServerFields(
                 grpcServiceName = profile.grpcServiceName.orEmpty(),
                 grpcAuthority = profile.grpcAuthority.orEmpty(),
                 kcpSeed = profile.kcpSeed.orEmpty(),
-                quicKey = profile.quicKey.orEmpty()
+                quicKey = profile.quicKey.orEmpty(),
+                xhttpExtraJson = profile.xhttpExtraJson.orEmpty(),
+                finalmaskJson = profile.finalmaskJson.orEmpty()
             )
         }
     }
@@ -110,10 +129,11 @@ object ProfileConfigCodec {
     }
 
     fun applyBasicEdits(originalConfig: String, updatedProfile: VlessProfile): String {
-        return when (detectKind(originalConfig)) {
-            ConfigKind.VLESS_URI -> toVlessUri(updatedProfile)
-            ConfigKind.JSON -> mergeVlessProfileIntoJson(originalConfig, updatedProfile)
+        val baseJson = when (detectKind(originalConfig)) {
+            ConfigKind.VLESS_URI -> ConfigBuilder.fromVlessUri(originalConfig)
+            ConfigKind.JSON -> originalConfig
         }
+        return mergeVlessProfileIntoJson(baseJson, updatedProfile)
     }
 
     fun parseVlessUri(uri: String): VlessProfile {
@@ -236,6 +256,10 @@ object ProfileConfigCodec {
         } else ""
 
         val transport = readTransportFields(ss, network)
+        val xhttpExtraJson = ss.optJSONObject("xhttpSettings")
+            ?.optJSONObject("extra")
+            ?.toString(2)
+        val finalmaskJson = ss.optJSONObject("finalmask")?.toString(2)
 
         return VlessProfile(
             uuid = user.optString("id").trim().also {
@@ -259,7 +283,9 @@ object ProfileConfigCodec {
             grpcServiceName = transport.third,
             grpcAuthority = transport.fourth,
             kcpSeed = transport.fifth,
-            quicKey = transport.sixth
+            quicKey = transport.sixth,
+            xhttpExtraJson = xhttpExtraJson,
+            finalmaskJson = finalmaskJson
         )
     }
 
@@ -392,6 +418,7 @@ object ProfileConfigCodec {
         }
 
         writeTransportSettings(ss, updatedProfile)
+        applyFinalmaskSettings(ss, updatedProfile)
 
         outbound.put("streamSettings", ss)
         return root.toString()
@@ -432,11 +459,13 @@ object ProfileConfigCodec {
                     }
                 })
             }
-            "xhttp" -> if (!profile.transportPath.isNullOrBlank() || !profile.transportHost.isNullOrBlank()) {
-                ss.put("xhttpSettings", JSONObject().apply {
-                    if (!profile.transportPath.isNullOrBlank()) put("path", profile.transportPath)
-                    if (!profile.transportHost.isNullOrBlank()) put("host", profile.transportHost)
-                })
+            "xhttp" -> {
+                val merged = mergeXhttpSettings(ss.optJSONObject("xhttpSettings"), profile)
+                if (merged.length() == 0) {
+                    ss.remove("xhttpSettings")
+                } else {
+                    ss.put("xhttpSettings", merged)
+                }
             }
             "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank()) {
                 ss.put("grpcSettings", JSONObject().apply {
@@ -455,6 +484,42 @@ object ProfileConfigCodec {
                 })
             }
         }
+    }
+
+    private fun mergeXhttpSettings(existingSettings: JSONObject?, profile: VlessProfile): JSONObject {
+        val merged = JSONObject()
+        if (existingSettings != null) {
+            val keys = existingSettings.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                merged.put(key, existingSettings.opt(key))
+            }
+        }
+
+        if (!profile.transportPath.isNullOrBlank()) {
+            merged.put("path", profile.transportPath)
+        } else {
+            merged.remove("path")
+        }
+        if (!profile.transportHost.isNullOrBlank()) {
+            merged.put("host", profile.transportHost)
+        } else {
+            merged.remove("host")
+        }
+        if (!profile.xhttpExtraJson.isNullOrBlank()) {
+            merged.put("extra", JSONObject(profile.xhttpExtraJson))
+        } else {
+            merged.remove("extra")
+        }
+        return merged
+    }
+
+    private fun applyFinalmaskSettings(ss: JSONObject, profile: VlessProfile) {
+        if (profile.finalmaskJson.isNullOrBlank()) {
+            ss.remove("finalmask")
+            return
+        }
+        ss.put("finalmask", JSONObject(profile.finalmaskJson))
     }
 
     private fun removeStaleTransportKeys(ss: JSONObject, currentNetwork: String) {

@@ -23,6 +23,10 @@ object ConfigBuilder {
         return buildXrayJson(profile).toString()
     }
 
+    fun templateJsonFromVlessProfile(profile: VlessProfile): String {
+        return buildXrayJson(profile).toString()
+    }
+
     fun fromJson(raw: String): String {
         val root = JSONObject(raw)
         val inbounds = root.optJSONArray("inbounds") ?: JSONArray()
@@ -35,6 +39,16 @@ object ConfigBuilder {
         }
 
         return root.toString()
+    }
+
+    fun toProfileStorageConfig(input: String): String {
+        val trimmed = input.trim()
+        require(trimmed.isNotEmpty()) { "Configuration input is empty" }
+        return if (trimmed.startsWith("vless://", ignoreCase = true)) {
+            fromVlessUri(trimmed)
+        } else {
+            trimmed
+        }
     }
 
     private fun parseVlessUri(uri: String): VlessProfile {
@@ -198,6 +212,7 @@ object ConfigBuilder {
         }
 
         putTransportSettings(ss, profile)
+        applyFinalmaskSettings(ss, profile)
         return ss
     }
 
@@ -225,11 +240,13 @@ object ConfigBuilder {
                     }
                 })
             }
-            "xhttp" -> if (!profile.transportPath.isNullOrBlank() || !profile.transportHost.isNullOrBlank()) {
-                ss.put("xhttpSettings", JSONObject().apply {
-                    if (!profile.transportPath.isNullOrBlank()) put("path", profile.transportPath)
-                    if (!profile.transportHost.isNullOrBlank()) put("host", profile.transportHost)
-                })
+            "xhttp" -> {
+                val merged = mergeXhttpSettings(ss.optJSONObject("xhttpSettings"), profile)
+                if (merged.length() == 0) {
+                    ss.remove("xhttpSettings")
+                } else {
+                    ss.put("xhttpSettings", merged)
+                }
             }
             "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank()) {
                 ss.put("grpcSettings", JSONObject().apply {
@@ -248,6 +265,42 @@ object ConfigBuilder {
                 })
             }
         }
+    }
+
+    private fun mergeXhttpSettings(existingSettings: JSONObject?, profile: VlessProfile): JSONObject {
+        val merged = JSONObject()
+        if (existingSettings != null) {
+            val keys = existingSettings.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                merged.put(key, existingSettings.opt(key))
+            }
+        }
+
+        if (!profile.transportPath.isNullOrBlank()) {
+            merged.put("path", profile.transportPath)
+        } else {
+            merged.remove("path")
+        }
+        if (!profile.transportHost.isNullOrBlank()) {
+            merged.put("host", profile.transportHost)
+        } else {
+            merged.remove("host")
+        }
+        if (!profile.xhttpExtraJson.isNullOrBlank()) {
+            merged.put("extra", JSONObject(profile.xhttpExtraJson))
+        } else {
+            merged.remove("extra")
+        }
+        return merged
+    }
+
+    private fun applyFinalmaskSettings(ss: JSONObject, profile: VlessProfile) {
+        if (profile.finalmaskJson.isNullOrBlank()) {
+            ss.remove("finalmask")
+            return
+        }
+        ss.put("finalmask", JSONObject(profile.finalmaskJson))
     }
 
     private fun alpnToJsonArray(alpn: String): JSONArray {
@@ -288,5 +341,7 @@ data class VlessProfile(
     val grpcServiceName: String? = null,
     val grpcAuthority: String? = null,
     val kcpSeed: String? = null,
-    val quicKey: String? = null
+    val quicKey: String? = null,
+    val xhttpExtraJson: String? = null,
+    val finalmaskJson: String? = null
 )
