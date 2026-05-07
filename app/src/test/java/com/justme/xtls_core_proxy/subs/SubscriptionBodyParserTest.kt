@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.subs
 
+import com.justme.xtls_core_proxy.config.ConfigBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -52,6 +53,8 @@ class SubscriptionBodyParserTest {
         assertEquals("a.example.com:443", outcome.parsed[0].displayName)
         assertEquals("TLS Server", outcome.parsed[1].displayName)
         assertEquals("c.example.com:8080", outcome.parsed[2].displayName)
+        assertTrue(outcome.parsed[0].config.trimStart().startsWith("{"))
+        assertTrue(ConfigBuilder.buildRuntimeConfig(outcome.parsed[0].config).contains("\"protocol\":\"tun\""))
     }
 
     @Test

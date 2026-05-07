@@ -366,32 +366,23 @@ private fun MainScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                if (profile.subscriptionId == null) {
-                    TextButton(
-                        onClick = {
-                            bottomSheetProfile = null
-                            onEditProfile(profile)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Edit")
-                    }
-                    TextButton(
-                        onClick = {
-                            viewModel.deleteProfile(profile)
-                            bottomSheetProfile = null
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                    }
-                } else {
-                    Text(
-                        text = "Subscription-managed profile. Edit or delete it via the subscription " +
-                            "that owns it.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                TextButton(
+                    onClick = {
+                        bottomSheetProfile = null
+                        onEditProfile(profile)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Edit")
+                }
+                TextButton(
+                    onClick = {
+                        viewModel.deleteProfile(profile)
+                        bottomSheetProfile = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }

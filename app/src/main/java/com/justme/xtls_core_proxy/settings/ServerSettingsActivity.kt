@@ -47,7 +47,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.config.ConfigBuilder
-import com.justme.xtls_core_proxy.config.ConfigKind
 import com.justme.xtls_core_proxy.config.JsonFormatter
 import com.justme.xtls_core_proxy.config.ProfileConfigCodec
 import com.justme.xtls_core_proxy.config.SimpleServerFields
@@ -117,8 +116,8 @@ private fun ServerSettingsScreen(
     onBack: () -> Unit,
     onSave: (name: String, config: String) -> Unit
 ) {
-    val configKind = remember(initialConfig) {
-        if (initialConfig.isBlank()) ConfigKind.VLESS_URI else ProfileConfigCodec.detectKind(initialConfig)
+    val initialConfigIsJson = remember(initialConfig) {
+        initialConfig.isNotBlank() && !initialConfig.trim().startsWith("vless://", ignoreCase = true)
     }
 
     val initialSimpleFields = remember(initialConfig) {
@@ -141,10 +140,10 @@ private fun ServerSettingsScreen(
     fun buildConfigFromSimple(): Result<String> {
         return runCatching {
             val vlessProfile = simpleFields.toVlessProfile()
-            if (configKind == ConfigKind.JSON && initialConfig.isNotBlank()) {
+            if (initialConfigIsJson) {
                 ProfileConfigCodec.mergeVlessProfileIntoJson(initialConfig, vlessProfile)
             } else {
-                ProfileConfigCodec.toVlessUri(vlessProfile)
+                ConfigBuilder.templateJsonFromVlessProfile(vlessProfile)
             }
         }
     }
@@ -289,7 +288,7 @@ private fun ServerSettingsScreen(
 }
 
 private val NETWORK_OPTIONS = listOf(
-    "tcp" to "Raw (TCP)",
+    "tcp" to "TCP (Raw)",
     "kcp" to "mKCP",
     "ws" to "WebSocket",
     "httpupgrade" to "HTTPUpgrade",
@@ -417,6 +416,20 @@ private fun TransportFields(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
+            if (fields.network.equals("xhttp", ignoreCase = true)) {
+                OutlinedTextField(
+                    value = fields.xhttpExtraJson,
+                    onValueChange = { onFieldsChange(fields.copy(xhttpExtraJson = it)) },
+                    label = { Text("XHTTP extra (JSON object)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 6,
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace)
+                )
+                Text(
+                    text = "Applies to streamSettings.xhttpSettings.extra. Must be a JSON object fragment.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
         "grpc" -> {
             OutlinedTextField(
@@ -441,6 +454,18 @@ private fun TransportFields(
                 label = { Text("mKCP Seed") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = fields.finalmaskJson,
+                onValueChange = { onFieldsChange(fields.copy(finalmaskJson = it)) },
+                label = { Text("FinalMask (streamSettings.finalmask) JSON object") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 6,
+                textStyle = TextStyle(fontFamily = FontFamily.Monospace)
+            )
+            Text(
+                text = "FinalMask is stored on streamSettings.finalmask, not inside kcpSettings.",
+                style = MaterialTheme.typography.bodySmall
             )
         }
         "quic" -> {
@@ -604,6 +629,8 @@ private fun defaultSimpleServerFields(): SimpleServerFields {
         shortId = "",
         fingerprint = "chrome",
         serverName = "",
-        network = "tcp"
+        network = "tcp",
+        xhttpExtraJson = "",
+        finalmaskJson = ""
     )
 }

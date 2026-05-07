@@ -8,6 +8,25 @@ import org.junit.Test
 
 class ConfigBuilderTest {
     @Test
+    fun toProfileStorageConfig_keepsJsonInput() {
+        val input = """{"outbounds":[{"protocol":"freedom","tag":"direct"}]}"""
+        assertEquals(input, ConfigBuilder.toProfileStorageConfig(input))
+    }
+
+    @Test
+    fun toProfileStorageConfig_convertsVlessToJson() {
+        val input = "vless://11111111-1111-1111-1111-111111111111@demo.example:443?security=none"
+        val stored = ConfigBuilder.toProfileStorageConfig(input)
+        val root = JSONObject(stored)
+
+        assertTrue(stored.trimStart().startsWith("{"))
+        assertEquals(
+            "vless",
+            root.getJSONArray("outbounds").getJSONObject(0).getString("protocol")
+        )
+    }
+
+    @Test
     fun fromVlessUri_buildsTunOnlyInboundAndVlessOutbound() {
         val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
             "?type=tcp&security=reality&pbk=abc123&sid=1a2b3c&fp=chrome&sni=cdn.example.com"
