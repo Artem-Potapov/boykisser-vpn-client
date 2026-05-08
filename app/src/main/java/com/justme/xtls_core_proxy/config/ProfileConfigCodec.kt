@@ -221,6 +221,12 @@ object ProfileConfigCodec {
         if (!profile.grpcAuthority.isNullOrBlank()) params["authority"] = profile.grpcAuthority
         if (!profile.kcpSeed.isNullOrBlank()) params["seed"] = profile.kcpSeed
         if (!profile.quicKey.isNullOrBlank()) params["key"] = profile.quicKey
+        if (!profile.quicSecurity.isNullOrBlank()) params["quicSecurity"] = profile.quicSecurity
+        if (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true)) {
+            params["headerType"] = profile.headerType
+        }
+        if (!profile.mode.isNullOrBlank()) params["mode"] = profile.mode
+        if (!profile.xhttpExtraJson.isNullOrBlank()) params["extra"] = profile.xhttpExtraJson
 
         val query = params.entries.joinToString("&") { (key, value) ->
             "${encode(key)}=${encode(value)}"

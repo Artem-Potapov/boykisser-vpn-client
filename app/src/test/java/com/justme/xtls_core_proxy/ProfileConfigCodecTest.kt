@@ -7,7 +7,6 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 
 class ProfileConfigCodecTest {
@@ -475,7 +474,6 @@ class ProfileConfigCodecTest {
         )
     }
 
-    @Ignore("Task 7: toVlessUri must emit extra= for full round-trip (see plan)")
     @Test
     fun vlessUri_roundTrip_preservesXhttpExtraJson() {
         val extraJson = """{"xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000"}"""
@@ -495,7 +493,6 @@ class ProfileConfigCodecTest {
         )
     }
 
-    @Ignore("Task 7: toVlessUri must emit mode= for full round-trip (see plan)")
     @Test
     fun vlessUri_roundTrip_preservesXhttpMode() {
         val original = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
@@ -550,7 +547,6 @@ class ProfileConfigCodecTest {
         assertEquals("stream-one", profile.mode)
     }
 
-    @Ignore("Task 8: toVlessUri must emit headerType= for full round-trip (see plan)")
     @Test
     fun vlessUri_roundTrip_preservesTcpHeaderType() {
         val original = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
