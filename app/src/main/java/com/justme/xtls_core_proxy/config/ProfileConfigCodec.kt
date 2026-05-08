@@ -34,7 +34,8 @@ data class SimpleServerFields(
     val quicKey: String = "",
     val xhttpExtraJson: String = "",
     val finalmaskJson: String = "",
-    val encryption: String = ""
+    val encryption: String = "",
+    val mode: String = ""
 ) {
     fun toVlessProfile(): VlessProfile {
         val parsedPort = port.toIntOrNull()
@@ -70,7 +71,8 @@ data class SimpleServerFields(
             quicKey = quicKey.trim().ifBlank { null },
             xhttpExtraJson = normalizedXhttpExtra,
             finalmaskJson = normalizedFinalmask,
-            encryption = encryption.trim().ifBlank { "none" }
+            encryption = encryption.trim().ifBlank { "none" },
+            mode = mode.trim().ifBlank { null }
         )
     }
 
@@ -109,7 +111,8 @@ data class SimpleServerFields(
                 quicKey = profile.quicKey.orEmpty(),
                 xhttpExtraJson = profile.xhttpExtraJson.orEmpty(),
                 finalmaskJson = profile.finalmaskJson.orEmpty(),
-                encryption = profile.encryption
+                encryption = profile.encryption,
+                mode = profile.mode.orEmpty()
             )
         }
     }
@@ -178,7 +181,8 @@ object ProfileConfigCodec {
             kcpSeed = params["seed"],
             quicKey = params["key"],
             encryption = params["encryption"]?.ifBlank { null } ?: "none",
-            xhttpExtraJson = params["extra"]?.ifBlank { null }
+            xhttpExtraJson = params["extra"]?.ifBlank { null },
+            mode = params["mode"]?.ifBlank { null }
         )
     }
 
@@ -269,6 +273,14 @@ object ProfileConfigCodec {
             ?.toString(2)
         val finalmaskJson = ss.optJSONObject("finalmask")?.toString(2)
 
+        val xhttpMode = ss.optJSONObject("xhttpSettings")?.optString("mode")?.ifBlank { null }
+        val grpcMode = ss.optJSONObject("grpcSettings")?.optString("mode")?.ifBlank { null }
+        val networkMode = when (network.lowercase()) {
+            "xhttp" -> xhttpMode
+            "grpc" -> grpcMode
+            else -> null
+        }
+
         return VlessProfile(
             uuid = user.optString("id").trim().also {
                 require(it.isNotBlank()) { "Missing vless user id" }
@@ -294,7 +306,8 @@ object ProfileConfigCodec {
             quicKey = transport.sixth,
             xhttpExtraJson = xhttpExtraJson,
             finalmaskJson = finalmaskJson,
-            encryption = user.optString("encryption").ifBlank { "none" }
+            encryption = user.optString("encryption").ifBlank { "none" },
+            mode = networkMode
         )
     }
 
@@ -476,10 +489,11 @@ object ProfileConfigCodec {
                     ss.put("xhttpSettings", merged)
                 }
             }
-            "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank()) {
+            "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank() || !profile.mode.isNullOrBlank()) {
                 ss.put("grpcSettings", JSONObject().apply {
                     if (!profile.grpcServiceName.isNullOrBlank()) put("serviceName", profile.grpcServiceName)
                     if (!profile.grpcAuthority.isNullOrBlank()) put("authority", profile.grpcAuthority)
+                    if (!profile.mode.isNullOrBlank()) put("mode", profile.mode)
                 })
             }
             "kcp" -> if (!profile.kcpSeed.isNullOrBlank()) {
@@ -514,6 +528,9 @@ object ProfileConfigCodec {
             merged.put("host", profile.transportHost)
         } else {
             merged.remove("host")
+        }
+        if (!profile.mode.isNullOrBlank()) {
+            merged.put("mode", profile.mode)
         }
         if (!profile.xhttpExtraJson.isNullOrBlank()) {
             merged.put("extra", JSONObject(profile.xhttpExtraJson))

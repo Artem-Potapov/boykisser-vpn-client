@@ -185,10 +185,11 @@ object ConfigBuilder {
                     ss.put("xhttpSettings", merged)
                 }
             }
-            "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank()) {
+            "grpc" -> if (!profile.grpcServiceName.isNullOrBlank() || !profile.grpcAuthority.isNullOrBlank() || !profile.mode.isNullOrBlank()) {
                 ss.put("grpcSettings", JSONObject().apply {
                     if (!profile.grpcServiceName.isNullOrBlank()) put("serviceName", profile.grpcServiceName)
                     if (!profile.grpcAuthority.isNullOrBlank()) put("authority", profile.grpcAuthority)
+                    if (!profile.mode.isNullOrBlank()) put("mode", profile.mode)
                 })
             }
             "kcp" -> if (!profile.kcpSeed.isNullOrBlank()) {
@@ -223,6 +224,9 @@ object ConfigBuilder {
             merged.put("host", profile.transportHost)
         } else {
             merged.remove("host")
+        }
+        if (!profile.mode.isNullOrBlank()) {
+            merged.put("mode", profile.mode)
         }
         if (!profile.xhttpExtraJson.isNullOrBlank()) {
             merged.put("extra", JSONObject(profile.xhttpExtraJson))
@@ -281,5 +285,6 @@ data class VlessProfile(
     val quicKey: String? = null,
     val xhttpExtraJson: String? = null,
     val finalmaskJson: String? = null,
-    val encryption: String = "none"
+    val encryption: String = "none",
+    val mode: String? = null
 )
