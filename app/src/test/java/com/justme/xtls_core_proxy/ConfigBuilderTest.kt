@@ -275,4 +275,52 @@ class ConfigBuilderTest {
 
         assertEquals("auth.example.com", grpc.getString("authority"))
     }
+
+    @Test
+    fun fromVlessUri_xhttpComprehensiveLink_preservesAllParameters() {
+        // Mirrors the user-reported failure: vless+xhttp with encryption,
+        // extra (URL-encoded JSON), mode, full TLS+REALITY-style fields.
+        val extraJson = """{"xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000"}"""
+        val encodedExtra = java.net.URLEncoder.encode(extraJson, "UTF-8")
+        val uri = "vless://11111111-1111-1111-1111-111111111111@89.125.89.146:443" +
+            "?type=xhttp" +
+            "&security=tls" +
+            "&encryption=none" +
+            "&sni=cdn.example.com" +
+            "&fp=chrome" +
+            "&alpn=h2" +
+            "&path=%2Fxh" +
+            "&host=cdn.example.com" +
+            "&mode=stream-up" +
+            "&extra=" + encodedExtra
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val outbound = config.getJSONArray("outbounds").getJSONObject(0)
+        val user = outbound.getJSONObject("settings")
+            .getJSONArray("vnext")
+            .getJSONObject(0)
+            .getJSONArray("users")
+            .getJSONObject(0)
+        val ss = outbound.getJSONObject("streamSettings")
+        val xhttp = ss.getJSONObject("xhttpSettings")
+
+        // Identity / encryption
+        assertEquals("11111111-1111-1111-1111-111111111111", user.getString("id"))
+        assertEquals("none", user.getString("encryption"))
+
+        // Stream / TLS
+        assertEquals("xhttp", ss.getString("network"))
+        assertEquals("tls", ss.getString("security"))
+        val tls = ss.getJSONObject("tlsSettings")
+        assertEquals("cdn.example.com", tls.getString("serverName"))
+        assertEquals("chrome", tls.getString("fingerprint"))
+        assertEquals("h2", tls.getJSONArray("alpn").getString(0))
+
+        // XHTTP
+        assertEquals("/xh", xhttp.getString("path"))
+        assertEquals("cdn.example.com", xhttp.getString("host"))
+        assertEquals("stream-up", xhttp.getString("mode"))
+        assertEquals("100-1000", xhttp.getJSONObject("extra").getString("xPaddingBytes"))
+        assertEquals("1000000", xhttp.getJSONObject("extra").getString("scMaxEachPostBytes"))
+    }
 }
