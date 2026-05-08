@@ -195,6 +195,35 @@ class ConfigBuilderTest {
     }
 
     @Test
+    fun fromVlessUri_tcpHeaderTypeWritesTcpSettings() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=tcp&security=none&headerType=http"
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val ss = config.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+
+        assertEquals(
+            "http",
+            ss.getJSONObject("tcpSettings").getJSONObject("header").getString("type")
+        )
+    }
+
+    @Test
+    fun fromVlessUri_kcpHeaderTypeWritesKcpHeader() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=kcp&security=none&seed=mySeed&headerType=wechat-video"
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val kcp = config.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("kcpSettings")
+
+        assertEquals("mySeed", kcp.getString("seed"))
+        assertEquals("wechat-video", kcp.getJSONObject("header").getString("type"))
+    }
+
+    @Test
     fun fromVlessUri_xhttpModeWritesIntoXhttpSettings() {
         val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
             "?type=xhttp&security=tls&sni=cdn.example.com&path=%2Fxh&mode=stream-up"
@@ -218,6 +247,20 @@ class ConfigBuilderTest {
             .getJSONObject("grpcSettings")
 
         assertEquals("multi", grpc.getString("mode"))
+    }
+
+    @Test
+    fun fromVlessUri_quicSecurityWritesIntoQuicSettings() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=quic&security=tls&sni=cdn.example.com&quicSecurity=aes-128-gcm&key=mysecret"
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val quic = config.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("quicSettings")
+
+        assertEquals("aes-128-gcm", quic.getString("security"))
+        assertEquals("mysecret", quic.getString("key"))
     }
 
     @Test

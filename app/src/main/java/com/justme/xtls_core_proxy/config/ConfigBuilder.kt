@@ -155,6 +155,11 @@ object ConfigBuilder {
 
     private fun putTransportSettings(ss: JSONObject, profile: VlessProfile) {
         when (profile.network.lowercase()) {
+            "tcp" -> if (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true)) {
+                ss.put("tcpSettings", JSONObject().apply {
+                    put("header", JSONObject().put("type", profile.headerType))
+                })
+            }
             "ws" -> if (!profile.transportPath.isNullOrBlank() || !profile.transportHost.isNullOrBlank()) {
                 ss.put("wsSettings", JSONObject().apply {
                     if (!profile.transportPath.isNullOrBlank()) put("path", profile.transportPath)
@@ -192,14 +197,19 @@ object ConfigBuilder {
                     if (!profile.mode.isNullOrBlank()) put("mode", profile.mode)
                 })
             }
-            "kcp" -> if (!profile.kcpSeed.isNullOrBlank()) {
+            "kcp" -> if (!profile.kcpSeed.isNullOrBlank() ||
+                (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true))) {
                 ss.put("kcpSettings", JSONObject().apply {
-                    put("seed", profile.kcpSeed)
+                    if (!profile.kcpSeed.isNullOrBlank()) put("seed", profile.kcpSeed)
+                    if (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true)) {
+                        put("header", JSONObject().put("type", profile.headerType))
+                    }
                 })
             }
-            "quic" -> if (!profile.quicKey.isNullOrBlank()) {
+            "quic" -> if (!profile.quicKey.isNullOrBlank() || !profile.quicSecurity.isNullOrBlank()) {
                 ss.put("quicSettings", JSONObject().apply {
-                    put("key", profile.quicKey)
+                    if (!profile.quicSecurity.isNullOrBlank()) put("security", profile.quicSecurity)
+                    if (!profile.quicKey.isNullOrBlank()) put("key", profile.quicKey)
                 })
             }
         }
@@ -286,5 +296,7 @@ data class VlessProfile(
     val xhttpExtraJson: String? = null,
     val finalmaskJson: String? = null,
     val encryption: String = "none",
-    val mode: String? = null
+    val mode: String? = null,
+    val headerType: String? = null,
+    val quicSecurity: String? = null
 )

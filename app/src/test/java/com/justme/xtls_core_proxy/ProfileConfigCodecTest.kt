@@ -549,4 +549,38 @@ class ProfileConfigCodecTest {
         val profile = ProfileConfigCodec.parseVlessProfileFromJson(json)
         assertEquals("stream-one", profile.mode)
     }
+
+    @Ignore("Task 8: toVlessUri must emit headerType= for full round-trip (see plan)")
+    @Test
+    fun vlessUri_roundTrip_preservesTcpHeaderType() {
+        val original = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=tcp&security=none&headerType=http"
+
+        val parsed = ProfileConfigCodec.parseVlessUri(original)
+        assertEquals("http", parsed.headerType)
+
+        val rebuilt = ProfileConfigCodec.toVlessUri(parsed)
+        val reparsed = ProfileConfigCodec.parseVlessUri(rebuilt)
+        assertEquals("http", reparsed.headerType)
+    }
+
+    @Test
+    fun parseVlessProfileFromJson_readsKcpHeaderType() {
+        val json = """
+            {
+              "outbounds": [{
+                "protocol": "vless",
+                "settings": { "vnext": [{ "address": "a.com", "port": 443, "users": [{"id":"aaaa","encryption":"none"}] }] },
+                "streamSettings": {
+                  "network": "kcp",
+                  "security": "none",
+                  "kcpSettings": { "seed": "s", "header": { "type": "wechat-video" } }
+                }
+              }]
+            }
+        """.trimIndent()
+        val profile = ProfileConfigCodec.parseVlessProfileFromJson(json)
+        assertEquals("kcp", profile.network)
+        assertEquals("wechat-video", profile.headerType)
+    }
 }
