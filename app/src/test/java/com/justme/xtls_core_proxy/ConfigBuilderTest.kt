@@ -193,4 +193,30 @@ class ConfigBuilderTest {
             xhttp.getJSONObject("extra").getString("xPaddingBytes")
         )
     }
+
+    @Test
+    fun fromVlessUri_xhttpModeWritesIntoXhttpSettings() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=xhttp&security=tls&sni=cdn.example.com&path=%2Fxh&mode=stream-up"
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val xhttp = config.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("xhttpSettings")
+
+        assertEquals("stream-up", xhttp.getString("mode"))
+    }
+
+    @Test
+    fun fromVlessUri_grpcModeWritesIntoGrpcSettings() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=grpc&security=tls&sni=cdn.example.com&serviceName=svc&mode=multi"
+
+        val config = JSONObject(ConfigBuilder.fromVlessUri(uri))
+        val grpc = config.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("grpcSettings")
+
+        assertEquals("multi", grpc.getString("mode"))
+    }
 }

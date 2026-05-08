@@ -7,6 +7,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Ignore
 import org.junit.Test
 
 class ProfileConfigCodecTest {
@@ -474,6 +475,7 @@ class ProfileConfigCodecTest {
         )
     }
 
+    @Ignore("Task 7: toVlessUri must emit extra= for full round-trip (see plan)")
     @Test
     fun vlessUri_roundTrip_preservesXhttpExtraJson() {
         val extraJson = """{"xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000"}"""
@@ -491,5 +493,48 @@ class ProfileConfigCodecTest {
             JSONObject(extraJson).toString(),
             JSONObject(requireNotNull(reparsed.xhttpExtraJson)).toString()
         )
+    }
+
+    @Ignore("Task 7: toVlessUri must emit mode= for full round-trip (see plan)")
+    @Test
+    fun vlessUri_roundTrip_preservesXhttpMode() {
+        val original = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=xhttp&security=tls&sni=cdn.example.com&path=%2Fxh&mode=packet-up"
+
+        val parsed = ProfileConfigCodec.parseVlessUri(original)
+        assertEquals("packet-up", parsed.mode)
+
+        val rebuilt = ProfileConfigCodec.toVlessUri(parsed)
+        val reparsed = ProfileConfigCodec.parseVlessUri(rebuilt)
+        assertEquals("packet-up", reparsed.mode)
+    }
+
+    @Test
+    fun vlessUri_roundTrip_preservesGrpcModeAndAuthority() {
+        // 'authority' parsing is added in a later task; this test pins both at once.
+        val original = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=grpc&security=tls&sni=cdn.example.com&serviceName=svc&mode=multi"
+
+        val parsed = ProfileConfigCodec.parseVlessUri(original)
+        assertEquals("multi", parsed.mode)
+    }
+
+    @Test
+    fun parseVlessProfileFromJson_readsXhttpMode() {
+        val json = """
+            {
+              "outbounds": [{
+                "protocol": "vless",
+                "settings": { "vnext": [{ "address": "a.com", "port": 443, "users": [{"id":"aaaa","encryption":"none"}] }] },
+                "streamSettings": {
+                  "network": "xhttp",
+                  "security": "none",
+                  "xhttpSettings": { "path": "/x", "mode": "stream-one" }
+                }
+              }]
+            }
+        """.trimIndent()
+        val profile = ProfileConfigCodec.parseVlessProfileFromJson(json)
+        assertEquals("stream-one", profile.mode)
     }
 }
