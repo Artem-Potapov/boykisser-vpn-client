@@ -35,7 +35,9 @@ data class SimpleServerFields(
     val xhttpExtraJson: String = "",
     val finalmaskJson: String = "",
     val encryption: String = "",
-    val mode: String = ""
+    val mode: String = "",
+    val headerType: String = "",
+    val quicSecurity: String = ""
 ) {
     fun toVlessProfile(): VlessProfile {
         val parsedPort = port.toIntOrNull()
@@ -72,7 +74,9 @@ data class SimpleServerFields(
             xhttpExtraJson = normalizedXhttpExtra,
             finalmaskJson = normalizedFinalmask,
             encryption = encryption.trim().ifBlank { "none" },
-            mode = mode.trim().ifBlank { null }
+            mode = mode.trim().ifBlank { null },
+            headerType = headerType.trim().ifBlank { null },
+            quicSecurity = quicSecurity.trim().ifBlank { null }
         )
     }
 
@@ -112,7 +116,9 @@ data class SimpleServerFields(
                 xhttpExtraJson = profile.xhttpExtraJson.orEmpty(),
                 finalmaskJson = profile.finalmaskJson.orEmpty(),
                 encryption = profile.encryption,
-                mode = profile.mode.orEmpty()
+                mode = profile.mode.orEmpty(),
+                headerType = profile.headerType.orEmpty(),
+                quicSecurity = profile.quicSecurity.orEmpty()
             )
         }
     }
@@ -183,7 +189,9 @@ object ProfileConfigCodec {
             quicKey = params["key"],
             encryption = params["encryption"]?.ifBlank { null } ?: "none",
             xhttpExtraJson = params["extra"]?.ifBlank { null },
-            mode = params["mode"]?.ifBlank { null }
+            mode = params["mode"]?.ifBlank { null },
+            headerType = params["headerType"]?.ifBlank { null },
+            quicSecurity = params["quicSecurity"]?.ifBlank { null }
         )
     }
 
@@ -283,6 +291,25 @@ object ProfileConfigCodec {
             else -> null
         }
 
+        val tcpHeaderType = ss.optJSONObject("tcpSettings")
+            ?.optJSONObject("header")
+            ?.optString("type")
+            ?.ifBlank { null }
+        val kcpHeaderType = ss.optJSONObject("kcpSettings")
+            ?.optJSONObject("header")
+            ?.optString("type")
+            ?.ifBlank { null }
+        val networkHeaderType = when (network.lowercase()) {
+            "tcp" -> tcpHeaderType
+            "kcp" -> kcpHeaderType
+            else -> null
+        }
+
+        val quicSecurity = ss.optJSONObject("quicSettings")
+            ?.optString("security")
+            ?.ifBlank { null }
+            ?.takeIf { network.equals("quic", ignoreCase = true) }
+
         return VlessProfile(
             uuid = user.optString("id").trim().also {
                 require(it.isNotBlank()) { "Missing vless user id" }
@@ -309,7 +336,9 @@ object ProfileConfigCodec {
             xhttpExtraJson = xhttpExtraJson,
             finalmaskJson = finalmaskJson,
             encryption = user.optString("encryption").ifBlank { "none" },
-            mode = networkMode
+            mode = networkMode,
+            headerType = networkHeaderType,
+            quicSecurity = quicSecurity
         )
     }
 
@@ -449,6 +478,7 @@ object ProfileConfigCodec {
     }
 
     private val TRANSPORT_SETTINGS_KEYS = listOf(
+        "tcpSettings",
         "wsSettings", "httpupgradeSettings", "httpSettings",
         "xhttpSettings", "grpcSettings", "kcpSettings", "quicSettings"
     )
@@ -461,6 +491,11 @@ object ProfileConfigCodec {
 
     private fun writeTransportSettings(ss: JSONObject, profile: VlessProfile) {
         when (profile.network.lowercase()) {
+            "tcp" -> if (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true)) {
+                ss.put("tcpSettings", JSONObject().apply {
+                    put("header", JSONObject().put("type", profile.headerType))
+                })
+            }
             "ws" -> if (!profile.transportPath.isNullOrBlank() || !profile.transportHost.isNullOrBlank()) {
                 ss.put("wsSettings", JSONObject().apply {
                     if (!profile.transportPath.isNullOrBlank()) put("path", profile.transportPath)
@@ -498,14 +533,19 @@ object ProfileConfigCodec {
                     if (!profile.mode.isNullOrBlank()) put("mode", profile.mode)
                 })
             }
-            "kcp" -> if (!profile.kcpSeed.isNullOrBlank()) {
+            "kcp" -> if (!profile.kcpSeed.isNullOrBlank() ||
+                (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true))) {
                 ss.put("kcpSettings", JSONObject().apply {
-                    put("seed", profile.kcpSeed)
+                    if (!profile.kcpSeed.isNullOrBlank()) put("seed", profile.kcpSeed)
+                    if (!profile.headerType.isNullOrBlank() && !profile.headerType.equals("none", ignoreCase = true)) {
+                        put("header", JSONObject().put("type", profile.headerType))
+                    }
                 })
             }
-            "quic" -> if (!profile.quicKey.isNullOrBlank()) {
+            "quic" -> if (!profile.quicKey.isNullOrBlank() || !profile.quicSecurity.isNullOrBlank()) {
                 ss.put("quicSettings", JSONObject().apply {
-                    put("key", profile.quicKey)
+                    if (!profile.quicSecurity.isNullOrBlank()) put("security", profile.quicSecurity)
+                    if (!profile.quicKey.isNullOrBlank()) put("key", profile.quicKey)
                 })
             }
         }
@@ -552,6 +592,7 @@ object ProfileConfigCodec {
 
     private fun removeStaleTransportKeys(ss: JSONObject, currentNetwork: String) {
         val keepKey = when (currentNetwork.lowercase()) {
+            "tcp" -> "tcpSettings"
             "ws" -> "wsSettings"
             "httpupgrade" -> "httpupgradeSettings"
             "h2" -> "httpSettings"
