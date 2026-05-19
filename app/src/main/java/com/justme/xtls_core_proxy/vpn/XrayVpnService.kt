@@ -5,23 +5,38 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
-import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
+import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.geo.GeoAssetPreparer
+import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
+import com.justme.xtls_core_proxy.killswitch.ForegroundAppMonitor
+import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
+import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 @SuppressLint("VpnServicePolicy")
@@ -34,11 +49,25 @@ class XrayVpnService : VpnService() {
 
         private const val CHANNEL_ID = "xray_vpn_channel"
         private const val NOTIFICATION_ID = 1101
+        private const val ERROR_CHANNEL_ID = "xray_vpn_error_channel"
+        private const val ERROR_NOTIFICATION_ID = 1102
     }
 
     private val lock = Any()
     private var tunInterface: ParcelFileDescriptor? = null
     private var running = false
+
+    @Volatile private var currentProfileId: Long = -1L
+
+    private var killSwitchMonitor: UsageStatsForegroundAppMonitor? = null
+    private var screenReceiver: BroadcastReceiver? = null
+    private var settingsObserverJob: Job? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val tunnelOpScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO.limitedParallelism(1)
+    )
 
     override fun onBind(intent: Intent?): IBinder? {
         return super.onBind(intent)
@@ -69,6 +98,8 @@ class XrayVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
+        tunnelOpScope.cancel()
         stopVpn()
         super.onDestroy()
     }
@@ -99,67 +130,20 @@ class XrayVpnService : VpnService() {
                     return@Thread
                 }
 
-                val configJson = ConfigBuilder.buildRuntimeConfig(profile.config)
+                currentProfileId = profileId
 
-                val geoAssetDir = GeoAssetPreparer.prepare(this)
-                    .getOrElse { error ->
-                        throw IllegalStateException("Geofile preparation failed: ${error.message}", error)
-                    }
-
-                val builder = Builder()
-                    .setSession(getString(R.string.app_name))
-                    .setMtu(1500)
-                    .addAddress("10.7.0.1", 32)
-                    .addAddress("fd00:1:fd00:1::1", 128)
-                    .addRoute("0.0.0.0", 0)
-                    .addRoute("::", 0)
-                    .addDnsServer("1.1.1.1")
-                    .addDnsServer("2606:4700:4700::1111")
-
-                val splitPrefs = SplitTunnelRepository.load(this@XrayVpnService)
-                when (splitPrefs.mode) {
-                    SplitTunnelMode.ALLOW_ONLY -> {
-                        if (splitPrefs.packages.isEmpty()) {
-                            LogRepository.append("Split tunnel allow-only mode enabled with no selected apps")
-                        }
-                        splitPrefs.packages.forEach { pkg ->
-                            if (pkg == packageName) {
-                                LogRepository.append("Ignoring self package in allow-only split tunnel mode")
-                                return@forEach
-                            }
-                            try {
-                                builder.addAllowedApplication(pkg)
-                            } catch (_: PackageManager.NameNotFoundException) {
-                                LogRepository.append("Split tunnel skipped missing package: $pkg")
-                            }
-                        }
-                    }
-
-                    SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED -> {
-                        val blockedPackages = splitPrefs.packages + packageName
-                        blockedPackages.forEach { pkg ->
-                            try {
-                                builder.addDisallowedApplication(pkg)
-                            } catch (_: PackageManager.NameNotFoundException) {
-                                LogRepository.append("Split tunnel skipped missing package: $pkg")
-                            }
-                        }
-                    }
-                }
-
-                val pfd = builder.establish()
-                    ?: throw IllegalStateException("VpnService.establish() returned null")
-
-                tunInterface = pfd
-                val fd = pfd.fd
-                LogRepository.append("TUN established with fd=$fd")
-                LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
-
-                XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath)
+                bringUpTunnel(profile)
                     .onSuccess {
                         LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
-                        LogRepository.append("Xray core started")
-                        updateNotification("Connected")
+                        updateNotification(getString(R.string.vpn_status_connected))
+                        val prefs = KillSwitchRepository.load(this@XrayVpnService)
+                        applyKillSwitchPreferences(prefs)
+                        settingsObserverJob?.cancel()
+                        settingsObserverJob = serviceScope.launch {
+                            KillSwitchRepository.state.collect { newPrefs ->
+                                applyKillSwitchPreferences(newPrefs)
+                            }
+                        }
                     }
                     .onFailure { error ->
                         LogRepository.setConnectionState(VpnConnectionState.ERROR)
@@ -174,6 +158,197 @@ class XrayVpnService : VpnService() {
         }.start()
     }
 
+    private fun bringUpTunnel(profile: Profile): Result<Unit> {
+        return runCatching {
+            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config)
+
+            val geoAssetDir = GeoAssetPreparer.prepare(this)
+                .getOrElse { error ->
+                    throw IllegalStateException("Geofile preparation failed: ${error.message}", error)
+                }
+
+            val builder = Builder()
+                .setSession(getString(R.string.app_name))
+                .setMtu(1500)
+                .addAddress("10.7.0.1", 32)
+                .addAddress("fd00:1:fd00:1::1", 128)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
+                .addDnsServer("1.1.1.1")
+                .addDnsServer("2606:4700:4700::1111")
+
+            val splitPrefs = SplitTunnelRepository.load(this@XrayVpnService)
+            when (splitPrefs.mode) {
+                SplitTunnelMode.ALLOW_ONLY -> {
+                    if (splitPrefs.packages.isEmpty()) {
+                        LogRepository.append("Split tunnel allow-only mode enabled with no selected apps")
+                    }
+                    splitPrefs.packages.forEach { pkg ->
+                        if (pkg == packageName) {
+                            LogRepository.append("Ignoring self package in allow-only split tunnel mode")
+                            return@forEach
+                        }
+                        try {
+                            builder.addAllowedApplication(pkg)
+                        } catch (_: PackageManager.NameNotFoundException) {
+                            LogRepository.append("Split tunnel skipped missing package: $pkg")
+                        }
+                    }
+                }
+                SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED -> {
+                    val blockedPackages = splitPrefs.packages + packageName
+                    blockedPackages.forEach { pkg ->
+                        try {
+                            builder.addDisallowedApplication(pkg)
+                        } catch (_: PackageManager.NameNotFoundException) {
+                            LogRepository.append("Split tunnel skipped missing package: $pkg")
+                        }
+                    }
+                }
+            }
+
+            val pfd = builder.establish()
+                ?: throw IllegalStateException("VpnService.establish() returned null")
+
+            tunInterface = pfd
+            val fd = pfd.fd
+            LogRepository.append("TUN established with fd=$fd")
+            LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
+
+            XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
+            LogRepository.append("Xray core started")
+        }
+    }
+
+    private fun tearDownTunnel() {
+        XrayBridge.stopXray().onFailure { error ->
+            LogRepository.append("Xray stop warning: ${error.message}")
+        }
+        try {
+            tunInterface?.close()
+        } catch (error: Throwable) {
+            LogRepository.append("TUN close warning: ${error.message}")
+        } finally {
+            tunInterface = null
+        }
+    }
+
+    private fun killTunnel(triggerPackageLabel: String) {
+        tunnelOpScope.launch {
+            LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
+            try {
+                tearDownTunnel()
+                updateNotification(getString(R.string.vpn_status_paused, triggerPackageLabel))
+                LogRepository.setConnectionState(VpnConnectionState.PAUSED)
+            } catch (error: Throwable) {
+                LogRepository.append("killTunnel failed: ${error.message}")
+                LogRepository.setConnectionState(VpnConnectionState.ERROR)
+                stopVpn()
+            }
+        }
+    }
+
+    private fun reviveTunnel() {
+        tunnelOpScope.launch {
+            val profileId = currentProfileId
+            if (profileId == -1L) {
+                LogRepository.append("reviveTunnel: no current profile, cannot revive")
+                stopVpn()
+                return@launch
+            }
+            LogRepository.append("Kill-switch: reviving tunnel for profile id=$profileId")
+            val profile = AppDatabase.get(this@XrayVpnService).profileDao().getById(profileId)
+            if (profile == null) {
+                LogRepository.append("reviveTunnel: profile $profileId not found")
+                postReviveErrorNotification()
+                stopVpn()
+                return@launch
+            }
+            bringUpTunnel(profile)
+                .onSuccess {
+                    updateNotification(getString(R.string.vpn_status_connected))
+                    LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                }
+                .onFailure { error ->
+                    LogRepository.append("reviveTunnel failed: ${error.message}")
+                    postReviveErrorNotification()
+                    stopVpn()
+                }
+        }
+    }
+
+    private inner class KillSwitchListener : ForegroundAppMonitor.Listener {
+        override fun onControlledAppForeground(packageName: String) {
+            val label = runCatching {
+                val pm = packageManager
+                pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+            }.getOrElse { packageName }
+            killTunnel(label)
+        }
+
+        override fun onControlledAppLeftForeground() {
+            reviveTunnel()
+        }
+    }
+
+    private fun applyKillSwitchPreferences(prefs: KillSwitchRepository.Preferences) {
+        val shouldRun = prefs.enabled && prefs.packages.isNotEmpty() && running
+
+        if (!shouldRun) {
+            val wasPaused = LogRepository.connectionState.value == VpnConnectionState.PAUSED
+            killSwitchMonitor?.stop()
+            killSwitchMonitor = null
+            unregisterScreenReceiver()
+            // If the user disabled the feature (or cleared all packages) while
+            // the tunnel was paused, restore the tunnel. Without this the user
+            // has to manually stop+restart the VPN to recover.
+            if (wasPaused && running) {
+                reviveTunnel()
+            }
+            return
+        }
+
+        if (killSwitchMonitor == null) {
+            val source = AndroidUsageStatsEventSource(this)
+            val monitor = UsageStatsForegroundAppMonitor(source)
+            killSwitchMonitor = monitor
+            monitor.start(prefs.packages, KillSwitchListener())
+            registerScreenReceiver()
+            LogRepository.append("Kill-switch monitor started with ${prefs.packages.size} package(s)")
+        } else {
+            killSwitchMonitor?.updatePackages(prefs.packages)
+        }
+    }
+
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
+                    Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        registerReceiver(receiver, filter)
+        screenReceiver = receiver
+    }
+
+    private fun unregisterScreenReceiver() {
+        screenReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Throwable) {
+                // not registered
+            }
+        }
+        screenReceiver = null
+    }
+
     private fun stopVpn() {
         val shouldStop: Boolean
         synchronized(lock) {
@@ -185,18 +360,15 @@ class XrayVpnService : VpnService() {
             return
         }
 
-        XrayBridge.stopXray().onFailure { error ->
-            LogRepository.append("Xray stop warning: ${error.message}")
-        }
+        killSwitchMonitor?.stop()
+        killSwitchMonitor = null
+        settingsObserverJob?.cancel()
+        settingsObserverJob = null
+        unregisterScreenReceiver()
 
-        try {
-            tunInterface?.close()
-        } catch (error: Throwable) {
-            LogRepository.append("TUN close warning: ${error.message}")
-        } finally {
-            tunInterface = null
-        }
+        tearDownTunnel()
 
+        currentProfileId = -1L
         LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
         LogRepository.append("VPN stopped")
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -213,6 +385,14 @@ class XrayVpnService : VpnService() {
         )
         channel.description = getString(R.string.vpn_channel_description)
         manager.createNotificationChannel(channel)
+
+        val errorChannel = NotificationChannel(
+            ERROR_CHANNEL_ID,
+            getString(R.string.vpn_error_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        errorChannel.description = getString(R.string.vpn_error_channel_description)
+        manager.createNotificationChannel(errorChannel)
     }
 
     private fun buildNotification(contentText: String): Notification {
@@ -237,5 +417,26 @@ class XrayVpnService : VpnService() {
     private fun updateNotification(contentText: String) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, buildNotification(contentText))
+    }
+
+    private fun postReviveErrorNotification() {
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(getString(R.string.vpn_notification_title))
+            .setContentText(getString(R.string.vpn_revive_error))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(ERROR_NOTIFICATION_ID, notification)
     }
 }
