@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <application
         android:allowBackup="true"
@@ -29,12 +32,12 @@
         </activity>
 
         <activity
-            android:name=".split.SplitTunnelSettingsActivity"
+            android:name=".apps.AppPickerActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
         <activity
-            android:name=".split.SplitTunnelActivity"
+            android:name=".split.SplitTunnelSettingsActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
@@ -67,12 +70,5 @@
                 android:value="vpn_tunnel_core_proxy" />
         </service>
     </application>
-
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent>
-    </queries>
 
 </manifest>
