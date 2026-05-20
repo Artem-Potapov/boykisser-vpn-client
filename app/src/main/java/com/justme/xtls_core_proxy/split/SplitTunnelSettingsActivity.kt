@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.split
 
+import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -40,7 +41,14 @@ class SplitTunnelSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        appPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        appPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val newSelection = result.data
+                    ?.getStringArrayExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_RESULT_SELECTION)
+                    ?.toSet() ?: emptySet()
+                val currentMode = SplitTunnelRepository.load(this).mode
+                SplitTunnelRepository.save(this, currentMode, newSelection)
+            }
             refreshFromPreferences()
         }
 
@@ -59,7 +67,11 @@ class SplitTunnelSettingsActivity : ComponentActivity() {
                             mode = newMode
                         },
                         onChooseApps = {
-                            appPickerLauncher.launch(Intent(this, SplitTunnelActivity::class.java))
+                            val initial = SplitTunnelRepository.load(this).packages.toTypedArray()
+                            val intent = Intent(this, com.justme.xtls_core_proxy.apps.AppPickerActivity::class.java)
+                                .putExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_TITLE, "Split-tunneled apps")
+                                .putExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
+                            appPickerLauncher.launch(intent)
                         }
                     )
                 }
