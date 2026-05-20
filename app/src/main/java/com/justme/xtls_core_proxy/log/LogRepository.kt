@@ -11,6 +11,7 @@ enum class VpnConnectionState {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    PAUSED,
     ERROR
 }
 
