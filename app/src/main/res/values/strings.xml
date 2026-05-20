@@ -3,4 +3,17 @@
     <string name="vpn_channel_name">VPN Tunnel</string>
     <string name="vpn_channel_description">Status notifications for Xray VPN tunnel</string>
     <string name="vpn_notification_title">XTLS Core Proxy</string>
+
+    <!-- Kill-on-foreground feature -->
+    <string name="vpn_error_channel_name">VPN Errors</string>
+    <string name="vpn_error_channel_description">Notifications for unexpected VPN failures</string>
+    <string name="vpn_revive_error">VPN service stopped due to an unknown error</string>
+    <string name="vpn_status_paused">Paused: %1$s is open</string>
+    <string name="vpn_status_connected">Connected</string>
+    <string name="kill_switch_title">Kill-on-foreground apps</string>
+    <string name="kill_switch_enabled">Enable kill-on-foreground</string>
+    <string name="kill_switch_description">Fully disconnect the VPN whenever one of the selected apps is the foreground app. Reconnect automatically when it leaves the foreground.</string>
+    <string name="kill_switch_permission_required">Grant Usage Access to enable this feature</string>
+    <string name="kill_switch_open_settings">Open settings</string>
+    <string name="kill_switch_select_apps">Select apps</string>
 </resources>
