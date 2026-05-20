@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
@@ -38,6 +41,11 @@
 
         <activity
             android:name=".split.SplitTunnelSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.XTLS_CORE_PROXY" />
+
+        <activity
+            android:name=".killswitch.KillSwitchSettingsActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
