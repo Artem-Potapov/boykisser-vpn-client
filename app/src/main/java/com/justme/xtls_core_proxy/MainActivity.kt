@@ -251,7 +251,10 @@ private fun MainScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(text = "State: ${state.name}", style = MaterialTheme.typography.bodyMedium)
-                if (state == VpnConnectionState.CONNECTED || state == VpnConnectionState.CONNECTING) {
+                if (state == VpnConnectionState.CONNECTED ||
+                    state == VpnConnectionState.CONNECTING ||
+                    state == VpnConnectionState.PAUSED
+                ) {
                     OutlinedButton(onClick = onDisconnect) {
                         Text("Disconnect")
                     }
@@ -536,9 +539,13 @@ private fun ProfileRow(
 
 private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
     return profile.id == activeId &&
-        (state == VpnConnectionState.CONNECTED || state == VpnConnectionState.CONNECTING)
+        (state == VpnConnectionState.CONNECTED ||
+            state == VpnConnectionState.CONNECTING ||
+            state == VpnConnectionState.PAUSED)
 }
 
 private fun canConnect(state: VpnConnectionState): Boolean {
-    return state != VpnConnectionState.CONNECTED && state != VpnConnectionState.CONNECTING
+    return state != VpnConnectionState.CONNECTED &&
+        state != VpnConnectionState.CONNECTING &&
+        state != VpnConnectionState.PAUSED
 }
