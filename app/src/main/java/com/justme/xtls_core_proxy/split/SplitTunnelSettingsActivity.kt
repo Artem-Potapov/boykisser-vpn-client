@@ -3,7 +3,7 @@ package com.justme.xtls_core_proxy.split
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.apps.AppPickerActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
-class SplitTunnelSettingsActivity : ComponentActivity() {
+class SplitTunnelSettingsActivity : LocalizedComponentActivity() {
     private var mode by mutableStateOf<SplitTunnelMode>(SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED)
     private var selectedPackageCount by mutableStateOf(0)
 

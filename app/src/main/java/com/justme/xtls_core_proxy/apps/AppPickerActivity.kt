@@ -3,7 +3,7 @@ package com.justme.xtls_core_proxy.apps
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
@@ -52,7 +52,7 @@ import kotlinx.coroutines.withContext
  * Caller persists the result — this Activity has zero knowledge of which
  * feature's prefs it's editing.
  */
-class AppPickerActivity : ComponentActivity() {
+class AppPickerActivity : LocalizedComponentActivity() {
 
     companion object {
         const val EXTRA_TITLE = "com.justme.xtls_core_proxy.apps.EXTRA_TITLE"
@@ -140,7 +140,9 @@ private fun AppPickerScreen(
         LazyColumn(modifier = Modifier.weight(1f)) {
             if (filteredApps.isEmpty()) {
                 item {
-                    Text("No apps found", modifier = Modifier.padding(vertical = 16.dp))
+                    //The load actually takes quite a lot of time - so although no apps may be found,
+                    //It's better to just trick the user into staying.
+                    Text("Apps are loading...", modifier = Modifier.padding(vertical = 16.dp))
                 }
             }
             items(filteredApps, key = { it.packageName }) { app ->

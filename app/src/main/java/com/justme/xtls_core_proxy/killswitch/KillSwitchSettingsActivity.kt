@@ -7,7 +7,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
-import androidx.activity.ComponentActivity
+import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -43,7 +43,7 @@ import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.apps.AppPickerActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
-class KillSwitchSettingsActivity : ComponentActivity() {
+class KillSwitchSettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

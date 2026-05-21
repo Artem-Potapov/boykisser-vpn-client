@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
@@ -53,7 +53,7 @@ import com.justme.xtls_core_proxy.config.SimpleServerFields
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
-class ServerSettingsActivity : ComponentActivity() {
+class ServerSettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

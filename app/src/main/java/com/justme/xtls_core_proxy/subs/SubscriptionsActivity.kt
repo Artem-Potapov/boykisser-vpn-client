@@ -3,7 +3,7 @@ package com.justme.xtls_core_proxy.subs
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -51,7 +51,7 @@ import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
-class SubscriptionsActivity : ComponentActivity() {
+class SubscriptionsActivity : LocalizedComponentActivity() {
 
     private val viewModel: VpnViewModel by viewModels()
     private lateinit var editLauncher: ActivityResultLauncher<Intent>
