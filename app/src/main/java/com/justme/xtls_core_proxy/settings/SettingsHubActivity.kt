@@ -41,7 +41,11 @@ class SettingsHubActivity : LocalizedComponentActivity() {
         setContent {
             XTLS_CORE_PROXYTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SettingsHubScreen()
+                    SettingsHubScreen(
+                        onOpenLanguage = {
+                            startActivity(Intent(this, LanguageSettingsActivity::class.java))
+                        }
+                    )
                 }
             }
         }
@@ -49,11 +53,13 @@ class SettingsHubActivity : LocalizedComponentActivity() {
 }
 
 @Composable
-private fun SettingsHubScreen() {
+private fun SettingsHubScreen(
+    onOpenLanguage: () -> Unit,
+) {
     val context = LocalContext.current
-    val currentLang = SupportedLanguage.current()
+    val currentLang = SupportedLanguage.current(context)
     val langLabel = when (currentLang) {
-        SupportedLanguage.AUTO -> stringResource(R.string.settings_language_subtitle_auto)
+        SupportedLanguage.AUTO -> stringResource(R.string.lang_auto)
         SupportedLanguage.ENGLISH -> stringResource(R.string.lang_english)
         SupportedLanguage.RUSSIAN -> stringResource(R.string.lang_russian)
     }
@@ -86,9 +92,7 @@ private fun SettingsHubScreen() {
         SettingsRow(
             title = stringResource(R.string.settings_language_title),
             subtitle = langLabel,
-            onClick = {
-                context.startActivity(Intent(context, LanguageSettingsActivity::class.java))
-            }
+            onClick = onOpenLanguage
         )
     }
 }

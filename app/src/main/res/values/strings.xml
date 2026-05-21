@@ -30,7 +30,6 @@
     <string name="settings_split_subtitle">Choose which apps go through the VPN</string>
     <string name="settings_kill_title">Kill on foreground</string>
     <string name="settings_kill_subtitle">Fully disconnect the VPN when selected apps are open</string>
-    <string name="settings_language_subtitle_auto">Auto</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>

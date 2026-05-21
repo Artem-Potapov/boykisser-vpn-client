@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.R
@@ -36,7 +37,12 @@ class LanguageSettingsActivity : LocalizedComponentActivity() {
         setContent {
             XTLS_CORE_PROXYTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    LanguageSettingsScreen()
+                    LanguageSettingsScreen(
+                        onLanguageSelected = { language ->
+                            SupportedLanguage.apply(this@LanguageSettingsActivity, language)
+                            finish()
+                        },
+                    )
                 }
             }
         }
@@ -44,8 +50,11 @@ class LanguageSettingsActivity : LocalizedComponentActivity() {
 }
 
 @Composable
-private fun LanguageSettingsScreen() {
-    var selected by remember { mutableStateOf(SupportedLanguage.current()) }
+private fun LanguageSettingsScreen(
+    onLanguageSelected: (SupportedLanguage) -> Unit,
+) {
+    val context = LocalContext.current
+    var selected by remember { mutableStateOf(SupportedLanguage.current(context)) }
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -55,13 +64,12 @@ private fun LanguageSettingsScreen() {
             style = MaterialTheme.typography.headlineSmall,
         )
         Spacer(modifier = Modifier.height(16.dp))
-
         LanguageRow(
             label = stringResource(R.string.lang_auto),
             selected = selected == SupportedLanguage.AUTO,
             onClick = {
                 selected = SupportedLanguage.AUTO
-                SupportedLanguage.apply(SupportedLanguage.AUTO)
+                onLanguageSelected(SupportedLanguage.AUTO)
             },
         )
         HorizontalDivider()
@@ -70,7 +78,7 @@ private fun LanguageSettingsScreen() {
             selected = selected == SupportedLanguage.ENGLISH,
             onClick = {
                 selected = SupportedLanguage.ENGLISH
-                SupportedLanguage.apply(SupportedLanguage.ENGLISH)
+                onLanguageSelected(SupportedLanguage.ENGLISH)
             },
         )
         HorizontalDivider()
@@ -79,7 +87,7 @@ private fun LanguageSettingsScreen() {
             selected = selected == SupportedLanguage.RUSSIAN,
             onClick = {
                 selected = SupportedLanguage.RUSSIAN
-                SupportedLanguage.apply(SupportedLanguage.RUSSIAN)
+                onLanguageSelected(SupportedLanguage.RUSSIAN)
             },
         )
     }
