@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.subs
 
+import android.content.Context
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.Subscription
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,22 +30,32 @@ object SubscriptionFetcher {
     private const val MAX_BODY_BYTES = 2L * 1024L * 1024L
     private const val READ_CHUNK_BYTES = 16 * 1024
 
-    suspend fun fetch(sub: Subscription, defaultUserAgent: String): FetchResult =
+    suspend fun fetch(context: Context, sub: Subscription, defaultUserAgent: String): FetchResult =
         withContext(Dispatchers.IO) {
             try {
-                fetchBlocking(sub, defaultUserAgent)
+                fetchBlocking(context, sub, defaultUserAgent)
             } catch (e: IOException) {
-                FetchResult.Failure(e.message ?: "Network error")
+                FetchResult.Failure(
+                    context.getString(
+                        R.string.subs_error_network_prefix,
+                        e.message ?: e.javaClass.simpleName,
+                    )
+                )
             } catch (e: Exception) {
-                FetchResult.Failure(e.message ?: e.javaClass.simpleName)
+                FetchResult.Failure(
+                    context.getString(
+                        R.string.subs_error_fetch_failed_prefix,
+                        e.message ?: e.javaClass.simpleName,
+                    )
+                )
             }
         }
 
-    private fun fetchBlocking(sub: Subscription, defaultUserAgent: String): FetchResult {
+    private fun fetchBlocking(context: Context, sub: Subscription, defaultUserAgent: String): FetchResult {
         val url = URL(sub.url)
         val scheme = url.protocol.lowercase()
         if (scheme != "http" && scheme != "https") {
-            return FetchResult.Failure("Only http(s) URLs are supported")
+            return FetchResult.Failure(context.getString(R.string.subs_error_url_scheme))
         }
 
         val connection = url.openConnection() as HttpURLConnection
@@ -64,7 +76,13 @@ object SubscriptionFetcher {
 
             val status = connection.responseCode
             if (status !in 200..299) {
-                return FetchResult.Failure("HTTP $status ${connection.responseMessage.orEmpty()}".trim())
+                return FetchResult.Failure(
+                    context.getString(
+                        R.string.subs_error_http_prefix,
+                        status,
+                        connection.responseMessage.orEmpty(),
+                    )
+                )
             }
 
             val intervalHours = parseIntervalHeader(connection.headerFields)
@@ -78,7 +96,7 @@ object SubscriptionFetcher {
                     if (read == -1) break
                     total += read
                     if (total > MAX_BODY_BYTES) {
-                        return FetchResult.Failure("Subscription body exceeds 2 MiB limit")
+                        return FetchResult.Failure(context.getString(R.string.subs_error_body_too_large))
                     }
                     sink.write(buffer, 0, read)
                 }

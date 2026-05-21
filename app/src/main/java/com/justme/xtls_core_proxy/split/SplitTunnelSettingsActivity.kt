@@ -29,7 +29,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.apps.AppPickerActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
@@ -70,7 +72,10 @@ class SplitTunnelSettingsActivity : LocalizedComponentActivity() {
                         onChooseApps = {
                             val initial = SplitTunnelRepository.load(this).packages.toTypedArray()
                             val intent = Intent(this, AppPickerActivity::class.java)
-                                .putExtra(AppPickerActivity.EXTRA_TITLE, "Split-tunneled apps")
+                                .putExtra(
+                                    AppPickerActivity.EXTRA_TITLE,
+                                    getString(R.string.split_picker_title)
+                                )
                                 .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
                             appPickerLauncher.launch(intent)
                         }
@@ -95,8 +100,8 @@ private fun SplitTunnelSettingsScreen(
     onChooseApps: () -> Unit
 ) {
     val modeValues: List<Pair<SplitTunnelMode, String>> = listOf(
-        SplitTunnelMode.ALLOW_ONLY to "Proxy selected apps only",
-        SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED to "Proxy all except selected"
+        SplitTunnelMode.ALLOW_ONLY to stringResource(R.string.split_mode_allow_only),
+        SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED to stringResource(R.string.split_mode_block_except)
     )
 
     Column(
@@ -105,12 +110,12 @@ private fun SplitTunnelSettingsScreen(
             .padding(16.dp)
     ) {
         Text(
-            text = "Split tunneling",
+            text = stringResource(R.string.split_title),
             style = MaterialTheme.typography.headlineSmall
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Mode",
+            text = stringResource(R.string.split_mode_label),
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -138,12 +143,12 @@ private fun SplitTunnelSettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Selected apps: $selectedPackageCount",
+            text = stringResource(R.string.split_selected_count, selectedPackageCount),
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = onChooseApps) {
-            Text("Choose apps →")
+            Text(stringResource(R.string.split_choose_apps))
         }
     }
 }

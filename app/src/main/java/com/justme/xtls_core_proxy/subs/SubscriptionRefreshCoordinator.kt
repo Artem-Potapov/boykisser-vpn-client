@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.subs
 
+import android.content.Context
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +16,7 @@ object SubscriptionRefreshCoordinator {
 
     fun refresh(
         scope: CoroutineScope,
+        context: Context,
         subId: Long,
         activeProfileIdProvider: () -> Long?,
         db: AppDatabase,
@@ -24,7 +27,7 @@ object SubscriptionRefreshCoordinator {
         }
         val job = scope.launch(Dispatchers.IO) {
             try {
-                runRefresh(subId, activeProfileIdProvider, db, defaultUserAgent)
+                runRefresh(context, subId, activeProfileIdProvider, db, defaultUserAgent)
             } finally {
                 inFlight.remove(subId)
             }
@@ -34,6 +37,7 @@ object SubscriptionRefreshCoordinator {
     }
 
     private suspend fun runRefresh(
+        context: Context,
         subId: Long,
         activeProfileIdProvider: () -> Long?,
         db: AppDatabase,
@@ -43,7 +47,7 @@ object SubscriptionRefreshCoordinator {
         val profileDao = db.profileDao()
         val sub = subDao.getById(subId) ?: return
 
-        when (val result = SubscriptionFetcher.fetch(sub, defaultUserAgent)) {
+        when (val result = SubscriptionFetcher.fetch(context, sub, defaultUserAgent)) {
             is FetchResult.Failure -> {
                 subDao.markError(subId, result.message)
             }
@@ -62,7 +66,7 @@ object SubscriptionRefreshCoordinator {
                 profileDao.replaceProfilesForSubscription(subId, keepProfileId, newProfiles)
 
                 val warning = if (outcome.parseErrorCount > 0) {
-                    "${outcome.parseErrorCount} line(s) failed to parse"
+                    context.getString(R.string.subs_error_parse_lines_prefix, outcome.parseErrorCount)
                 } else {
                     null
                 }

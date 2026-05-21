@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.bridge
 
+// i18n: audited 2026-05-21, no user-visible strings
+
 import java.lang.reflect.Method
 
 object XrayBridge {
