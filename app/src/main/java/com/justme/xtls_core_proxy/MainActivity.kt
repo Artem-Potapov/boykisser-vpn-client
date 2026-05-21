@@ -462,7 +462,7 @@ private fun SubscriptionGroupHeader(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "(${group.profiles.size})",
+                        text = stringResource(R.string.main_subscription_profile_count, group.profiles.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -17,6 +17,8 @@
     <string name="kill_switch_permission_required">Grant Usage Access to enable this feature</string>
     <string name="kill_switch_open_settings">Open Usage Access settings</string>
     <string name="kill_switch_select_apps">Select apps</string>
+    <string name="kill_switch_selected_count">Selected apps: %1$d</string>
+    <string name="kill_switch_choose_apps">Choose apps →</string>
 
     <!-- Language picker -->
     <string name="settings_language_title">Language</string>
@@ -53,6 +55,7 @@
     <string name="main_button_connecting">Connecting…</string>
     <string name="main_action_edit">Edit</string>
     <string name="main_action_delete">Delete</string>
+    <string name="main_subscription_profile_count">(%1$d)</string>
 
     <!-- App picker -->
     <string name="apps_title_default">Select apps</string>

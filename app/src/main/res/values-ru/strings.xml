@@ -18,6 +18,8 @@
     <string name="kill_switch_permission_required">Для работы функции нужен доступ к статистике использования</string>
     <string name="kill_switch_open_settings">Открыть настройки доступа к статистике</string>
     <string name="kill_switch_select_apps">Выбрать приложения</string>
+    <string name="kill_switch_selected_count">Выбрано приложений: %1$d</string>
+    <string name="kill_switch_choose_apps">Выбрать приложения →</string>
 
     <!-- Language picker -->
     <string name="settings_language_title">Язык</string>
@@ -54,6 +56,7 @@
     <string name="main_button_connecting">Подключение…</string>
     <string name="main_action_edit">Изменить</string>
     <string name="main_action_delete">Удалить</string>
+    <string name="main_subscription_profile_count">(%1$d)</string>
 
     <!-- App picker -->
     <string name="apps_title_default">Выбрать приложения</string>
