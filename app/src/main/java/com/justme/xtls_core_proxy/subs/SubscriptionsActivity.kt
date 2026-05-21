@@ -45,8 +45,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
@@ -164,12 +167,12 @@ private fun SubscriptionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Subscriptions") },
+                title = { Text(stringResource(R.string.subs_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.subs_cd_back)
                         )
                     }
                 }
@@ -177,7 +180,7 @@ private fun SubscriptionsScreen(
         },
         floatingActionButton = {
             FloatingActionButton(onClick = onAdd) {
-                Icon(Icons.Default.Add, contentDescription = "Add subscription")
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.subs_cd_add))
             }
         }
     ) { padding ->
@@ -189,7 +192,7 @@ private fun SubscriptionsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No subscriptions yet.\nTap + to add one.",
+                    text = stringResource(R.string.subs_empty),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -217,24 +220,21 @@ private fun SubscriptionsScreen(
     pendingDelete?.let { sub ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete subscription?") },
+            title = { Text(stringResource(R.string.subs_delete_title)) },
             text = {
-                Text(
-                    "This will remove the subscription and all of its profiles. " +
-                        "Manually-added profiles are not affected."
-                )
+                Text(stringResource(R.string.subs_delete_message))
             },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(sub)
                     pendingDelete = null
                 }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.subs_button_delete), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.subs_button_cancel))
                 }
             }
         )
@@ -249,6 +249,7 @@ private fun SubscriptionRow(
     onLongPress: () -> Unit,
     onRefresh: () -> Unit
 ) {
+    val context = LocalContext.current
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -277,7 +278,7 @@ private fun SubscriptionRow(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = SubscriptionFormatting.lastSeenSummary(subscription),
+                    text = SubscriptionFormatting.lastSeenSummary(context, subscription),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (subscription.lastError != null) {
                         MaterialTheme.colorScheme.error
@@ -287,7 +288,10 @@ private fun SubscriptionRow(
                 )
             }
             IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh subscription")
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.main_cd_refresh_subscription)
+                )
             }
         }
     }

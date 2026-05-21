@@ -37,9 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.split.AppEntry
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 import kotlinx.coroutines.Dispatchers
@@ -64,7 +66,7 @@ class AppPickerActivity : LocalizedComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Select apps"
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: getString(R.string.apps_title_default)
         val initialSelection = intent.getStringArrayExtra(EXTRA_INITIAL_SELECTION)?.toSet() ?: emptySet()
 
         setContent {
@@ -132,7 +134,7 @@ private fun AppPickerScreen(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Search apps") },
+            label = { Text(stringResource(R.string.apps_search_label)) },
             maxLines = 1
         )
         Spacer(modifier = Modifier.height(12.dp))
@@ -142,7 +144,10 @@ private fun AppPickerScreen(
                 item {
                     //The load actually takes quite a lot of time - so although no apps may be found,
                     //It's better to just trick the user into staying.
-                    Text("Apps are loading...", modifier = Modifier.padding(vertical = 16.dp))
+                    Text(
+                        stringResource(R.string.apps_loading),
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
                 }
             }
             items(filteredApps, key = { it.packageName }) { app ->
@@ -191,9 +196,9 @@ private fun AppPickerScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            TextButton(onClick = onCancel) { Text(stringResource(R.string.apps_cancel)) }
             Button(modifier = Modifier.weight(1f), onClick = { onSave(selected) }) {
-                Text("Save")
+                Text(stringResource(R.string.apps_save))
             }
         }
     }

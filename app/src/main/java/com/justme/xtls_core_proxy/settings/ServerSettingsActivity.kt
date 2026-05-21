@@ -42,10 +42,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.config.JsonFormatter
 import com.justme.xtls_core_proxy.config.ProfileConfigCodec
@@ -136,6 +139,7 @@ private fun ServerSettingsScreen(
     var simpleFields by remember { mutableStateOf(initialSimpleFields) }
     var parseMessage by remember { mutableStateOf<String?>(null) }
     var saveError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
 
     fun buildConfigFromSimple(): Result<String> {
         return runCatching {
@@ -156,8 +160,11 @@ private fun ServerSettingsScreen(
                 configText = formatted
                 parseMessage = null
             }
-            .onFailure {
-                parseMessage = it.message ?: "Unable to build config from Simple fields"
+            .onFailure { error ->
+                parseMessage = context.getString(
+                    R.string.server_error_build_config_prefix,
+                    error.message ?: error.javaClass.simpleName
+                )
             }
     }
 
@@ -167,18 +174,30 @@ private fun ServerSettingsScreen(
         }.onSuccess {
             simpleFields = it
             parseMessage = null
-        }.onFailure {
-            parseMessage = it.message ?: "Unable to parse Advanced config into Simple fields"
+        }.onFailure { error ->
+            parseMessage = context.getString(
+                R.string.server_error_parse_advanced_prefix,
+                error.message ?: error.javaClass.simpleName
+            )
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isEdit) "Edit server" else "Add server") },
+                title = {
+                    Text(
+                        stringResource(
+                            if (isEdit) R.string.server_title_edit else R.string.server_title_add
+                        )
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.server_cd_back)
+                        )
                     }
                 },
                 actions = {
@@ -187,31 +206,37 @@ private fun ServerSettingsScreen(
                             saveError = null
                             val trimmedName = name.trim()
                             if (trimmedName.isBlank()) {
-                                saveError = "Name is required"
+                                saveError = context.getString(R.string.server_error_name_required)
                                 return@TextButton
                             }
                             val candidateConfig = if (tabIndex == 0) {
                                 buildConfigFromSimple().getOrElse { error ->
-                                    saveError = error.message ?: "Simple fields are invalid"
+                                    saveError = context.getString(
+                                        R.string.server_error_simple_invalid_prefix,
+                                        error.message ?: error.javaClass.simpleName
+                                    )
                                     return@TextButton
                                 }
                             } else {
                                 configText.trim()
                             }
                             if (candidateConfig.isBlank()) {
-                                saveError = "Config is required"
+                                saveError = context.getString(R.string.server_error_config_required)
                                 return@TextButton
                             }
                             runCatching { ConfigBuilder.buildRuntimeConfig(candidateConfig) }
                                 .onFailure { error ->
-                                    saveError = error.message ?: "Config validation failed"
+                                    saveError = context.getString(
+                                        R.string.server_error_validation_failed_prefix,
+                                        error.message ?: error.javaClass.simpleName
+                                    )
                                 }
                                 .onSuccess {
                                     onSave(trimmedName, candidateConfig)
                                 }
                         }
                     ) {
-                        Text("Save")
+                        Text(stringResource(R.string.server_action_save))
                     }
                 }
             )
@@ -228,13 +253,16 @@ private fun ServerSettingsScreen(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Server Name") },
+                label = { Text(stringResource(R.string.server_label_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(12.dp))
-            val tabTitles = listOf("Simple", "Advanced")
+            val tabTitles = listOf(
+                stringResource(R.string.server_tab_simple),
+                stringResource(R.string.server_tab_advanced)
+            )
             TabRow(selectedTabIndex = tabIndex) {
                 tabTitles.forEachIndexed { index, title ->
                     Tab(
@@ -287,42 +315,61 @@ private fun ServerSettingsScreen(
     }
 }
 
-private val NETWORK_OPTIONS = listOf(
-    "tcp" to "TCP (Raw)",
-    "kcp" to "mKCP",
-    "ws" to "WebSocket",
-    "httpupgrade" to "HTTPUpgrade",
-    "xhttp" to "XHTTP",
-    "h2" to "HTTP/2",
-    "quic" to "QUIC",
-    "grpc" to "gRPC"
+@Composable
+private fun networkOptions(): List<Pair<String, String>> = listOf(
+    "tcp" to stringResource(R.string.server_network_tcp),
+    "kcp" to stringResource(R.string.server_network_kcp),
+    "ws" to stringResource(R.string.server_network_ws),
+    "httpupgrade" to stringResource(R.string.server_network_httpupgrade),
+    "xhttp" to stringResource(R.string.server_network_xhttp),
+    "h2" to stringResource(R.string.server_network_h2),
+    "quic" to stringResource(R.string.server_network_quic),
+    "grpc" to stringResource(R.string.server_network_grpc)
 )
 
-private val FLOW_OPTIONS = listOf(
-    "" to "None",
-    "xtls-rprx-vision" to "xtls-rprx-vision",
-    "xtls-rprx-vision-udp443" to "xtls-rprx-vision-udp443"
+@Composable
+private fun flowOptions(): List<Pair<String, String>> = listOf(
+    "" to stringResource(R.string.server_flow_none),
+    "xtls-rprx-vision" to stringResource(R.string.server_flow_xtls_rprx_vision),
+    "xtls-rprx-vision-udp443" to stringResource(R.string.server_flow_xtls_rprx_vision_udp443)
 )
 
-private val SECURITY_OPTIONS = listOf(
-    "none" to "None",
-    "reality" to "REALITY",
-    "tls" to "TLS"
+@Composable
+private fun securityOptions(): List<Pair<String, String>> = listOf(
+    "none" to stringResource(R.string.server_security_none),
+    "reality" to stringResource(R.string.server_security_reality),
+    "tls" to stringResource(R.string.server_security_tls)
 )
 
-private val FINGERPRINT_OPTIONS = listOf(
-    "chrome", "firefox", "safari", "ios", "android",
-    "edge", "360", "qq", "random", "randomized"
+@Composable
+private fun fingerprintOptions(): List<Pair<String, String>> = listOf(
+    "chrome" to stringResource(R.string.server_fingerprint_chrome),
+    "firefox" to stringResource(R.string.server_fingerprint_firefox),
+    "safari" to stringResource(R.string.server_fingerprint_safari),
+    "ios" to stringResource(R.string.server_fingerprint_ios),
+    "android" to stringResource(R.string.server_fingerprint_android),
+    "edge" to stringResource(R.string.server_fingerprint_edge),
+    "360" to stringResource(R.string.server_fingerprint_360),
+    "qq" to stringResource(R.string.server_fingerprint_qq),
+    "random" to stringResource(R.string.server_fingerprint_random),
+    "randomized" to stringResource(R.string.server_fingerprint_randomized)
 )
 
-private val ALPN_OPTIONS = listOf(
-    "" to "None",
-    "h3" to "h3",
-    "h2" to "h2",
-    "http/1.1" to "http/1.1",
-    "h3,h2,http/1.1" to "h3,h2,http/1.1",
-    "h3,h2" to "h3,h2",
-    "h2,http/1.1" to "h2,http/1.1"
+@Composable
+private fun alpnOptions(): List<Pair<String, String>> = listOf(
+    "" to stringResource(R.string.server_alpn_none),
+    "h3" to stringResource(R.string.server_alpn_h3),
+    "h2" to stringResource(R.string.server_alpn_h2),
+    "http/1.1" to stringResource(R.string.server_alpn_http11),
+    "h3,h2,http/1.1" to stringResource(R.string.server_alpn_h3_h2_http11),
+    "h3,h2" to stringResource(R.string.server_alpn_h3_h2),
+    "h2,http/1.1" to stringResource(R.string.server_alpn_h2_http11)
+)
+
+@Composable
+private fun allowInsecureOptions(): List<Pair<String, String>> = listOf(
+    "false" to stringResource(R.string.server_allow_insecure_no),
+    "true" to stringResource(R.string.server_allow_insecure_yes)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -338,7 +385,7 @@ private fun SimpleEditor(
         OutlinedTextField(
             value = fields.host,
             onValueChange = { onFieldsChange(fields.copy(host = it)) },
-            label = { Text("Server IP / Host") },
+            label = { Text(stringResource(R.string.server_label_host)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -346,7 +393,7 @@ private fun SimpleEditor(
             OutlinedTextField(
                 value = fields.port,
                 onValueChange = { onFieldsChange(fields.copy(port = it)) },
-                label = { Text("Port") },
+                label = { Text(stringResource(R.string.server_label_port)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
                 modifier = Modifier.weight(1f)
@@ -354,8 +401,8 @@ private fun SimpleEditor(
             DropdownField(
                 value = fields.network,
                 onValueChange = { onFieldsChange(fields.copy(network = it)) },
-                label = "Network",
-                options = NETWORK_OPTIONS,
+                label = stringResource(R.string.server_label_network),
+                options = networkOptions(),
                 modifier = Modifier.weight(1f)
             )
         }
@@ -365,7 +412,7 @@ private fun SimpleEditor(
         OutlinedTextField(
             value = fields.uuid,
             onValueChange = { onFieldsChange(fields.copy(uuid = it)) },
-            label = { Text("UUID") },
+            label = { Text(stringResource(R.string.server_label_uuid)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -373,15 +420,15 @@ private fun SimpleEditor(
             DropdownField(
                 value = fields.security,
                 onValueChange = { onFieldsChange(fields.copy(security = it)) },
-                label = "Security",
-                options = SECURITY_OPTIONS,
+                label = stringResource(R.string.server_label_security),
+                options = securityOptions(),
                 modifier = Modifier.weight(1f)
             )
             DropdownField(
                 value = fields.flow,
                 onValueChange = { onFieldsChange(fields.copy(flow = it)) },
-                label = "Flow",
-                options = FLOW_OPTIONS,
+                label = stringResource(R.string.server_label_flow),
+                options = flowOptions(),
                 modifier = Modifier.weight(1f)
             )
         }
@@ -405,14 +452,28 @@ private fun TransportFields(
             OutlinedTextField(
                 value = fields.transportPath,
                 onValueChange = { onFieldsChange(fields.copy(transportPath = it)) },
-                label = { Text(fields.network + " Path") },
+                label = {
+                    Text(
+                        stringResource(
+                            R.string.server_transport_path_label,
+                            fields.network
+                        )
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = fields.transportHost,
                 onValueChange = { onFieldsChange(fields.copy(transportHost = it)) },
-                label = { Text(fields.network + " Host") },
+                label = {
+                    Text(
+                        stringResource(
+                            R.string.server_transport_host_label,
+                            fields.network
+                        )
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -420,13 +481,13 @@ private fun TransportFields(
                 OutlinedTextField(
                     value = fields.xhttpExtraJson,
                     onValueChange = { onFieldsChange(fields.copy(xhttpExtraJson = it)) },
-                    label = { Text("XHTTP extra (JSON object)") },
+                    label = { Text(stringResource(R.string.server_label_xhttp_extra_json)) },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 6,
                     textStyle = TextStyle(fontFamily = FontFamily.Monospace)
                 )
                 Text(
-                    text = "Applies to streamSettings.xhttpSettings.extra. Must be a JSON object fragment.",
+                    text = stringResource(R.string.server_hint_xhttp_extra),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -435,14 +496,14 @@ private fun TransportFields(
             OutlinedTextField(
                 value = fields.grpcServiceName,
                 onValueChange = { onFieldsChange(fields.copy(grpcServiceName = it)) },
-                label = { Text("gRPC Service Name") },
+                label = { Text(stringResource(R.string.server_label_grpc_service_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = fields.grpcAuthority,
                 onValueChange = { onFieldsChange(fields.copy(grpcAuthority = it)) },
-                label = { Text("gRPC Authority") },
+                label = { Text(stringResource(R.string.server_label_grpc_authority)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -451,20 +512,20 @@ private fun TransportFields(
             OutlinedTextField(
                 value = fields.kcpSeed,
                 onValueChange = { onFieldsChange(fields.copy(kcpSeed = it)) },
-                label = { Text("mKCP Seed") },
+                label = { Text(stringResource(R.string.server_label_kcp_seed)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = fields.finalmaskJson,
                 onValueChange = { onFieldsChange(fields.copy(finalmaskJson = it)) },
-                label = { Text("FinalMask (streamSettings.finalmask) JSON object") },
+                label = { Text(stringResource(R.string.server_label_finalmask_json)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 6,
                 textStyle = TextStyle(fontFamily = FontFamily.Monospace)
             )
             Text(
-                text = "FinalMask is stored on streamSettings.finalmask, not inside kcpSettings.",
+                text = stringResource(R.string.server_hint_finalmask),
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -472,7 +533,7 @@ private fun TransportFields(
             OutlinedTextField(
                 value = fields.quicKey,
                 onValueChange = { onFieldsChange(fields.copy(quicKey = it)) },
-                label = { Text("QUIC Key") },
+                label = { Text(stringResource(R.string.server_label_quic_key)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -489,7 +550,7 @@ private fun RealityFields(
     OutlinedTextField(
         value = fields.serverName,
         onValueChange = { onFieldsChange(fields.copy(serverName = it)) },
-        label = { Text("SNI / Server Name") },
+        label = { Text(stringResource(R.string.server_label_sni)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -497,14 +558,14 @@ private fun RealityFields(
         DropdownField(
             value = fields.fingerprint,
             onValueChange = { onFieldsChange(fields.copy(fingerprint = it)) },
-            label = "Fingerprint",
-            options = FINGERPRINT_OPTIONS.map { it to it },
+            label = stringResource(R.string.server_label_fingerprint),
+            options = fingerprintOptions(),
             modifier = Modifier.weight(1f)
         )
         OutlinedTextField(
             value = fields.shortId,
             onValueChange = { onFieldsChange(fields.copy(shortId = it)) },
-            label = { Text("Short ID") },
+            label = { Text(stringResource(R.string.server_label_short_id)) },
             singleLine = true,
             modifier = Modifier.weight(1f)
         )
@@ -512,7 +573,7 @@ private fun RealityFields(
     OutlinedTextField(
         value = fields.publicKey,
         onValueChange = { onFieldsChange(fields.copy(publicKey = it)) },
-        label = { Text("Public Key") },
+        label = { Text(stringResource(R.string.server_label_public_key)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -520,14 +581,14 @@ private fun RealityFields(
         DropdownField(
             value = fields.alpn,
             onValueChange = { onFieldsChange(fields.copy(alpn = it)) },
-            label = "ALPN",
-            options = ALPN_OPTIONS,
+            label = stringResource(R.string.server_label_alpn),
+            options = alpnOptions(),
             modifier = Modifier.weight(1f)
         )
         OutlinedTextField(
             value = fields.spiderX,
             onValueChange = { onFieldsChange(fields.copy(spiderX = it)) },
-            label = { Text("SpiderX") },
+            label = { Text(stringResource(R.string.server_label_spiderx)) },
             singleLine = true,
             modifier = Modifier.weight(1f)
         )
@@ -543,7 +604,7 @@ private fun TlsFields(
     OutlinedTextField(
         value = fields.serverName,
         onValueChange = { onFieldsChange(fields.copy(serverName = it)) },
-        label = { Text("SNI / Server Name") },
+        label = { Text(stringResource(R.string.server_label_sni)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -551,23 +612,23 @@ private fun TlsFields(
         DropdownField(
             value = fields.fingerprint,
             onValueChange = { onFieldsChange(fields.copy(fingerprint = it)) },
-            label = "Fingerprint",
-            options = FINGERPRINT_OPTIONS.map { it to it },
+            label = stringResource(R.string.server_label_fingerprint),
+            options = fingerprintOptions(),
             modifier = Modifier.weight(1f)
         )
         DropdownField(
             value = fields.alpn,
             onValueChange = { onFieldsChange(fields.copy(alpn = it)) },
-            label = "ALPN",
-            options = ALPN_OPTIONS,
+            label = stringResource(R.string.server_label_alpn),
+            options = alpnOptions(),
             modifier = Modifier.weight(1f)
         )
     }
     DropdownField(
         value = fields.allowInsecure,
         onValueChange = { onFieldsChange(fields.copy(allowInsecure = it)) },
-        label = "Allow Insecure",
-        options = listOf("false" to "No", "true" to "Yes"),
+        label = stringResource(R.string.server_label_allow_insecure),
+        options = allowInsecureOptions(),
         modifier = Modifier.fillMaxWidth()
     )
 }
@@ -583,7 +644,7 @@ private fun AdvancedEditor(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "vless:// URI or Xray JSON",
+                text = stringResource(R.string.server_advanced_uri_or_json),
                 style = MaterialTheme.typography.bodyMedium
             )
             IconButton(
@@ -597,7 +658,7 @@ private fun AdvancedEditor(
             ) {
                 Icon(
                     imageVector = Icons.Default.Edit,
-                    contentDescription = "Format JSON with 2-space indentation"
+                    contentDescription = stringResource(R.string.server_cd_format_json)
                 )
             }
         }
@@ -612,7 +673,7 @@ private fun AdvancedEditor(
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Advanced changes are saved exactly as typed after validation. Click the format button to beautify JSON with 2-space indentation.",
+            text = stringResource(R.string.server_hint_advanced_save),
             style = MaterialTheme.typography.bodySmall
         )
     }

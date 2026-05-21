@@ -21,7 +21,9 @@ import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
+import androidx.annotation.StringRes
 import com.justme.xtls_core_proxy.geo.GeoAssetPreparer
+import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
 import com.justme.xtls_core_proxy.killswitch.ForegroundAppMonitor
 import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
@@ -114,7 +116,7 @@ class XrayVpnService : VpnService() {
         }
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting"))
+        startForeground(NOTIFICATION_ID, buildNotification(localizedString(R.string.vpn_status_connecting)))
         LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
         LogRepository.append("Starting VPN service")
 
@@ -135,7 +137,7 @@ class XrayVpnService : VpnService() {
                 bringUpTunnel(profile)
                     .onSuccess {
                         LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
-                        updateNotification(getString(R.string.vpn_status_connected))
+                        updateNotification(localizedString(R.string.vpn_status_connected))
                         val prefs = KillSwitchRepository.load(this@XrayVpnService)
                         applyKillSwitchPreferences(prefs)
                         settingsObserverJob?.cancel()
@@ -168,7 +170,7 @@ class XrayVpnService : VpnService() {
                 }
 
             val builder = Builder()
-                .setSession(getString(R.string.app_name))
+                .setSession(localizedString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.7.0.1", 32)
                 .addAddress("fd00:1:fd00:1::1", 128)
@@ -238,7 +240,7 @@ class XrayVpnService : VpnService() {
             LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
             try {
                 tearDownTunnel()
-                updateNotification(getString(R.string.vpn_status_paused, triggerPackageLabel))
+                updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
                 LogRepository.setConnectionState(VpnConnectionState.PAUSED)
             } catch (error: Throwable) {
                 LogRepository.append("killTunnel failed: ${error.message}")
@@ -266,7 +268,7 @@ class XrayVpnService : VpnService() {
             }
             bringUpTunnel(profile)
                 .onSuccess {
-                    updateNotification(getString(R.string.vpn_status_connected))
+                    updateNotification(localizedString(R.string.vpn_status_connected))
                     LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                 }
                 .onFailure { error ->
@@ -375,23 +377,33 @@ class XrayVpnService : VpnService() {
         stopSelf()
     }
 
+    /**
+     * Resolves a string in the user's chosen app locale. We can't rely on the
+     * service's own getString because Service contexts don't pick up per-app locale
+     * changes mid-session on API <33 — wrap via SupportedLanguage.localize each call.
+     * (Notification channel name/description are still cached by the system at channel
+     * creation time; that is an Android limitation and unavoidable here.)
+     */
+    private fun localizedString(@StringRes resId: Int, vararg args: Any): String =
+        SupportedLanguage.localize(this).getString(resId, *args)
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.vpn_channel_name),
+            localizedString(R.string.vpn_channel_name),
             NotificationManager.IMPORTANCE_LOW
         )
-        channel.description = getString(R.string.vpn_channel_description)
+        channel.description = localizedString(R.string.vpn_channel_description)
         manager.createNotificationChannel(channel)
 
         val errorChannel = NotificationChannel(
             ERROR_CHANNEL_ID,
-            getString(R.string.vpn_error_channel_name),
+            localizedString(R.string.vpn_error_channel_name),
             NotificationManager.IMPORTANCE_DEFAULT
         )
-        errorChannel.description = getString(R.string.vpn_error_channel_description)
+        errorChannel.description = localizedString(R.string.vpn_error_channel_description)
         manager.createNotificationChannel(errorChannel)
     }
 
@@ -407,7 +419,7 @@ class XrayVpnService : VpnService() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(getString(R.string.vpn_notification_title))
+            .setContentTitle(localizedString(R.string.vpn_notification_title))
             .setContentText(contentText)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -430,8 +442,8 @@ class XrayVpnService : VpnService() {
         )
         val notification = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(getString(R.string.vpn_notification_title))
-            .setContentText(getString(R.string.vpn_revive_error))
+            .setContentTitle(localizedString(R.string.vpn_notification_title))
+            .setContentText(localizedString(R.string.vpn_revive_error))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

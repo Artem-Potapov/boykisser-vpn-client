@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.config
 
+// i18n: audited 2026-05-21, no user-visible strings
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI

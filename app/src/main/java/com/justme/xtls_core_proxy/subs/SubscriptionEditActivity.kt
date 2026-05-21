@@ -39,8 +39,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
@@ -144,6 +147,7 @@ private fun SubscriptionEditScreen(
     onBack: () -> Unit,
     onSave: (SubscriptionEditActivity.SaveOutput) -> Unit
 ) {
+    val context = LocalContext.current
     var name by rememberSaveable { mutableStateOf(initialName) }
     var url by rememberSaveable { mutableStateOf(initialUrl) }
     var userAgent by rememberSaveable { mutableStateOf(initialUserAgent) }
@@ -157,20 +161,20 @@ private fun SubscriptionEditScreen(
         val trimmedName = name.trim()
         val trimmedUrl = url.trim()
         if (trimmedName.isBlank()) {
-            saveError = "Name is required"
+            saveError = context.getString(R.string.subs_edit_error_name_required)
             return null
         }
         if (!trimmedUrl.matches(Regex("^https?://.+", RegexOption.IGNORE_CASE))) {
-            saveError = "URL must start with http:// or https://"
+            saveError = context.getString(R.string.subs_edit_error_url_format)
             return null
         }
         val intervalHours = intervalText.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
         if (intervalText.isNotBlank() && intervalHours == null) {
-            saveError = "Update interval must be a positive integer or blank"
+            saveError = context.getString(R.string.subs_edit_error_interval_not_integer)
             return null
         }
         if (intervalHours != null && intervalHours < 1) {
-            saveError = "Update interval must be at least 1 hour"
+            saveError = context.getString(R.string.subs_edit_error_interval_min)
             return null
         }
         return SubscriptionEditActivity.SaveOutput(
@@ -186,18 +190,24 @@ private fun SubscriptionEditScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isEdit) "Edit subscription" else "Add subscription") },
+                title = {
+                    Text(
+                        stringResource(
+                            if (isEdit) R.string.subs_edit_title_edit else R.string.subs_edit_title_add
+                        )
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.subs_cd_back)
                         )
                     }
                 },
                 actions = {
                     TextButton(onClick = { validateAndBuild(refreshNow = false)?.let(onSave) }) {
-                        Text("Save")
+                        Text(stringResource(R.string.subs_edit_button_save))
                     }
                 }
             )
@@ -211,7 +221,10 @@ private fun SubscriptionEditScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             Spacer(modifier = Modifier.height(12.dp))
-            val tabTitles = listOf("Simple", "Advanced")
+            val tabTitles = listOf(
+                stringResource(R.string.subs_edit_tab_simple),
+                stringResource(R.string.subs_edit_tab_advanced),
+            )
             TabRow(selectedTabIndex = tabIndex) {
                 tabTitles.forEachIndexed { index, title ->
                     Tab(
@@ -256,7 +269,7 @@ private fun SubscriptionEditScreen(
                 horizontalArrangement = Arrangement.End
             ) {
                 TextButton(onClick = { validateAndBuild(refreshNow = true)?.let(onSave) }) {
-                    Text("Save and refresh now")
+                    Text(stringResource(R.string.subs_edit_button_save_refresh))
                 }
             }
             Spacer(modifier = Modifier.height(20.dp))
@@ -281,22 +294,22 @@ private fun SimpleSubscriptionEditor(
         OutlinedTextField(
             value = name,
             onValueChange = onNameChange,
-            label = { Text("Subscription name") },
+            label = { Text(stringResource(R.string.subs_edit_label_name)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = url,
             onValueChange = onUrlChange,
-            label = { Text("Subscription URL") },
+            label = { Text(stringResource(R.string.subs_edit_label_url)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = intervalText,
             onValueChange = onIntervalChange,
-            label = { Text("Update interval (hours)") },
-            placeholder = { Text("Leave empty to use server-provided") },
+            label = { Text(stringResource(R.string.subs_edit_label_interval)) },
+            placeholder = { Text(stringResource(R.string.subs_edit_placeholder_interval)) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -319,16 +332,19 @@ private fun AdvancedSubscriptionEditor(
         OutlinedTextField(
             value = userAgent,
             onValueChange = onUserAgentChange,
-            label = { Text("User-Agent override") },
-            placeholder = { Text("Leave empty to use the default User-Agent") },
+            label = { Text(stringResource(R.string.subs_edit_label_user_agent)) },
+            placeholder = { Text(stringResource(R.string.subs_edit_placeholder_user_agent)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         DropdownField(
             value = if (allowInsecure) "true" else "false",
             onValueChange = { onAllowInsecureChange(it == "true") },
-            label = "Allow insecure TLS",
-            options = listOf("false" to "No", "true" to "Yes (per-connection)"),
+            label = stringResource(R.string.subs_edit_label_allow_insecure_tls),
+            options = listOf(
+                "false" to stringResource(R.string.subs_edit_option_no),
+                "true" to stringResource(R.string.subs_edit_option_yes_insecure),
+            ),
             modifier = Modifier.fillMaxWidth()
         )
     }

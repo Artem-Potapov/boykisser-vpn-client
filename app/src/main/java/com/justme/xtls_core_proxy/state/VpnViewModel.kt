@@ -114,6 +114,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         if (refreshAfterInsert) {
             SubscriptionRefreshCoordinator.refresh(
                 scope = viewModelScope,
+                context = getApplication(),
                 subId = newId,
                 activeProfileIdProvider = { _activeProfileId.value },
                 db = db,
@@ -128,6 +129,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             if (refreshAfterUpdate) {
                 SubscriptionRefreshCoordinator.refresh(
                     scope = viewModelScope,
+                    context = getApplication(),
                     subId = sub.id,
                     activeProfileIdProvider = { _activeProfileId.value },
                     db = db,
@@ -150,6 +152,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshSubscription(subId: Long): Job =
         SubscriptionRefreshCoordinator.refresh(
             scope = viewModelScope,
+            context = getApplication(),
             subId = subId,
             activeProfileIdProvider = { _activeProfileId.value },
             db = db,
@@ -167,6 +170,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         candidates.forEach { sub ->
             SubscriptionRefreshCoordinator.refresh(
                 scope = viewModelScope,
+                context = getApplication(),
                 subId = sub.id,
                 activeProfileIdProvider = { _activeProfileId.value },
                 db = db,
