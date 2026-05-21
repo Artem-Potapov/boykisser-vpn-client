@@ -95,7 +95,7 @@ adb logcat
 ```text
 <Short imperative summary>
 
-Why:
+Why (optional):
 - <reason 1>
 - <reason 2>
 ```
