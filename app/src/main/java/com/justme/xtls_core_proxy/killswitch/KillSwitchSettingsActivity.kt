@@ -134,15 +134,15 @@ private fun KillSwitchSettingsScreen() {
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "Selected apps: ${prefs.packages.size}")
+        Text(text = stringResource(R.string.kill_switch_selected_count, prefs.packages.size))
         Button(onClick = {
             val initial = prefs.packages.toTypedArray()
             val intent = Intent(context, AppPickerActivity::class.java)
-                .putExtra(AppPickerActivity.EXTRA_TITLE, "Kill-on-foreground apps")
+                .putExtra(AppPickerActivity.EXTRA_TITLE, context.getString(R.string.kill_switch_title))
                 .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
             pickerLauncher.launch(intent)
         }) {
-            Text("Choose apps →")
+            Text(stringResource(R.string.kill_switch_choose_apps))
         }
     }
 }
