@@ -31,7 +31,6 @@
     <string name="settings_split_subtitle">Выберите приложения, которые пойдут через VPN</string>
     <string name="settings_kill_title">Отключение при открытии</string>
     <string name="settings_kill_subtitle">Полностью отключать VPN, когда выбранные приложения активны</string>
-    <string name="settings_language_subtitle_auto">Авто</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>
