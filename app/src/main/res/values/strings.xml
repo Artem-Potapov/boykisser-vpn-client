@@ -14,6 +14,6 @@
     <string name="kill_switch_enabled">Enable kill-on-foreground</string>
     <string name="kill_switch_description">Fully disconnect the VPN whenever one of the selected apps is the foreground app. Reconnect automatically when it leaves the foreground.</string>
     <string name="kill_switch_permission_required">Grant Usage Access to enable this feature</string>
-    <string name="kill_switch_open_settings">Open settings</string>
+    <string name="kill_switch_open_settings">Open Usage Access settings</string>
     <string name="kill_switch_select_apps">Select apps</string>
 </resources>

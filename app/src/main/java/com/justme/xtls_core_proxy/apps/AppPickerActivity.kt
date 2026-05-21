@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,8 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -32,10 +35,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import com.justme.xtls_core_proxy.split.AppEntry
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Generic multi-select app picker. Pass an initial selection and a title via
@@ -112,7 +120,7 @@ private fun AppPickerScreen(
     }
 
     LaunchedEffect(context) {
-        appsState.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        appsState.value = withContext(Dispatchers.IO) {
             InstalledAppsLoader.loadInstalled(context)
         }
     }
@@ -137,18 +145,37 @@ private fun AppPickerScreen(
             }
             items(filteredApps, key = { it.packageName }) { app ->
                 val isSelected = app.packageName in selected
+                val iconBitmap = remember(app.packageName) {
+                    app.icon?.toBitmap()?.asImageBitmap()
+                }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = isSelected,
+                            role = Role.Checkbox,
+                            onValueChange = { checked ->
+                                selected = if (checked) selected + app.packageName
+                                           else selected - app.packageName
+                            }
+                        )
+                        .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Checkbox(
                         checked = isSelected,
-                        onCheckedChange = { checked ->
-                            selected = if (checked) selected + app.packageName
-                                       else selected - app.packageName
-                        }
+                        onCheckedChange = null
                     )
+                    if (iconBitmap != null) {
+                        Image(
+                            bitmap = iconBitmap,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.size(40.dp))
+                    }
                     Column {
                         Text(app.appName, style = MaterialTheme.typography.bodyLarge)
                         Text(app.packageName, style = MaterialTheme.typography.bodySmall)
