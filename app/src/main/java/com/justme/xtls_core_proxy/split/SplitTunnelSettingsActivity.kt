@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.apps.AppPickerActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
 class SplitTunnelSettingsActivity : ComponentActivity() {
@@ -44,7 +45,7 @@ class SplitTunnelSettingsActivity : ComponentActivity() {
         appPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
                 val newSelection = result.data
-                    ?.getStringArrayExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_RESULT_SELECTION)
+                    ?.getStringArrayExtra(AppPickerActivity.EXTRA_RESULT_SELECTION)
                     ?.toSet() ?: emptySet()
                 val currentMode = SplitTunnelRepository.load(this).mode
                 SplitTunnelRepository.save(this, currentMode, newSelection)
@@ -68,9 +69,9 @@ class SplitTunnelSettingsActivity : ComponentActivity() {
                         },
                         onChooseApps = {
                             val initial = SplitTunnelRepository.load(this).packages.toTypedArray()
-                            val intent = Intent(this, com.justme.xtls_core_proxy.apps.AppPickerActivity::class.java)
-                                .putExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_TITLE, "Split-tunneled apps")
-                                .putExtra(com.justme.xtls_core_proxy.apps.AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
+                            val intent = Intent(this, AppPickerActivity::class.java)
+                                .putExtra(AppPickerActivity.EXTRA_TITLE, "Split-tunneled apps")
+                                .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
                             appPickerLauncher.launch(intent)
                         }
                     )
