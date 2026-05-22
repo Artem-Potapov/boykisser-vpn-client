@@ -153,7 +153,6 @@
     <string name="subs_title">Подписки</string>
     <string name="subs_cd_back">Назад</string>
     <string name="subs_cd_add">Добавить подписку</string>
-    <string name="subs_empty">Подписок пока нет.\nНажмите +, чтобы добавить.</string>
     <string name="subs_delete_title">Удалить подписку?</string>
     <string name="subs_delete_message">Подписка и все её профили будут удалены. Вручную добавленные профили не затронуты.</string>
     <string name="subs_button_delete">Удалить</string>
