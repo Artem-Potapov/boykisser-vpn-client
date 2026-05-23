@@ -20,11 +20,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -49,16 +55,15 @@ class KillSwitchSettingsActivity : LocalizedComponentActivity() {
         enableEdgeToEdge()
         setContent {
             XTLS_CORE_PROXYTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    KillSwitchSettingsScreen()
-                }
+                KillSwitchSettingsScreen(onBack = { finish() })
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun KillSwitchSettingsScreen() {
+private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -90,59 +95,74 @@ private fun KillSwitchSettingsScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.kill_switch_title),
-            style = MaterialTheme.typography.headlineSmall
-        )
-        Text(text = stringResource(R.string.kill_switch_description))
-
-        if (!permissionGranted) {
-            Text(
-                text = stringResource(R.string.kill_switch_permission_required),
-                color = MaterialTheme.colorScheme.error
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.kill_switch_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.kill_switch_cd_back)
+                        )
+                    }
+                }
             )
-            Button(onClick = {
-                context.startActivity(
-                    Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }) {
-                Text(stringResource(R.string.kill_switch_open_settings))
-            }
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = stringResource(R.string.kill_switch_enabled),
-                modifier = Modifier.weight(1f)
-            )
-            Switch(
-                checked = prefs.enabled,
-                onCheckedChange = { newValue ->
-                    KillSwitchRepository.save(context, enabled = newValue, packages = prefs.packages)
-                    prefs = KillSwitchRepository.load(context)
-                },
-                enabled = permissionGranted
-            )
-        }
+            Text(text = stringResource(R.string.kill_switch_description))
 
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(text = stringResource(R.string.kill_switch_selected_count, prefs.packages.size))
-        Button(onClick = {
-            val initial = prefs.packages.toTypedArray()
-            val intent = Intent(context, AppPickerActivity::class.java)
-                .putExtra(AppPickerActivity.EXTRA_TITLE, context.getString(R.string.kill_switch_title))
-                .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
-            pickerLauncher.launch(intent)
-        }) {
-            Text(stringResource(R.string.kill_switch_choose_apps))
+            if (!permissionGranted) {
+                Text(
+                    text = stringResource(R.string.kill_switch_permission_required),
+                    color = MaterialTheme.colorScheme.error
+                )
+                Button(onClick = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }) {
+                    Text(stringResource(R.string.kill_switch_open_settings))
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.kill_switch_enabled),
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = prefs.enabled,
+                    onCheckedChange = { newValue ->
+                        KillSwitchRepository.save(context, enabled = newValue, packages = prefs.packages)
+                        prefs = KillSwitchRepository.load(context)
+                    },
+                    enabled = permissionGranted
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = stringResource(R.string.kill_switch_selected_count, prefs.packages.size))
+            Button(onClick = {
+                val initial = prefs.packages.toTypedArray()
+                val intent = Intent(context, AppPickerActivity::class.java)
+                    .putExtra(AppPickerActivity.EXTRA_TITLE, context.getString(R.string.kill_switch_title))
+                    .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
+                pickerLauncher.launch(intent)
+            }) {
+                Text(stringResource(R.string.kill_switch_choose_apps))
+            }
         }
     }
 }
