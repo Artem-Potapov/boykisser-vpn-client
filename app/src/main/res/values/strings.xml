@@ -12,6 +12,7 @@
     <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_connecting">Connecting</string>
     <string name="kill_switch_title">Kill-on-foreground apps</string>
+    <string name="kill_switch_cd_back">Back</string>
     <string name="kill_switch_enabled">Enable kill-on-foreground</string>
     <string name="kill_switch_description">Fully disconnect the VPN whenever one of the selected apps is the foreground app. Reconnect automatically when it leaves the foreground.</string>
     <string name="kill_switch_permission_required">Grant Usage Access to enable this feature</string>
@@ -22,12 +23,14 @@
 
     <!-- Language picker -->
     <string name="settings_language_title">Language</string>
+    <string name="language_cd_back">Back</string>
     <string name="lang_auto">Auto</string>
     <string name="lang_english">English</string>
     <string name="lang_russian">Русский</string>
 
     <!-- Settings hub -->
     <string name="settings_title">Settings</string>
+    <string name="settings_hub_cd_back">Back</string>
     <string name="settings_split_title">Split tunneling</string>
     <string name="settings_split_subtitle">Choose which apps go through the VPN</string>
     <string name="settings_kill_title">Kill on foreground</string>
@@ -59,6 +62,7 @@
 
     <!-- App picker -->
     <string name="apps_title_default">Select apps</string>
+    <string name="apps_cd_back">Back</string>
     <string name="apps_search_label">Search apps</string>
     <string name="apps_loading">Apps are loading…</string>
     <string name="apps_no_matches">No apps match your search.</string>
@@ -67,6 +71,7 @@
 
     <!-- Split tunneling -->
     <string name="split_title">Split tunneling</string>
+    <string name="split_cd_back">Back</string>
     <string name="split_mode_label">Mode</string>
     <string name="split_mode_allow_only">Proxy selected apps only</string>
     <string name="split_mode_block_except">Proxy all except selected</string>
