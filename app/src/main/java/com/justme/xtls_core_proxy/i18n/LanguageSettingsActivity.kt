@@ -7,16 +7,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,60 +40,75 @@ class LanguageSettingsActivity : LocalizedComponentActivity() {
         enableEdgeToEdge()
         setContent {
             XTLS_CORE_PROXYTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    LanguageSettingsScreen(
-                        onLanguageSelected = { language ->
-                            SupportedLanguage.apply(this@LanguageSettingsActivity, language)
-                            finish()
-                        },
-                    )
-                }
+                LanguageSettingsScreen(
+                    onBack = { finish() },
+                    onLanguageSelected = { language ->
+                        SupportedLanguage.apply(this@LanguageSettingsActivity, language)
+                        finish()
+                    },
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LanguageSettingsScreen(
+    onBack: () -> Unit,
     onLanguageSelected: (SupportedLanguage) -> Unit,
 ) {
     val context = LocalContext.current
     var selected by remember { mutableStateOf(SupportedLanguage.current(context)) }
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.settings_language_title),
-            style = MaterialTheme.typography.headlineSmall,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        LanguageRow(
-            label = stringResource(R.string.lang_auto),
-            selected = selected == SupportedLanguage.AUTO,
-            onClick = {
-                selected = SupportedLanguage.AUTO
-                onLanguageSelected(SupportedLanguage.AUTO)
-            },
-        )
-        HorizontalDivider()
-        LanguageRow(
-            label = stringResource(R.string.lang_english),
-            selected = selected == SupportedLanguage.ENGLISH,
-            onClick = {
-                selected = SupportedLanguage.ENGLISH
-                onLanguageSelected(SupportedLanguage.ENGLISH)
-            },
-        )
-        HorizontalDivider()
-        LanguageRow(
-            label = stringResource(R.string.lang_russian),
-            selected = selected == SupportedLanguage.RUSSIAN,
-            onClick = {
-                selected = SupportedLanguage.RUSSIAN
-                onLanguageSelected(SupportedLanguage.RUSSIAN)
-            },
-        )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.settings_language_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.language_cd_back)
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LanguageRow(
+                label = stringResource(R.string.lang_auto),
+                selected = selected == SupportedLanguage.AUTO,
+                onClick = {
+                    selected = SupportedLanguage.AUTO
+                    onLanguageSelected(SupportedLanguage.AUTO)
+                },
+            )
+            HorizontalDivider()
+            LanguageRow(
+                label = stringResource(R.string.lang_english),
+                selected = selected == SupportedLanguage.ENGLISH,
+                onClick = {
+                    selected = SupportedLanguage.ENGLISH
+                    onLanguageSelected(SupportedLanguage.ENGLISH)
+                },
+            )
+            HorizontalDivider()
+            LanguageRow(
+                label = stringResource(R.string.lang_russian),
+                selected = selected == SupportedLanguage.RUSSIAN,
+                onClick = {
+                    selected = SupportedLanguage.RUSSIAN
+                    onLanguageSelected(SupportedLanguage.RUSSIAN)
+                },
+            )
+        }
     }
 }
 

@@ -14,18 +14,26 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -71,29 +79,28 @@ class AppPickerActivity : LocalizedComponentActivity() {
 
         setContent {
             XTLS_CORE_PROXYTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    AppPickerScreen(
-                        title = title,
-                        initialSelection = initialSelection,
-                        onCancel = {
-                            setResult(Activity.RESULT_CANCELED)
-                            finish()
-                        },
-                        onSave = { selection ->
-                            val data = Intent().putExtra(
-                                EXTRA_RESULT_SELECTION,
-                                selection.toTypedArray()
-                            )
-                            setResult(Activity.RESULT_OK, data)
-                            finish()
-                        }
-                    )
-                }
+                AppPickerScreen(
+                    title = title,
+                    initialSelection = initialSelection,
+                    onCancel = {
+                        setResult(Activity.RESULT_CANCELED)
+                        finish()
+                    },
+                    onSave = { selection ->
+                        val data = Intent().putExtra(
+                            EXTRA_RESULT_SELECTION,
+                            selection.toTypedArray()
+                        )
+                        setResult(Activity.RESULT_OK, data)
+                        finish()
+                    }
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppPickerScreen(
     title: String,
@@ -127,79 +134,106 @@ private fun AppPickerScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.apps_search_label)) },
-            maxLines = 1
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            if (filteredApps.isEmpty()) {
-                val stillLoading = appsState.value.isEmpty()
-                item {
-                    Text(
-                        stringResource(
-                            if (stillLoading) R.string.apps_loading else R.string.apps_no_matches
-                        ),
-                        modifier = Modifier.padding(vertical = 16.dp)
-                    )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    IconButton(onClick = onCancel) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.apps_cd_back)
+                        )
+                    }
                 }
-            }
-            items(filteredApps, key = { it.packageName }) { app ->
-                val isSelected = app.packageName in selected
-                val iconBitmap = remember(app.packageName) {
-                    app.icon?.toBitmap()?.asImageBitmap()
-                }
+            )
+        },
+        bottomBar = {
+            Surface(tonalElevation = 3.dp) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .toggleable(
-                            value = isSelected,
-                            role = Role.Checkbox,
-                            onValueChange = { checked ->
-                                selected = if (checked) selected + app.packageName
-                                           else selected - app.packageName
-                            }
-                        )
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = null
-                    )
-                    if (iconBitmap != null) {
-                        Image(
-                            bitmap = iconBitmap,
-                            contentDescription = null,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    } else {
-                        Spacer(modifier = Modifier.size(40.dp))
+                    TextButton(onClick = onCancel) {
+                        Text(stringResource(R.string.apps_cancel))
                     }
-                    Column {
-                        Text(app.appName, style = MaterialTheme.typography.bodyLarge)
-                        Text(app.packageName, style = MaterialTheme.typography.bodySmall)
+                    Button(modifier = Modifier.weight(1f), onClick = { onSave(selected) }) {
+                        Text(stringResource(R.string.apps_save))
                     }
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp)
+                .imePadding()
         ) {
-            TextButton(onClick = onCancel) { Text(stringResource(R.string.apps_cancel)) }
-            Button(modifier = Modifier.weight(1f), onClick = { onSave(selected) }) {
-                Text(stringResource(R.string.apps_save))
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.apps_search_label)) },
+                maxLines = 1
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                if (filteredApps.isEmpty()) {
+                    val stillLoading = appsState.value.isEmpty()
+                    item {
+                        Text(
+                            stringResource(
+                                if (stillLoading) R.string.apps_loading else R.string.apps_no_matches
+                            ),
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    }
+                }
+                items(filteredApps, key = { it.packageName }) { app ->
+                    val isSelected = app.packageName in selected
+                    val iconBitmap = remember(app.packageName) {
+                        app.icon?.toBitmap()?.asImageBitmap()
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = isSelected,
+                                role = Role.Checkbox,
+                                onValueChange = { checked ->
+                                    selected = if (checked) selected + app.packageName
+                                               else selected - app.packageName
+                                }
+                            )
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Checkbox(
+                            checked = isSelected,
+                            onCheckedChange = null
+                        )
+                        if (iconBitmap != null) {
+                            Image(
+                                bitmap = iconBitmap,
+                                contentDescription = null,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.size(40.dp))
+                        }
+                        Column {
+                            Text(app.appName, style = MaterialTheme.typography.bodyLarge)
+                            Text(app.packageName, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         }
     }

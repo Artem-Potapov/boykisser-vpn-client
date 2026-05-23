@@ -18,11 +18,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,27 +67,26 @@ class SplitTunnelSettingsActivity : LocalizedComponentActivity() {
 
         setContent {
             XTLS_CORE_PROXYTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    SplitTunnelSettingsScreen(
-                        selectedMode = mode,
-                        selectedPackageCount = selectedPackageCount,
-                        onModeChange = { newMode ->
-                            val currentPackages = SplitTunnelRepository.load(this).packages
-                            SplitTunnelRepository.save(this, newMode, currentPackages)
-                            mode = newMode
-                        },
-                        onChooseApps = {
-                            val initial = SplitTunnelRepository.load(this).packages.toTypedArray()
-                            val intent = Intent(this, AppPickerActivity::class.java)
-                                .putExtra(
-                                    AppPickerActivity.EXTRA_TITLE,
-                                    getString(R.string.split_picker_title)
-                                )
-                                .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
-                            appPickerLauncher.launch(intent)
-                        }
-                    )
-                }
+                SplitTunnelSettingsScreen(
+                    onBack = { finish() },
+                    selectedMode = mode,
+                    selectedPackageCount = selectedPackageCount,
+                    onModeChange = { newMode ->
+                        val currentPackages = SplitTunnelRepository.load(this).packages
+                        SplitTunnelRepository.save(this, newMode, currentPackages)
+                        mode = newMode
+                    },
+                    onChooseApps = {
+                        val initial = SplitTunnelRepository.load(this).packages.toTypedArray()
+                        val intent = Intent(this, AppPickerActivity::class.java)
+                            .putExtra(
+                                AppPickerActivity.EXTRA_TITLE,
+                                getString(R.string.split_picker_title)
+                            )
+                            .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
+                        appPickerLauncher.launch(intent)
+                    }
+                )
             }
         }
     }
@@ -93,8 +98,10 @@ class SplitTunnelSettingsActivity : LocalizedComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SplitTunnelSettingsScreen(
+    onBack: () -> Unit,
     selectedMode: SplitTunnelMode,
     selectedPackageCount: Int,
     onModeChange: (SplitTunnelMode) -> Unit,
@@ -105,51 +112,63 @@ private fun SplitTunnelSettingsScreen(
         SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED to stringResource(R.string.split_mode_block_except)
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.split_title),
-            style = MaterialTheme.typography.headlineSmall
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = stringResource(R.string.split_mode_label),
-            style = MaterialTheme.typography.titleMedium
-        )
-        Spacer(modifier = Modifier.height(8.dp))
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.split_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.split_cd_back)
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.split_mode_label),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
 
-        modeValues.forEach { (value, label) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectable(
+            modeValues.forEach { (value, label) ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = selectedMode == value,
+                            onClick = { onModeChange(value) }
+                        )
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.Start,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
                         selected = selectedMode == value,
                         onClick = { onModeChange(value) }
                     )
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = selectedMode == value,
-                    onClick = { onModeChange(value) }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = label)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = label)
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = stringResource(R.string.split_selected_count, selectedPackageCount),
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = onChooseApps) {
-            Text(stringResource(R.string.split_choose_apps))
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = stringResource(R.string.split_selected_count, selectedPackageCount),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onChooseApps) {
+                Text(stringResource(R.string.split_choose_apps))
+            }
         }
     }
 }
