@@ -19,6 +19,9 @@ interface ProfileDao {
     @Query("SELECT * FROM profiles WHERE id = :id")
     suspend fun getById(id: Long): Profile?
 
+    @Query("SELECT * FROM profiles ORDER BY id ASC LIMIT 1")
+    suspend fun getFirst(): Profile?
+
     @Insert
     suspend fun insert(profile: Profile): Long
 
