@@ -13,7 +13,7 @@
     <string name="vpn_status_paused">Приостановлено: открыто приложение %1$s</string>
     <string name="vpn_status_connected">Подключено</string>
     <string name="vpn_status_connecting">Подключение</string>
-    <string name="kill_switch_title">Приложения при открытии которых туннель выключается</string>
+    <string name="kill_switch_title">Kill-switch для приложений</string>
     <string name="kill_switch_enabled">Включить отключение при открытии</string>
     <string name="kill_switch_description">Полностью отключает VPN, когда одно из выбранных приложений становится активным. Автоматически переподключаться, когда оно уходит из активного состояния.</string>
     <string name="kill_switch_permission_required">Для работы функции нужен доступ к статистике использования</string>
@@ -34,7 +34,7 @@
     <string name="settings_title">Настройки</string>
     <string name="settings_split_title">Раздельное туннелирование</string>
     <string name="settings_split_subtitle">Выберите приложения, которые пойдут через VPN</string>
-    <string name="settings_kill_title">Отключение при открытии</string>
+    <string name="settings_kill_title">Kill-switch при открытии</string>
     <string name="settings_kill_subtitle">Полностью отключать VPN, когда выбранные приложения активны</string>
 
     <!-- MainActivity -->
@@ -74,8 +74,8 @@
     <string name="split_cd_back">Назад</string>
     <string name="split_title">Раздельное туннелирование</string>
     <string name="split_mode_label">Режим</string>
-    <string name="split_mode_allow_only">Туннель будет проксировать только выбранные приложения</string>
-    <string name="split_mode_block_except">Туннель будет проксировать все приложения, кроме выбранных</string>
+    <string name="split_mode_allow_only">Проксировать только выбранные</string>
+    <string name="split_mode_block_except">Проксировать все кроме выбранных</string>
     <string name="split_selected_count">Выбрано приложений: %1$d</string>
     <string name="split_choose_apps">Выбрать приложения →</string>
     <string name="split_picker_title">Раздельное туннелирование для приложений</string>
