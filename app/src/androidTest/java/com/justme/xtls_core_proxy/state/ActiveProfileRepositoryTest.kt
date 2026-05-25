@@ -84,7 +84,11 @@ class ActiveProfileRepositoryTest {
     }
 
     @Test
-    fun pickOrPersistActive_noStoredPicksFirstByIdAsc() = runBlocking {
+    fun pickOrPersistActive_noStoredReturnsDaoGetFirst() = runBlocking {
+        // Contract: when no profile id is stored, the repository delegates to
+        // ProfileDao.getFirst() (SELECT * FROM profiles ORDER BY id ASC LIMIT 1)
+        // and persists that id. We assert against the lowest inserted id, which
+        // also happens to be the autogen primary key of the first insertion.
         val dao = AppDatabase.get(context).profileDao()
         val firstId = dao.insert(Profile(name = "alpha", config = "x"))
         dao.insert(Profile(name = "beta", config = "y"))
@@ -95,7 +99,9 @@ class ActiveProfileRepositoryTest {
     }
 
     @Test
-    fun pickOrPersistActive_staleStoredFallsBackToFirstAndPersists() = runBlocking {
+    fun pickOrPersistActive_staleStoredFallsBackToDaoGetFirst() = runBlocking {
+        // Contract: when the stored id is missing from the DB, the repository
+        // falls back to ProfileDao.getFirst() and persists the new id.
         val dao = AppDatabase.get(context).profileDao()
         val firstId = dao.insert(Profile(name = "alpha", config = "x"))
         dao.insert(Profile(name = "beta", config = "y"))

@@ -3,7 +3,6 @@ package com.justme.xtls_core_proxy.state
 import android.content.Context
 import androidx.core.content.edit
 import com.justme.xtls_core_proxy.db.AppDatabase
-import kotlinx.coroutines.flow.first
 
 object ActiveProfileRepository {
     private const val PREFS_NAME = "vpn_prefs"
@@ -32,7 +31,7 @@ object ActiveProfileRepository {
         val stored = getActiveProfileId(appCtx)
         if (stored != null && dao.getById(stored) != null) return stored
 
-        val first = dao.getAll().first().firstOrNull()
+        val first = dao.getFirst()
         if (first == null) {
             if (stored != null) setActiveProfileId(appCtx, null)
             return null
