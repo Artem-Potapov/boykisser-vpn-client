@@ -234,4 +234,8 @@
     <string name="add_toast_subscription_added">Подписка добавлена, загрузка…</string>
     <string name="add_toast_unsupported_scheme">Неподдерживаемый формат VPN-ссылки: %1$s://</string>
     <string name="add_toast_invalid_format">Неверный формат</string>
+
+    <!-- Quick Settings tile -->
+    <string name="tile_label">VPN</string>
+    <string name="tile_toast_no_profiles">Сначала добавьте конфигурацию в приложении</string>
 </resources>
