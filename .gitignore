@@ -16,6 +16,7 @@ local.properties
 app/libs/*.aar
 app/libs/*.jar
 xray-go/go.sum
+xray-go/go.mod
 /app/src/main/assets/geoip.dat
 /app/src/main/assets/geoip_IR.dat
 /app/src/main/assets/geoip_RU.dat
