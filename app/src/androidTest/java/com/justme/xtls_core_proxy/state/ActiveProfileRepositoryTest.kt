@@ -7,10 +7,12 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -36,10 +38,12 @@ class ActiveProfileRepositoryTest {
         testDb = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
         AppDatabase.setInstanceForTests(testDb)
         clearPrefs()
+        ActiveProfileRepository.resetForTests()
     }
 
     @After
     fun tearDown() {
+        ActiveProfileRepository.resetForTests()
         clearPrefs()
         testDb.close()
         AppDatabase.setInstanceForTests(null)
@@ -122,5 +126,42 @@ class ActiveProfileRepositoryTest {
         val picked = ActiveProfileRepository.pickOrPersistActive(context)
         assertEquals(firstId, picked)
         assertEquals(firstId, ActiveProfileRepository.getActiveProfileId(context))
+    }
+
+    @Test
+    fun activeProfileIdFlow_initialValueReflectsPrefsAfterFirstRead() = runBlocking {
+        // Pre-seed prefs directly, then trigger lazy initialization via
+        // getActiveProfileId. The flow must reflect the persisted value.
+        context.getSharedPreferences("vpn_prefs", Context.MODE_PRIVATE)
+            .edit { putLong("active_profile_id", 17L) }
+        ActiveProfileRepository.resetForTests()  // force re-read on next access
+        val read = ActiveProfileRepository.getActiveProfileId(context)
+        assertEquals(17L, read)
+        assertEquals(17L, ActiveProfileRepository.activeProfileIdFlow.first())
+    }
+
+    @Test
+    fun activeProfileIdFlow_emitsOnSetActiveProfileId() = runBlocking {
+        // Force lazy initialization so the null assertion reflects the
+        // persisted (empty) prefs state, not the uninitialized default.
+        ActiveProfileRepository.getActiveProfileId(context)
+        assertNull(ActiveProfileRepository.activeProfileIdFlow.first())
+
+        ActiveProfileRepository.setActiveProfileId(context, 42L)
+        assertEquals(42L, ActiveProfileRepository.activeProfileIdFlow.first())
+
+        ActiveProfileRepository.setActiveProfileId(context, null)
+        assertNull(ActiveProfileRepository.activeProfileIdFlow.first())
+    }
+
+    @Test
+    fun activeProfileIdFlow_emitsOnPickOrPersistActive() = runBlocking {
+        val dao = AppDatabase.get(context).profileDao()
+        val firstId = dao.insert(Profile(name = "alpha", config = "x"))
+        dao.insert(Profile(name = "beta", config = "y"))
+
+        val picked = ActiveProfileRepository.pickOrPersistActive(context)
+        assertNotNull(picked)
+        assertEquals(firstId, ActiveProfileRepository.activeProfileIdFlow.first())
     }
 }
