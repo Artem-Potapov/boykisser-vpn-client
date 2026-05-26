@@ -33,8 +33,8 @@ class ActiveProfileRepositoryTest {
     @After
     fun tearDown() {
         clearPrefs()
-        AppDatabase.setInstanceForTests(null)
         testDb.close()
+        AppDatabase.setInstanceForTests(null)
     }
 
     private fun clearPrefs() {
