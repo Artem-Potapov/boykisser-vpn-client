@@ -17,23 +17,23 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
 import com.justme.xtls_core_proxy.vpn.XrayVpnService
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class XrayVpnTileService : TileService() {
 
+    private val serviceScope = MainScope()
     private var listenJob: Job? = null
-    private var clickScope: CoroutineScope? = null
+    private var clickJob: Job? = null
 
     override fun onStartListening() {
         super.onStartListening()
         listenJob?.cancel()
-        listenJob = CoroutineScope(Dispatchers.Main + SupervisorJob()).launch {
+        listenJob = serviceScope.launch {
             LogRepository.connectionState.collect { state -> updateTile(state) }
         }
     }
@@ -41,17 +41,18 @@ class XrayVpnTileService : TileService() {
     override fun onStopListening() {
         listenJob?.cancel()
         listenJob = null
-        clickScope?.cancel()
-        clickScope = null
+        clickJob?.cancel()
+        clickJob = null
         super.onStopListening()
     }
 
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
     override fun onClick() {
-        if (isLocked) {
-            unlockAndRun { handleClick() }
-        } else {
-            handleClick()
-        }
+        handleClick()
     }
 
     private fun handleClick() {
@@ -60,25 +61,31 @@ class XrayVpnTileService : TileService() {
             state == VpnConnectionState.CONNECTED ||
             state == VpnConnectionState.PAUSED
         ) {
-            sendStopIntent()
+            // Stop path needs no IO; only the dispatch waits for unlock.
+            runOrDeferUnlock { sendStopIntent() }
             return
         }
 
-        clickScope?.cancel()
-        clickScope = CoroutineScope(Dispatchers.IO + SupervisorJob()).also { scope ->
-            scope.launch {
-                val appCtx = applicationContext
-                val profileId = ActiveProfileRepository.pickOrPersistActive(appCtx)
-                if (profileId == null) {
-                    withContext(Dispatchers.Main) {
-                        val toastText = SupportedLanguage.localize(appCtx)
-                            .getString(R.string.tile_toast_no_profiles)
-                        Toast.makeText(appCtx, toastText, Toast.LENGTH_LONG).show()
-                    }
-                    return@launch
-                }
-
+        // Start path: do the DB lookup on IO immediately (it does not require
+        // an unlocked device), then wrap only the Main-thread permission
+        // decision + dispatch in unlockAndRun. This shrinks the time spent
+        // inside the unlock callback to the minimum and avoids the case where
+        // the device re-locks while we are still resolving the active profile.
+        clickJob?.cancel()
+        clickJob = serviceScope.launch(Dispatchers.IO) {
+            val appCtx = applicationContext
+            val profileId = ActiveProfileRepository.pickOrPersistActive(appCtx)
+            if (profileId == null) {
                 withContext(Dispatchers.Main) {
+                    val toastText = SupportedLanguage.localize(appCtx)
+                        .getString(R.string.tile_toast_no_profiles)
+                    Toast.makeText(appCtx, toastText, Toast.LENGTH_LONG).show()
+                }
+                return@launch
+            }
+
+            withContext(Dispatchers.Main) {
+                runOrDeferUnlock {
                     val needsVpn = VpnService.prepare(this@XrayVpnTileService) != null
                     val needsNotif = needsNotificationPermission()
                     if (needsVpn || needsNotif) {
@@ -89,6 +96,10 @@ class XrayVpnTileService : TileService() {
                 }
             }
         }
+    }
+
+    private fun runOrDeferUnlock(block: () -> Unit) {
+        if (isLocked) unlockAndRun { block() } else block()
     }
 
     private fun needsNotificationPermission(): Boolean {
@@ -103,18 +114,20 @@ class XrayVpnTileService : TileService() {
             action = XrayVpnService.ACTION_START
             putExtra(XrayVpnService.EXTRA_PROFILE_ID, profileId)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        startForegroundService(intent)
     }
 
     private fun sendStopIntent() {
+        // XrayVpnService is a foreground service, and onClick() only reaches
+        // this method when the tile observed an active state (CONNECTING /
+        // CONNECTED / PAUSED) — so the service is running. Using
+        // startForegroundService avoids the API 31+ background-start
+        // restriction that can deny plain startService() if the tile's
+        // foreground grant has already elapsed by the time we dispatch.
         val intent = Intent(this, XrayVpnService::class.java).apply {
             action = XrayVpnService.ACTION_STOP
         }
-        startService(intent)
+        startForegroundService(intent)
     }
 
     private fun launchActivityForAutoConnect(profileId: Long) {
