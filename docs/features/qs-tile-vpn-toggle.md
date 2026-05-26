@@ -119,6 +119,12 @@ When `VpnService.prepare(ctx)` returns non-null (consent never granted, or revok
 
 `maybeAutoConnectFromTile` does both: takes a non-nullable `Intent`, reads the extras, **removes them with `removeExtra` so the next rotation / `onResume` doesn't re-trigger**, then runs the same `notificationPermissionLauncher` / `requestVpnPermissionAndConnect()` flow as the in-app Connect button. The `onCreate` call site is gated by `savedInstanceState == null` so the autoconnect only fires on a fresh launch, not on configuration-change recreate.
 
+## Long-press handoff to MainActivity
+
+Android's default long-press behavior for any QS tile is to open the system Settings app on the per-app details page — useless for a VPN tile, where the user almost certainly wants the app itself. `MainActivity` declares a second `<intent-filter>` for `android.service.quicksettings.action.QS_TILE_PREFERENCES` (with `android.intent.category.DEFAULT`) so the OS dispatches the long-press to MainActivity instead.
+
+The OS sends an implicit `Intent(ACTION_QS_TILE_PREFERENCES).setPackage(packageName)` with no extras. `maybeAutoConnectFromTile` is gated on `EXTRA_TILE_AUTOCONNECT`, so the long-press path naturally does not trigger an autoconnect — MainActivity simply opens to whatever the user last saw (or fresh main screen). `singleTop` ensures a long-press while MainActivity is already foreground fires `onNewIntent`, not a recreate.
+
 ## Active-profile resolution
 
 `pickOrPersistActive` is the only DB-touching code path on the tile click. Behavior:
