@@ -35,6 +35,17 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+                Override the default QS tile long-press behavior (which opens
+                the system Settings app-details page) so long-pressing the
+                VPN tile opens MainActivity instead. The OS dispatches an
+                implicit Intent(ACTION_QS_TILE_PREFERENCES).setPackage(...)
+                — DEFAULT category is required for implicit resolution.
+            -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <activity
