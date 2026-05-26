@@ -117,6 +117,22 @@ class XrayVpnService : VpnService() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(localizedString(R.string.vpn_status_connecting)))
+
+        // Defensive re-check: a caller (e.g. the QS tile) may have pre-flighted
+        // VpnService.prepare() before dispatching ACTION_START, and the user
+        // could have revoked permission in the gap before we got here. Without
+        // this guard, establish() would later fail with a silent
+        // SecurityException and the user would only see ERROR state with no
+        // explanation. startForeground above satisfies the FGS contract before
+        // we stop ourselves.
+        if (VpnService.prepare(this) != null) {
+            LogRepository.setConnectionState(VpnConnectionState.ERROR)
+            LogRepository.append("Refused to start: VPN permission not granted")
+            postPermissionRevokedNotification()
+            stopVpn()
+            return
+        }
+
         LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
         LogRepository.append("Starting VPN service")
 
@@ -432,6 +448,14 @@ class XrayVpnService : VpnService() {
     }
 
     private fun postReviveErrorNotification() {
+        postErrorNotification(R.string.vpn_revive_error)
+    }
+
+    private fun postPermissionRevokedNotification() {
+        postErrorNotification(R.string.vpn_permission_revoked_error)
+    }
+
+    private fun postErrorNotification(@StringRes messageRes: Int) {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -443,7 +467,7 @@ class XrayVpnService : VpnService() {
         val notification = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(localizedString(R.string.vpn_notification_title))
-            .setContentText(localizedString(R.string.vpn_revive_error))
+            .setContentText(localizedString(messageRes))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
