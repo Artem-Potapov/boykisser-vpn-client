@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
+import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
@@ -158,7 +159,7 @@ class XrayVpnTileService : TileService() {
         }
     }
 
-    private fun updateTile(state: VpnConnectionState) {
+    private suspend fun updateTile(state: VpnConnectionState) {
         val tile = qsTile ?: return
         val ctx = SupportedLanguage.localize(applicationContext)
         when (state) {
@@ -172,7 +173,7 @@ class XrayVpnTileService : TileService() {
             }
             VpnConnectionState.CONNECTED -> {
                 tile.state = Tile.STATE_ACTIVE
-                tile.label = ctx.getString(R.string.main_state_connected)
+                tile.label = resolveConnectedLabel(ctx)
             }
             VpnConnectionState.PAUSED -> {
                 tile.state = Tile.STATE_ACTIVE
@@ -189,5 +190,24 @@ class XrayVpnTileService : TileService() {
         // label.
         tile.subtitle = null
         tile.updateTile()
+    }
+
+    /**
+     * When connected, render the active profile's name as the tile label
+     * instead of the literal "Connected" string — gives the user immediate
+     * confirmation of *which* profile is active. Falls back to the generic
+     * `main_state_connected` string if the active profile id is missing or
+     * the row has been deleted (race: profile deleted while connected) or
+     * its name is blank.
+     */
+    private suspend fun resolveConnectedLabel(localized: android.content.Context): String {
+        val appCtx = applicationContext
+        val profileId = ActiveProfileRepository.getActiveProfileId(appCtx)
+            ?: return localized.getString(R.string.main_state_connected)
+        val name = withContext(Dispatchers.IO) {
+            AppDatabase.get(appCtx).profileDao().getById(profileId)?.name
+        }
+        return name?.takeIf { it.isNotBlank() }
+            ?: localized.getString(R.string.main_state_connected)
     }
 }
