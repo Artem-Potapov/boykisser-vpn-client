@@ -31,7 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
 
         @VisibleForTesting
-        fun setInstanceForTests(db: AppDatabase?) {
+        internal fun setInstanceForTests(db: AppDatabase?) {
             synchronized(this) {
                 INSTANCE = db
             }
