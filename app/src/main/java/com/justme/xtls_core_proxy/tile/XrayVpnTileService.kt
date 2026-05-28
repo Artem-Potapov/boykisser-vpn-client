@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.tile
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -155,6 +156,7 @@ class XrayVpnTileService : TileService() {
             startActivityAndCollapse(pi)
         } else {
             @Suppress("DEPRECATION")
+            @SuppressLint("StartActivityAndCollapseDeprecated")
             startActivityAndCollapse(intent)
         }
     }

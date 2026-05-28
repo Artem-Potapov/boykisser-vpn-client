@@ -54,7 +54,7 @@ Service-side wiring lives in [`vpn/XrayVpnService.kt`](../../app/src/main/java/c
 
 | Permission | Why | How granted |
 |---|---|---|
-| `PACKAGE_USAGE_STATS` | Query `UsageStatsManager` for foreground events. | Special access — user toggles in *Settings → Apps → Special access → Usage access*. App opens the system page via `Settings.ACTION_USAGE_ACCESS_SETTINGS`. Gated by `AppOpsManager.unsafeCheckOpNoThrow(OPSTR_GET_USAGE_STATS, ...)`. |
+| `PACKAGE_USAGE_STATS` | Query `UsageStatsManager` for foreground events. | Special access — user toggles in *Settings → Apps → Special access → Usage access*. App opens the system page via `Settings.ACTION_USAGE_ACCESS_SETTINGS`. Gated by `AppOpsManager.checkOpNoThrow(OPSTR_GET_USAGE_STATS, ...)`. |
 | `QUERY_ALL_PACKAGES` | Enumerate installed apps for the picker. | Normal install-time permission. Shared with split-tunnel. |
 
 The master toggle stays disabled (greyed) until Usage Access is granted; the banner explains why and provides a button labelled "Open Usage Access settings" that goes straight to the system page.

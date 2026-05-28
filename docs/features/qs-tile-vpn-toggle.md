@@ -115,7 +115,7 @@ When `VpnService.prepare(ctx)` returns non-null (consent never granted, or revok
 …and dispatches via `startActivityAndCollapse`. The API split:
 
 - **API 34+ (`UPSIDE_DOWN_CAKE`)** — uses the `PendingIntent` overload, which is the modern non-deprecated path.
-- **API 30–33** — uses the deprecated `Intent` overload with an explicit `@Suppress("DEPRECATION")`. `minSdk = 30`, so the floor is fixed; both overloads must be supported for the lifetime of those API levels.
+- **API 30–33** — uses the deprecated `Intent` overload. Two annotations are required because they suppress different things: `@Suppress("DEPRECATION")` silences the Kotlin compiler's deprecation warning on the call, and `@SuppressLint("StartActivityAndCollapseDeprecated")` silences the Android lint check (which fires as an *error*, not a warning, since newer lint baselines). `minSdk = 30`, so the floor is fixed; both overloads must be supported for the lifetime of those API levels.
 
 `MainActivity` is `android:launchMode="singleTop"`, so:
 
