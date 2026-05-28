@@ -12,7 +12,6 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -114,7 +113,7 @@ class UsageStatsForegroundAppMonitor(
 
     private suspend fun runPollLoop() {
         var firstTick = true
-        while (coroutineContext.isActive) {
+        while (currentCoroutineContext().isActive) {
             if (!firstTick) {
                 delay(pollIntervalMs)
             }

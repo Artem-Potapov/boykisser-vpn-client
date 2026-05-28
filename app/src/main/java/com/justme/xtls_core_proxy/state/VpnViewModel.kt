@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.justme.xtls_core_proxy.BuildConfig
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
@@ -202,7 +203,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun connect(context: Context, profileId: Long): Boolean {
+    fun connect(context: Context, profileId: Long) {
         ActiveProfileRepository.setActiveProfileId(context, profileId)
 
         val appContext = context.applicationContext
@@ -211,8 +212,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(XrayVpnService.EXTRA_PROFILE_ID, profileId)
         }
 
-        appContext.startForegroundService(startIntent)
-        return true
+        // startForegroundService can throw (e.g. ForegroundServiceStartNotAllowedException if the
+        // app has lost foreground state by dispatch time). Surface failures through the same
+        // LogRepository error channel the UI/tile already render rather than crashing the caller.
+        try {
+            appContext.startForegroundService(startIntent)
+        } catch (e: Exception) {
+            LogRepository.emitError(R.string.vpn_start_failed_error)
+            LogRepository.append("connect() failed to start service: ${e.message}")
+        }
     }
 
     fun disconnect(context: Context) {

