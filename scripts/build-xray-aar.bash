@@ -6,6 +6,10 @@
 #   ./scripts/build-xray-aar.bash "app/libs/xray.aar" 26
 #   OUTPUT=dist/xray.aar ANDROID_API=26 ./scripts/build-xray-aar.bash
 #
+NO_ARMV7="${NO_ARMV7:-false}"
+NO_X86="${NO_X86:-false}"
+NO_AMD64="${NO_AMD64:-false}"
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +22,22 @@ if [[ $# -ge 1 ]]; then OUTPUT_REL="$1"; fi
 if [[ $# -ge 2 ]]; then ANDROID_API="$2"; fi
 if [[ $# -ge 3 ]]; then XRAY_CORE_REF="$3"; fi
 
+show_help() {
+    echo "This is a script to generate the XRAY AAR file via gomobile."
+    echo ""
+    echo "Positional arguments:"
+    echo "  1. Output directory (can be set with OUTPUT=)"
+    echo "     Default location: {WORKSPACE_DIR}/app/libs/xray.aar"
+    echo "  2. Android API (can be set with ANDROID_API=)"
+    echo "     Android API to use for the build. Default: 26"
+    echo "  3. XRAY Core reference version (can be set with XRAY_CORE_REF=)"
+    echo "     Tells go which version of Xray-Core to pull."
+    echo ""
+    echo "Flags:"
+    echo "  --no-armv7  Disables building for 32-bit arm-eabi-v7 (older phones)"
+    echo "  --no-x86    Disables building for 32-bit x86 architecture (emulators)"
+    echo "  --no-amd64  Disables building for 64-bit x86-64 architecture (newer emulators)"
+}
 
 while [[ $# -gt 0 ]]; do
     case ${1} in
@@ -33,18 +53,19 @@ while [[ $# -gt 0 ]]; do
             NO_AMD64=true
             shift
             ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
         *)
-            echo "Unknown option: $1"; exit 1
+            echo "Unknown option: $1."
+            echo "Do -h or --help for help."
+            exit 1
             ;;
     esac
     shift
 done
 
-
-# Defaulting the optional argument
-[ -z "${NO_ARMV7}" ] && NO_ARMV7=false
-[ -z "${NO_X86}" ] && NO_X86=false
-[ -z "${NO_AMD64}" ] && NO_AMD64=false
 
 if ! command -v go >/dev/null 2>&1; then
   echo "go is required." >&2
@@ -82,9 +103,17 @@ echo "Installing gomobile and gobind at $MOBILE_VERSION..."
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 
+#Just in case it didn't register
+
 if ! command -v gomobile >/dev/null 2>&1; then
-  echo "gomobile is required after installation." >&2
-  exit 1
+  echo "Looks like gomobile didn't register. Trying to add it to PATH automatically..."
+  echo "Exported PATH at $HOME/go/bin/ (gomobile is most likely there)"
+  export PATH="$PATH:$HOME/go/bin/"
+  if ! command -v gomobile >/dev/null 2>&1; then
+    echo "gomobile is required after installation." >&2
+    echo "looks like gomobile isn't there and you need to add it to PATH manually."
+    exit 1
+  fi
 fi
 
 echo "Initializing gomobile..."
