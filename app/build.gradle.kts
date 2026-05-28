@@ -88,6 +88,15 @@ android {
         compose = true
         buildConfig = true
     }
+    bundle {
+        // The app ships an in-app language picker (see docs/features/localization.md) that calls
+        // setApplicationLocales/setLocales at runtime. If the App Bundle split resources by language,
+        // the chosen locale's strings could be absent at runtime unless downloaded via Play Core.
+        // Disabling the language split keeps every locale in the base APK so the picker always works.
+        language {
+            enableSplit = false
+        }
+    }
 }
 
 tasks.named("preBuild") {

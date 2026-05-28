@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.subs
 
+import android.annotation.SuppressLint
 import android.content.Context
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.Subscription
@@ -124,6 +125,16 @@ object SubscriptionFetcher {
         return null
     }
 
+    /**
+     * Installs a trust-all [X509TrustManager] and a permissive hostname verifier on a single
+     * connection instance. This intentionally disables TLS validation and is gated entirely by the
+     * per-subscription [Subscription.allowInsecureTls] flag (default `false`, explicit user opt-in in
+     * the subscription editor's Advanced tab). The sole caller checks that flag before invoking this;
+     * there is no global/default code path. Crucially, the factory and verifier are set on the passed
+     * [connection] only — we never touch [HttpsURLConnection.setDefaultSSLSocketFactory] / the default
+     * hostname verifier, so other connections are unaffected.
+     */
+    @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
     private fun applyInsecureTls(connection: HttpsURLConnection) {
         val trustAll = arrayOf<X509TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
