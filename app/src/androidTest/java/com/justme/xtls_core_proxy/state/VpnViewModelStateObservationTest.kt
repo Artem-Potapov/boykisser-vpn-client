@@ -56,7 +56,7 @@ class VpnViewModelStateObservationTest {
     }
 
     @Test
-    fun activeProfileId_reflectsRepositoryWrite() = runBlocking {
+    fun activeProfileId_reflectsRepositoryWrite(): Unit = runBlocking {
         // first { predicate } subscribes for the wait — required because
         // activeProfileId is stateIn(WhileSubscribed(5_000)) and its upstream
         // stays dormant without a downstream collector. .value reads alone
@@ -69,7 +69,7 @@ class VpnViewModelStateObservationTest {
     }
 
     @Test
-    fun activeProfileId_reflectsExternalWrite_simulatedTilePath() = runBlocking {
+    fun activeProfileId_reflectsExternalWrite_simulatedTilePath(): Unit = runBlocking {
         // Simulate XrayVpnTileService calling ActiveProfileRepository
         // directly (bypassing the VM's connect/disconnect methods).
         ActiveProfileRepository.setActiveProfileId(application, 99L)
