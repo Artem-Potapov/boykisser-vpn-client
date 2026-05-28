@@ -117,7 +117,7 @@ object SubscriptionFetcher {
             if (rawKey == null) continue
             if (!rawKey.equals("profile-update-interval", ignoreCase = true)) continue
             for (raw in values) {
-                val parsed = raw?.trim()?.toIntOrNull() ?: continue
+                val parsed = raw.trim().toIntOrNull() ?: continue
                 if (parsed >= 1) return parsed
             }
         }

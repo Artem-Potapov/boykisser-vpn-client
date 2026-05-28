@@ -85,9 +85,9 @@ object XrayBridge {
 
     private fun isFdType(type: Class<*>): Boolean {
         return type == Int::class.javaPrimitiveType ||
-            type == java.lang.Integer::class.java ||
+            type == Int::class.javaObjectType ||
             type == Long::class.javaPrimitiveType ||
-            type == java.lang.Long::class.java
+            type == Long::class.javaObjectType
     }
 
     private fun invokeStart(method: Method, configJson: String, tunFd: Int, assetDir: String): String {
@@ -101,7 +101,7 @@ object XrayBridge {
             }
             params.size == 3 &&
                 params[0] == String::class.java &&
-                params[1] == java.lang.Integer::class.java &&
+                params[1] == Int::class.javaObjectType &&
                 params[2] == String::class.java -> {
                 method.invoke(null, configJson, tunFd, assetDir) as? String ?: ""
             }
@@ -113,20 +113,20 @@ object XrayBridge {
             }
             params.size == 3 &&
                 params[0] == String::class.java &&
-                params[1] == java.lang.Long::class.java &&
+                params[1] == Long::class.javaObjectType &&
                 params[2] == String::class.java -> {
                 method.invoke(null, configJson, tunFd.toLong(), assetDir) as? String ?: ""
             }
             params.size == 2 && params[0] == String::class.java && params[1] == Int::class.javaPrimitiveType -> {
                 method.invoke(null, configJson, tunFd) as? String ?: ""
             }
-            params.size == 2 && params[0] == String::class.java && params[1] == java.lang.Integer::class.java -> {
+            params.size == 2 && params[0] == String::class.java && params[1] == Int::class.javaObjectType -> {
                 method.invoke(null, configJson, tunFd) as? String ?: ""
             }
             params.size == 2 && params[0] == String::class.java && params[1] == Long::class.javaPrimitiveType -> {
                 method.invoke(null, configJson, tunFd.toLong()) as? String ?: ""
             }
-            params.size == 2 && params[0] == String::class.java && params[1] == java.lang.Long::class.java -> {
+            params.size == 2 && params[0] == String::class.java && params[1] == Long::class.javaObjectType -> {
                 method.invoke(null, configJson, tunFd.toLong()) as? String ?: ""
             }
             else -> throw IllegalStateException("Unsupported StartXray signature in bridge class")

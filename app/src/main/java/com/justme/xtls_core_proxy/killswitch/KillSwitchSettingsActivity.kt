@@ -40,7 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalResources
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -65,6 +66,7 @@ class KillSwitchSettingsActivity : LocalizedComponentActivity() {
 @Composable
 private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var prefs by remember { mutableStateOf(KillSwitchRepository.load(context)) }
@@ -157,7 +159,7 @@ private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
             Button(onClick = {
                 val initial = prefs.packages.toTypedArray()
                 val intent = Intent(context, AppPickerActivity::class.java)
-                    .putExtra(AppPickerActivity.EXTRA_TITLE, context.getString(R.string.kill_switch_title))
+                    .putExtra(AppPickerActivity.EXTRA_TITLE, resources.getString(R.string.kill_switch_title))
                     .putExtra(AppPickerActivity.EXTRA_INITIAL_SELECTION, initial)
                 pickerLauncher.launch(intent)
             }) {
@@ -169,7 +171,7 @@ private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
 
 private fun hasUsageAccess(context: Context): Boolean {
     val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-    val mode = appOps.unsafeCheckOpNoThrow(
+    val mode = appOps.checkOpNoThrow(
         AppOpsManager.OPSTR_GET_USAGE_STATS,
         Process.myUid(),
         context.packageName

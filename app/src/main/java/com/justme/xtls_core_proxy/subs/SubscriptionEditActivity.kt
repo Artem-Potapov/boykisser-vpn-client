@@ -27,8 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,7 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -147,7 +147,7 @@ private fun SubscriptionEditScreen(
     onBack: () -> Unit,
     onSave: (SubscriptionEditActivity.SaveOutput) -> Unit
 ) {
-    val context = LocalContext.current
+    val resources = LocalResources.current
     var name by rememberSaveable { mutableStateOf(initialName) }
     var url by rememberSaveable { mutableStateOf(initialUrl) }
     var userAgent by rememberSaveable { mutableStateOf(initialUserAgent) }
@@ -161,20 +161,20 @@ private fun SubscriptionEditScreen(
         val trimmedName = name.trim()
         val trimmedUrl = url.trim()
         if (trimmedName.isBlank()) {
-            saveError = context.getString(R.string.subs_edit_error_name_required)
+            saveError = resources.getString(R.string.subs_edit_error_name_required)
             return null
         }
         if (!trimmedUrl.matches(Regex("^https?://.+", RegexOption.IGNORE_CASE))) {
-            saveError = context.getString(R.string.subs_edit_error_url_format)
+            saveError = resources.getString(R.string.subs_edit_error_url_format)
             return null
         }
         val intervalHours = intervalText.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
         if (intervalText.isNotBlank() && intervalHours == null) {
-            saveError = context.getString(R.string.subs_edit_error_interval_not_integer)
+            saveError = resources.getString(R.string.subs_edit_error_interval_not_integer)
             return null
         }
         if (intervalHours != null && intervalHours < 1) {
-            saveError = context.getString(R.string.subs_edit_error_interval_min)
+            saveError = resources.getString(R.string.subs_edit_error_interval_min)
             return null
         }
         return SubscriptionEditActivity.SaveOutput(
@@ -225,7 +225,7 @@ private fun SubscriptionEditScreen(
                 stringResource(R.string.subs_edit_tab_simple),
                 stringResource(R.string.subs_edit_tab_advanced),
             )
-            TabRow(selectedTabIndex = tabIndex) {
+            PrimaryTabRow(selectedTabIndex = tabIndex) {
                 tabTitles.forEachIndexed { index, title ->
                     Tab(
                         selected = tabIndex == index,

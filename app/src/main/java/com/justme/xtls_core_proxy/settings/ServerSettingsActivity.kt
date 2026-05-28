@@ -29,8 +29,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -42,7 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -139,7 +139,7 @@ private fun ServerSettingsScreen(
     var simpleFields by remember { mutableStateOf(initialSimpleFields) }
     var parseMessage by remember { mutableStateOf<String?>(null) }
     var saveError by remember { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
+    val resources = LocalResources.current
 
     fun buildConfigFromSimple(): Result<String> {
         return runCatching {
@@ -161,7 +161,7 @@ private fun ServerSettingsScreen(
                 parseMessage = null
             }
             .onFailure { error ->
-                parseMessage = context.getString(
+                parseMessage = resources.getString(
                     R.string.server_error_build_config_prefix,
                     error.message ?: error.javaClass.simpleName
                 )
@@ -175,7 +175,7 @@ private fun ServerSettingsScreen(
             simpleFields = it
             parseMessage = null
         }.onFailure { error ->
-            parseMessage = context.getString(
+            parseMessage = resources.getString(
                 R.string.server_error_parse_advanced_prefix,
                 error.message ?: error.javaClass.simpleName
             )
@@ -206,12 +206,12 @@ private fun ServerSettingsScreen(
                             saveError = null
                             val trimmedName = name.trim()
                             if (trimmedName.isBlank()) {
-                                saveError = context.getString(R.string.server_error_name_required)
+                                saveError = resources.getString(R.string.server_error_name_required)
                                 return@TextButton
                             }
                             val candidateConfig = if (tabIndex == 0) {
                                 buildConfigFromSimple().getOrElse { error ->
-                                    saveError = context.getString(
+                                    saveError = resources.getString(
                                         R.string.server_error_simple_invalid_prefix,
                                         error.message ?: error.javaClass.simpleName
                                     )
@@ -221,12 +221,12 @@ private fun ServerSettingsScreen(
                                 configText.trim()
                             }
                             if (candidateConfig.isBlank()) {
-                                saveError = context.getString(R.string.server_error_config_required)
+                                saveError = resources.getString(R.string.server_error_config_required)
                                 return@TextButton
                             }
                             runCatching { ConfigBuilder.buildRuntimeConfig(candidateConfig) }
                                 .onFailure { error ->
-                                    saveError = context.getString(
+                                    saveError = resources.getString(
                                         R.string.server_error_validation_failed_prefix,
                                         error.message ?: error.javaClass.simpleName
                                     )
@@ -263,7 +263,7 @@ private fun ServerSettingsScreen(
                 stringResource(R.string.server_tab_simple),
                 stringResource(R.string.server_tab_advanced)
             )
-            TabRow(selectedTabIndex = tabIndex) {
+            PrimaryTabRow(selectedTabIndex = tabIndex) {
                 tabTitles.forEachIndexed { index, title ->
                     Tab(
                         selected = tabIndex == index,

@@ -200,10 +200,10 @@ class MainActivity : LocalizedComponentActivity() {
         viewModel.refreshAllStaleSubscriptions(this)
     }
 
-    override fun onNewIntent(newIntent: Intent) {
-        super.onNewIntent(newIntent)
-        setIntent(newIntent)
-        maybeAutoConnectFromTile(newIntent)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        maybeAutoConnectFromTile(intent)
     }
 
     private fun requestVpnPermissionAndConnect() {
