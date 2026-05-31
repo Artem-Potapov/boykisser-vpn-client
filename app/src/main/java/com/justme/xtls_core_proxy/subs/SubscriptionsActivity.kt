@@ -27,6 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.ui.graphics.Color
+import com.justme.xtls_core_proxy.ui.theme.BoykisserMagenta
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -108,7 +111,10 @@ class SubscriptionsActivity : LocalizedComponentActivity() {
                         )
                     },
                     onRefresh = { sub -> viewModel.refreshSubscription(this, sub.id) },
-                    onDelete = { sub -> viewModel.deleteSubscription(this, sub) }
+                    onDelete = { sub -> viewModel.deleteSubscription(this, sub) },
+                    onOpenBoykisserInfo = {
+                        startActivity(Intent(this, BoykisserInfoActivity::class.java))
+                    },
                 )
             }
         }
@@ -163,10 +169,12 @@ private fun SubscriptionsScreen(
     onAdd: () -> Unit,
     onEdit: (Subscription) -> Unit,
     onRefresh: (Subscription) -> Unit,
-    onDelete: (Subscription) -> Unit
+    onDelete: (Subscription) -> Unit,
+    onOpenBoykisserInfo: () -> Unit
 ) {
     val subscriptions by viewModel.subscriptions.collectAsState()
     var pendingDelete by remember { mutableStateOf<Subscription?>(null) }
+    val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
 
     Scaffold(
         topBar = {
@@ -190,6 +198,11 @@ private fun SubscriptionsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (showPromo) {
+                item(key = "boykisser-promo") {
+                    BoykisserPromoRow(onClick = onOpenBoykisserInfo)
+                }
+            }
             item(key = "add") {
                 AddSubscriptionRow(onClick = onAdd)
             }
@@ -280,6 +293,35 @@ private fun SubscriptionRow(
                     contentDescription = stringResource(R.string.main_cd_refresh_subscription)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BoykisserPromoRow(onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        color = BoykisserMagenta,
+        contentColor = Color.White,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Star,
+                contentDescription = null,
+                tint = Color.White
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = stringResource(R.string.subs_boykisser_row_label),
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White
+            )
         }
     }
 }
