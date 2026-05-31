@@ -93,6 +93,33 @@
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
+        <activity
+            android:name=".subs.BoykisserLinkActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.XTLS_CORE_PROXY">
+
+            <!-- Custom scheme: works without any website/signing setup. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="bkvpn" android:host="add" />
+            </intent-filter>
+
+            <!-- Verified Android App Link. Requires assetlinks.json hosted on the site with
+                 the release signing fingerprint before it auto-verifies (see Task 8). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="boykiss3r.site"
+                    android:pathPrefix="/app/add" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".vpn.XrayVpnService"
             android:exported="false"
