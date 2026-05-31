@@ -236,6 +236,20 @@
     <string name="add_toast_unsupported_scheme">Unsupported VPN link format: %1$s://</string>
     <string name="add_toast_invalid_format">Invalid format</string>
 
+    <!-- Boykisser VPN promoted subscription -->
+    <string name="boykisser_brand_name">Boykisser VPN</string>
+    <string name="subs_boykisser_row_label">VPN by Boykisser (Recommended)</string>
+    <string name="boykisser_banner_text">Get protected with VPN by Boykisser — recommended.</string>
+    <string name="boykisser_banner_cta">Add</string>
+    <string name="boykisser_cd_dismiss">Dismiss</string>
+    <string name="boykisser_info_title">Boykisser VPN</string>
+    <string name="boykisser_info_placeholder">add instruction to get subs!</string>
+    <string name="boykisser_info_open_site">Open boykiss3r.site</string>
+    <string name="boykisser_info_open_bot">Open Telegram bot</string>
+    <string name="boykisser_confirm_title">Add Boykisser VPN?</string>
+    <string name="boykisser_confirm_message">Add this Boykisser VPN subscription to the app?</string>
+    <string name="boykisser_error_invalid_domain">Invalid domain</string>
+
     <!-- Quick Settings tile -->
     <string name="tile_label">VPN</string>
     <string name="tile_toast_no_profiles">Please add a configuration in the app first</string>
