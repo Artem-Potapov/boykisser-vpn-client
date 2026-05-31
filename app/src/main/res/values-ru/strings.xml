@@ -237,6 +237,20 @@
     <string name="add_toast_unsupported_scheme">Неподдерживаемый формат VPN-ссылки: %1$s://</string>
     <string name="add_toast_invalid_format">Неверный формат</string>
 
+    <!-- Boykisser VPN promoted subscription -->
+    <string name="boykisser_brand_name">Бойкиссер ВПН</string>
+    <string name="subs_boykisser_row_label">VPN от Boykisser (рекомендуется)</string>
+    <string name="boykisser_banner_text">Защитите себя с VPN от Boykisser — рекомендуем.</string>
+    <string name="boykisser_banner_cta">Добавить</string>
+    <string name="boykisser_cd_dismiss">Закрыть</string>
+    <string name="boykisser_info_title">Бойкиссер ВПН</string>
+    <string name="boykisser_info_placeholder">add instruction to get subs!</string>
+    <string name="boykisser_info_open_site">Открыть boykiss3r.site</string>
+    <string name="boykisser_info_open_bot">Открыть Telegram-бота</string>
+    <string name="boykisser_confirm_title">Добавить Boykisser VPN?</string>
+    <string name="boykisser_confirm_message">Добавить эту подписку Boykisser VPN в приложение?</string>
+    <string name="boykisser_error_invalid_domain">Недопустимый домен</string>
+
     <!-- Quick Settings tile -->
     <string name="tile_label">VPN</string>
     <string name="tile_toast_no_profiles">Сначала добавьте конфигурацию в приложении</string>
