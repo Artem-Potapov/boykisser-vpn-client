@@ -33,11 +33,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +62,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -83,10 +86,12 @@ import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.state.SubGroup
 import com.justme.xtls_core_proxy.state.VpnViewModel
+import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromotedSubscription
 import com.justme.xtls_core_proxy.subs.SubscriptionBodyParser
 import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
 import com.justme.xtls_core_proxy.subs.SubscriptionsActivity
+import com.justme.xtls_core_proxy.ui.theme.BoykisserMagenta
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
 class MainActivity : LocalizedComponentActivity() {
@@ -167,6 +172,9 @@ class MainActivity : LocalizedComponentActivity() {
                     },
                     onOpenSubscriptions = {
                         startActivity(Intent(this, SubscriptionsActivity::class.java))
+                    },
+                    onOpenBoykisserInfo = {
+                        startActivity(Intent(this, BoykisserInfoActivity::class.java))
                     },
                     onClipboardAdd = { handleClipboardAdd() },
                     onPickPasteSubscription = { pasteKind = PasteKind.SUBSCRIPTION_URL },
@@ -350,6 +358,7 @@ private fun MainScreen(
     onDisconnect: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSubscriptions: () -> Unit,
+    onOpenBoykisserInfo: () -> Unit,
     onClipboardAdd: () -> Unit,
     onPickPasteSubscription: () -> Unit,
     onPickPasteVless: () -> Unit,
@@ -362,6 +371,9 @@ private fun MainScreen(
     val state by viewModel.connectionState.collectAsState()
     val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
+    val subscriptions by viewModel.subscriptions.collectAsState()
+    val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
+    var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
     var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
     val expanded = remember { mutableStateMapOf<Long, Boolean>() }
@@ -429,6 +441,14 @@ private fun MainScreen(
                     text = error ?: "",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            if (showPromo && !bannerDismissed) {
+                Spacer(modifier = Modifier.height(8.dp))
+                BoykisserBanner(
+                    onAdd = onOpenBoykisserInfo,
+                    onDismiss = { bannerDismissed = true }
                 )
             }
 
@@ -558,6 +578,40 @@ private fun MainScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoykisserBanner(onAdd: () -> Unit, onDismiss: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = BoykisserMagenta,
+        contentColor = Color.White,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.boykisser_banner_text),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = onAdd,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+            ) {
+                Text(stringResource(R.string.boykisser_banner_cta))
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.boykisser_cd_dismiss),
+                    tint = Color.White
+                )
             }
         }
     }
