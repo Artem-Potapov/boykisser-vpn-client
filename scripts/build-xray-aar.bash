@@ -9,18 +9,12 @@
 NO_ARMV7="${NO_ARMV7:-false}"
 NO_X86="${NO_X86:-false}"
 NO_AMD64="${NO_AMD64:-false}"
-
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 OUTPUT_REL="${OUTPUT:-app/libs/xray.aar}"
 ANDROID_API="${ANDROID_API:-26}"
 XRAY_CORE_REF="${XRAY_CORE_REF:-main}"
-if [[ $# -ge 1 ]]; then OUTPUT_REL="$1"; fi
-if [[ $# -ge 2 ]]; then ANDROID_API="$2"; fi
-if [[ $# -ge 3 ]]; then XRAY_CORE_REF="$3"; fi
 
 show_help() {
     echo "This is a script to generate the XRAY AAR file via gomobile."
@@ -39,8 +33,11 @@ show_help() {
     echo "  --no-amd64  Disables building for 64-bit x86-64 architecture (newer emulators)"
 }
 
+# Parse flags first; collect positional args separately so flags and
+# positionals can be intermixed in any order.
+positional=()
 while [[ $# -gt 0 ]]; do
-    case ${1} in
+    case "$1" in
         --no-armv7)
             NO_ARMV7=true
             shift
@@ -57,15 +54,22 @@ while [[ $# -gt 0 ]]; do
             show_help
             exit 0
             ;;
-        *)
+        -*)
             echo "Unknown option: $1."
             echo "Do -h or --help for help."
             exit 1
             ;;
+        *)
+            positional+=("$1")
+            shift
+            ;;
     esac
-    shift
 done
 
+# Apply positional arguments now that flags have been consumed.
+[[ ${#positional[@]} -ge 1 ]] && OUTPUT_REL="${positional[0]}"
+[[ ${#positional[@]} -ge 2 ]] && ANDROID_API="${positional[1]}"
+[[ ${#positional[@]} -ge 3 ]] && XRAY_CORE_REF="${positional[2]}"
 
 if ! command -v go >/dev/null 2>&1; then
   echo "go is required." >&2
@@ -75,7 +79,6 @@ fi
 OUTPUT_PATH="$WORKSPACE/$OUTPUT_REL"
 OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
 mkdir -p "$OUTPUT_DIR"
-
 cd "$WORKSPACE/xray-go"
 
 # Bypass checksum DB for Xray-core (module path lacks the required /vN suffix).
@@ -99,19 +102,19 @@ if [[ -z "$MOBILE_VERSION" ]]; then
   echo "Failed to resolve golang.org/x/mobile version." >&2
   exit 1
 fi
+
 echo "Installing gomobile and gobind at $MOBILE_VERSION..."
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 
-#Just in case it didn't register
-
+# Just in case it didn't register.
 if ! command -v gomobile >/dev/null 2>&1; then
   echo "Looks like gomobile didn't register. Trying to add it to PATH automatically..."
   echo "Exported PATH at $HOME/go/bin/ (gomobile is most likely there)"
   export PATH="$PATH:$HOME/go/bin/"
   if ! command -v gomobile >/dev/null 2>&1; then
     echo "gomobile is required after installation." >&2
-    echo "looks like gomobile isn't there and you need to add it to PATH manually."
+    echo "Looks like gomobile isn't there and you need to add it to PATH manually."
     exit 1
   fi
 fi
@@ -134,6 +137,7 @@ echo "Running gomobile bind for targets: $targets..."
 gomobile bind \
   "-target=$targets" \
   "-androidapi=$ANDROID_API" \
+  -ldflags="-checklinkname=0" \
   -o "$OUTPUT_PATH" \
   .
 
