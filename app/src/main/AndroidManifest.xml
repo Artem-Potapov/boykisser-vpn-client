@@ -88,6 +88,11 @@
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
+        <activity
+            android:name=".subs.BoykisserInfoActivity"
+            android:exported="false"
+            android:theme="@style/Theme.XTLS_CORE_PROXY" />
+
         <service
             android:name=".vpn.XrayVpnService"
             android:exported="false"
