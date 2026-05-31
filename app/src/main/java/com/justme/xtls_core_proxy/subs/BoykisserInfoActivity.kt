@@ -1,7 +1,6 @@
 package com.justme.xtls_core_proxy.subs
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -30,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.ui.theme.BoykisserMagenta
@@ -60,7 +60,7 @@ private fun BoykisserInfoScreen(onBack: () -> Unit) {
 
     fun openUrl(url: String) {
         val opened = runCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
         }.isSuccess
         if (!opened) {
             Toast.makeText(context, url, Toast.LENGTH_SHORT).show()
