@@ -36,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -82,6 +83,7 @@ import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.state.SubGroup
 import com.justme.xtls_core_proxy.state.VpnViewModel
+import com.justme.xtls_core_proxy.subs.PromotedSubscription
 import com.justme.xtls_core_proxy.subs.SubscriptionBodyParser
 import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
 import com.justme.xtls_core_proxy.subs.SubscriptionsActivity
@@ -92,10 +94,12 @@ class MainActivity : LocalizedComponentActivity() {
     companion object {
         const val EXTRA_TILE_AUTOCONNECT = "extra_tile_autoconnect"
         const val EXTRA_TILE_PROFILE_ID = "extra_tile_profile_id"
+        const val EXTRA_ADD_BOYKISSER_SUB = "extra_add_boykisser_sub"
     }
 
     private val viewModel: VpnViewModel by viewModels()
     private var pendingProfileId: Long = -1L
+    private var pendingBoykisserUrl by mutableStateOf<String?>(null)
 
     private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
@@ -190,9 +194,39 @@ class MainActivity : LocalizedComponentActivity() {
                         }
                     )
                 }
+
+                val pendingUrl = pendingBoykisserUrl
+                if (pendingUrl != null) {
+                    val brandName = stringResource(R.string.boykisser_brand_name)
+                    val addedMessage = stringResource(R.string.add_toast_subscription_added)
+                    AlertDialog(
+                        onDismissRequest = { pendingBoykisserUrl = null },
+                        title = { Text(stringResource(R.string.boykisser_confirm_title)) },
+                        text = { Text(stringResource(R.string.boykisser_confirm_message)) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.addSubscription(
+                                    name = brandName,
+                                    url = pendingUrl,
+                                    refreshAfterInsert = true
+                                )
+                                toast(addedMessage)
+                                pendingBoykisserUrl = null
+                            }) {
+                                Text(stringResource(R.string.add_dialog_button_add))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { pendingBoykisserUrl = null }) {
+                                Text(stringResource(R.string.add_dialog_button_cancel))
+                            }
+                        }
+                    )
+                }
             }
         }
         if (savedInstanceState == null) maybeAutoConnectFromTile(intent)
+        maybeAddBoykisserSub(intent)
     }
 
     override fun onStart() {
@@ -204,6 +238,7 @@ class MainActivity : LocalizedComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         maybeAutoConnectFromTile(intent)
+        maybeAddBoykisserSub(intent)
     }
 
     private fun requestVpnPermissionAndConnect() {
@@ -230,6 +265,19 @@ class MainActivity : LocalizedComponentActivity() {
         } else {
             requestVpnPermissionAndConnect()
         }
+    }
+
+    private fun maybeAddBoykisserSub(triggerIntent: Intent) {
+        val url = triggerIntent.getStringExtra(EXTRA_ADD_BOYKISSER_SUB) ?: return
+        // Single-shot: strip the extra so rotation / recreate doesn't re-trigger.
+        triggerIntent.removeExtra(EXTRA_ADD_BOYKISSER_SUB)
+        // Re-validate the approved domain: MainActivity is exported, so this extra could be
+        // forged by another app. Only an approved-domain URL is surfaced for confirmation.
+        if (!PromotedSubscription.isApprovedLink(url)) return
+        // Surface a user confirmation before adding. The confirm lives here (not in the
+        // transient BoykisserLinkActivity) so a forged Intent sent straight to MainActivity
+        // cannot add a subscription without consent.
+        pendingBoykisserUrl = url
     }
 
     private fun needsNotificationPermission(): Boolean {
