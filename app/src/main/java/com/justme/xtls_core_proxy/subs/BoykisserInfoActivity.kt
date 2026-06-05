@@ -20,12 +20,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -48,7 +46,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -57,6 +57,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -129,11 +130,11 @@ private fun BoykisserInfoScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(top = 8.dp, bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(top = 8.dp, bottom = 15.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
             RoadmapStep(number = 1, side = HorizontalSide.Start) {
                 Text(
@@ -143,8 +144,6 @@ private fun BoykisserInfoScreen(
             }
             if (showArrows) {
                 ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
-            } else {
-                Spacer(Modifier.height(16.dp))
             }
 
             RoadmapStep(number = 2, side = HorizontalSide.Start) {
@@ -165,8 +164,6 @@ private fun BoykisserInfoScreen(
             }
             if (showArrows) {
                 ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
-            } else {
-                Spacer(Modifier.height(16.dp))
             }
 
             RoadmapStep(number = 3, side = HorizontalSide.End) {
@@ -183,31 +180,36 @@ private fun BoykisserInfoScreen(
             }
             if (showArrows) {
                 ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
-            } else {
-                Spacer(Modifier.height(16.dp))
             }
 
-            RoadmapStep(number = 4, side = HorizontalSide.Center) {
-                Text(
-                    text = stringResource(R.string.boykisser_step4_label),
-                    style = MaterialTheme.typography.titleMedium
+            // Group Step 4 (label) and the PasteAndSubmit block with a fixed 15.dp gap, so
+            // Arrangement.SpaceBetween treats them as a single bottom-anchored unit instead
+            // of inserting a stretchy gap (which was reading like a missing-arrow slot).
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(15.dp)
+            ) {
+                RoadmapStep(number = 4, side = HorizontalSide.Center) {
+                    Text(
+                        text = stringResource(R.string.boykisser_step4_label),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                PasteAndSubmit(
+                    onApproved = { approved ->
+                        context.startActivity(
+                            Intent(context, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
+                            }
+                        )
+                        onSubmitted()
+                    },
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
-
-            Spacer(Modifier.height(8.dp))
-
-            PasteAndSubmit(
-                onApproved = { approved ->
-                    context.startActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
-                        }
-                    )
-                    onSubmitted()
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }
@@ -226,10 +228,19 @@ private fun StepCircle(number: Int, modifier: Modifier = Modifier) {
         color = BoykisserMagenta
     ) {
         Box(contentAlignment = Alignment.Center) {
+            // Trim the half-leading above/below the glyph so Alignment.Center centers
+            // the actual digit rather than a line-box padded by ~4 sp on each side.
+            // Without this, glyphs whose visual bounds aren't symmetric within the
+            // line box (notably "4") drift visibly off-center inside the 36 dp circle.
             Text(
                 text = number.toString(),
                 color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.Both
+                    )
+                ),
                 fontWeight = FontWeight.Bold
             )
         }
@@ -259,23 +270,41 @@ private fun ArrowConnector(
         val xTo = w * toSide.xFraction
         val yFrom = 0f
         val yTo = h - headLenPx * 0.3f
-
-        // Straight diagonal line from (xFrom, top) to (xTo, near-bottom).
-        drawLine(
+        val midY = h / 2f
+        // Asymmetric cubic bezier:
+        //   cp1 at (xFrom, midY)         -> tangent at start is purely vertical (arrows
+        //                                   tail out of the previous step going straight
+        //                                   down, matching the hand-drawn sketch).
+        //   cp2 at end - 0.4 * chord     -> tangent at end is proportional to the chord
+        //                                   (xTo - xFrom, yTo - yFrom). This means the
+        //                                   bezier's natural end-tangent and the chord
+        //                                   point in the same direction, so the chevron
+        //                                   visually merges with the curve's final
+        //                                   approach instead of looking detached.
+        // For same-side connectors (xFrom == xTo) cp1 and cp2 share x with start/end,
+        // so the curve collapses to a clean straight vertical line.
+        val tailAlpha = 0.4f
+        val cp2x = xTo - tailAlpha * (xTo - xFrom)
+        val cp2y = yTo - tailAlpha * (yTo - yFrom)
+        val path = Path().apply {
+            moveTo(xFrom, yFrom)
+            cubicTo(xFrom, midY, cp2x, cp2y, xTo, yTo)
+        }
+        drawPath(
+            path = path,
             color = color,
-            start = Offset(xFrom, yFrom),
-            end = Offset(xTo, yTo),
-            strokeWidth = strokeWidthPx,
-            cap = StrokeCap.Round
+            style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
         )
 
-        // Arrowhead chevron pointing along the line's own direction.
-        val tx = xTo - xFrom
-        val ty = yTo - yFrom
+        // Arrowhead chevron uses the bezier's actual tangent at t=1, which is
+        // (end - cp2) = tailAlpha * chord. Same direction as chord, but explicitly
+        // derived from the curve so future cp2 tweaks keep the chevron in sync.
+        val tx = xTo - cp2x
+        val ty = yTo - cp2y
         val tLen = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(1f)
         val ux = tx / tLen
         val uy = ty / tLen
-        // Perpendicular to the tangent (ux, uy) is (-uy, ux) — used for chevron spread.
+        // Perpendicular to (ux, uy) is (-uy, ux).
         val spread = headLenPx * 0.4f
         val baseX = xTo - ux * headLenPx
         val baseY = yTo - uy * headLenPx
@@ -383,9 +412,20 @@ private fun PasteAndSubmit(
         }
     }
 
+    // Conditionally null so the supportingText slot reserves NO height when there's
+    // no error. Combined with spacedBy(15.dp) below this makes the gap between the
+    // text field and "Let's go!" exactly 15 dp at rest. When an error is shown the
+    // gap grows by the supporting-text row, which is acceptable — the user is
+    // actively reading the error in that case.
+    val errorSupportingText: (@Composable () -> Unit)? = if (showError) {
+        { Text(stringResource(R.string.boykisser_error_invalid_domain)) }
+    } else {
+        null
+    }
+
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(15.dp)
     ) {
         OutlinedTextField(
             value = text,
@@ -401,11 +441,7 @@ private fun PasteAndSubmit(
             ),
             keyboardActions = KeyboardActions(onDone = { submit() }),
             placeholder = { Text(stringResource(R.string.boykisser_step4_field_hint)) },
-            supportingText = {
-                if (showError) {
-                    Text(stringResource(R.string.boykisser_error_invalid_domain))
-                }
-            },
+            supportingText = errorSupportingText,
             modifier = Modifier.fillMaxWidth()
         )
         Button(
