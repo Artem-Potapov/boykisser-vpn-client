@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -15,15 +16,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -126,89 +130,107 @@ private fun BoykisserInfoScreen(
             )
         }
     ) { padding ->
-        Column(
+        // Overflow-only scroll. BoxWithConstraints yields the usable viewport height
+        // (after the scaffold insets and imePadding for the keyboard). The Column is
+        // verticalScroll-wrapped but pinned to a *minimum* of one viewport tall
+        // (heightIn min = maxHeight): when the roadmap fits, Arrangement.SpaceBetween
+        // distributes the slack exactly as before (evenly spread, bottom group anchored
+        // 15.dp up) and there is nothing to scroll. When it does not fit — small screen,
+        // max font scale, or the keyboard raised — the content grows past the viewport,
+        // SpaceBetween runs out of slack, and the scroll lets the user reach the paste
+        // field / "Let's go!" button. OutlinedTextField brings itself into view on focus,
+        // so tapping the field auto-scrolls it above the keyboard.
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .imePadding()
-                .padding(horizontal = 24.dp)
-                .padding(top = 8.dp, bottom = 15.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            RoadmapStep(number = 1, side = HorizontalSide.Start) {
-                Text(
-                    text = stringResource(R.string.boykisser_step1_intro),
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-            if (showArrows) {
-                ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
-            }
-
-            RoadmapStep(number = 2, side = HorizontalSide.Start) {
-                Text(
-                    text = stringResource(R.string.boykisser_step2_label),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Button(
-                    onClick = { openUrl(BoykisserInfoActivity.BOT_URL) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = BoykisserMagenta,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.boykisser_step2_button))
-                }
-            }
-            if (showArrows) {
-                ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
-            }
-
-            RoadmapStep(number = 3, side = HorizontalSide.End) {
-                Text(
-                    text = stringResource(R.string.boykisser_step3_intro),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                BotMessageMock()
-                Text(
-                    text = stringResource(R.string.boykisser_step3_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (showArrows) {
-                ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
-            }
-
-            // Group Step 4 (label) and the PasteAndSubmit block with a fixed 15.dp gap, so
-            // Arrangement.SpaceBetween treats them as a single bottom-anchored unit instead
-            // of inserting a stretchy gap (which was reading like a missing-arrow slot).
+            val scrollState = rememberScrollState()
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState)
+                    .heightIn(min = maxHeight)
+                    .padding(horizontal = 24.dp)
+                    .padding(top = 8.dp, bottom = 15.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(15.dp)
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
-                RoadmapStep(number = 4, side = HorizontalSide.Center) {
+                RoadmapStep(number = 1, side = HorizontalSide.Start) {
                     Text(
-                        text = stringResource(R.string.boykisser_step4_label),
+                        text = stringResource(R.string.boykisser_step1_intro),
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
+                if (showArrows) {
+                    ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
+                }
 
-                PasteAndSubmit(
-                    onApproved = { approved ->
-                        context.startActivity(
-                            Intent(context, MainActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
-                            }
+                RoadmapStep(number = 2, side = HorizontalSide.Start) {
+                    Text(
+                        text = stringResource(R.string.boykisser_step2_label),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Button(
+                        onClick = { openUrl(BoykisserInfoActivity.BOT_URL) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BoykisserMagenta,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.boykisser_step2_button))
+                    }
+                }
+                if (showArrows) {
+                    ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
+                }
+
+                RoadmapStep(number = 3, side = HorizontalSide.End) {
+                    Text(
+                        text = stringResource(R.string.boykisser_step3_intro),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    BotMessageMock()
+                    Text(
+                        text = stringResource(R.string.boykisser_step3_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (showArrows) {
+                    ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
+                }
+
+                // Group Step 4 (label) and the PasteAndSubmit block with a fixed 15.dp gap, so
+                // Arrangement.SpaceBetween treats them as a single bottom-anchored unit instead
+                // of inserting a stretchy gap (which was reading like a missing-arrow slot).
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(15.dp)
+                ) {
+                    RoadmapStep(number = 4, side = HorizontalSide.Center) {
+                        Text(
+                            text = stringResource(R.string.boykisser_step4_label),
+                            style = MaterialTheme.typography.titleMedium
                         )
-                        onSubmitted()
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    }
+
+                    PasteAndSubmit(
+                        onApproved = { approved ->
+                            context.startActivity(
+                                Intent(context, MainActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
+                                }
+                            )
+                            onSubmitted()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
