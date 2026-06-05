@@ -48,9 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -94,6 +93,8 @@ private fun BoykisserInfoScreen(
     onSubmitted: () -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val showArrows = configuration.screenHeightDp >= 800
 
     fun openUrl(url: String) {
         val opened = runCatching {
@@ -126,7 +127,7 @@ private fun BoykisserInfoScreen(
                 .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(top = 16.dp, bottom = 32.dp),
+                .padding(top = 8.dp, bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             RoadmapStep(number = 1, side = HorizontalSide.Start) {
@@ -135,7 +136,11 @@ private fun BoykisserInfoScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
             }
-            ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
+            if (showArrows) {
+                ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
+            } else {
+                Spacer(Modifier.height(16.dp))
+            }
 
             RoadmapStep(number = 2, side = HorizontalSide.Start) {
                 Text(
@@ -153,7 +158,11 @@ private fun BoykisserInfoScreen(
                     Text(stringResource(R.string.boykisser_step2_button))
                 }
             }
-            ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
+            if (showArrows) {
+                ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
+            } else {
+                Spacer(Modifier.height(16.dp))
+            }
 
             RoadmapStep(number = 3, side = HorizontalSide.End) {
                 Text(
@@ -167,25 +176,33 @@ private fun BoykisserInfoScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
+            if (showArrows) {
+                ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
+            } else {
+                Spacer(Modifier.height(16.dp))
+            }
 
             RoadmapStep(number = 4, side = HorizontalSide.Center) {
                 Text(
                     text = stringResource(R.string.boykisser_step4_label),
                     style = MaterialTheme.typography.titleMedium
                 )
-                PasteAndSubmit(
-                    onApproved = { approved ->
-                        context.startActivity(
-                            Intent(context, MainActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
-                            }
-                        )
-                        onSubmitted()
-                    }
-                )
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            PasteAndSubmit(
+                onApproved = { approved ->
+                    context.startActivity(
+                        Intent(context, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
+                        }
+                    )
+                    onSubmitted()
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -223,49 +240,39 @@ private fun ArrowConnector(
     val color = MaterialTheme.colorScheme.outline
     val density = LocalDensity.current
     val bodyLargeFontSize = MaterialTheme.typography.bodyLarge.fontSize
-    val strokeWidthPx = with(density) { (bodyLargeFontSize.toDp() * 0.18f).toPx() }
-    val headLenPx = with(density) { (bodyLargeFontSize.toDp() * 0.8f).toPx() }
+    val strokeWidthPx = with(density) { (bodyLargeFontSize.toDp() * 0.14f).toPx() }
+    val headLenPx = with(density) { (bodyLargeFontSize.toDp() * 0.55f).toPx() }
 
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(40.dp)
     ) {
         val w = size.width
         val h = size.height
         val xFrom = w * fromSide.xFraction
         val xTo = w * toSide.xFraction
         val yFrom = 0f
-        val yTo = h - headLenPx * 0.5f
+        val yTo = h - headLenPx * 0.3f
 
-        // S-curve control points: lift each toward the opposite side for a graceful sweep.
-        // When both endpoints share the same side the standard formula collapses xFrom==xTo, giving
-        // straight-line control points. Add a lateral bulge so same-side connectors remain curved.
-        val sameSide = fromSide == toSide
-        val bulge = if (sameSide) w * 0.18f else 0f
-        val cp1 = Offset(xFrom + (xTo - xFrom) * 0.1f + bulge, h * 0.45f)
-        val cp2 = Offset(xTo - (xTo - xFrom) * 0.1f + bulge, h * 0.55f)
-
-        val path = Path().apply {
-            moveTo(xFrom, yFrom)
-            cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, xTo, yTo)
-        }
-        drawPath(
-            path = path,
+        // Straight diagonal line from (xFrom, top) to (xTo, near-bottom).
+        drawLine(
             color = color,
-            style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
+            start = Offset(xFrom, yFrom),
+            end = Offset(xTo, yTo),
+            strokeWidth = strokeWidthPx,
+            cap = StrokeCap.Round
         )
 
-        // Arrowhead: chevron whose direction matches the tangent at the end of the curve
-        // (approximated by the vector from cp2 to the end point).
-        val tx = xTo - cp2.x
-        val ty = yTo - cp2.y
+        // Arrowhead chevron pointing along the line's own direction.
+        val tx = xTo - xFrom
+        val ty = yTo - yFrom
         val tLen = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(1f)
         val ux = tx / tLen
         val uy = ty / tLen
         val perpX = -uy
         val perpY = ux
-        val spread = headLenPx * 0.35f
+        val spread = headLenPx * 0.4f
         val baseX = xTo - ux * headLenPx
         val baseY = yTo - uy * headLenPx
         drawLine(
