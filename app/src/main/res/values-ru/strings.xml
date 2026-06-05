@@ -247,6 +247,14 @@
     <string name="boykisser_info_placeholder">add instruction to get subs!</string>
     <string name="boykisser_info_open_site">Открыть boykiss3r.site</string>
     <string name="boykisser_info_open_bot">Открыть Telegram-бота</string>
+    <string name="boykisser_step1_intro">Чтобы подключиться, вам нужен ключ для VPN.</string>
+    <string name="boykisser_step2_label">Нажмите кнопку, чтобы открыть бота:</string>
+    <string name="boykisser_step2_button">Открыть бота</string>
+    <string name="boykisser_step3_intro">После выдачи подписки вы увидите примерно следующее:</string>
+    <string name="boykisser_step3_hint">Нажмите на ссылку в Telegram, чтобы скопировать её.</string>
+    <string name="boykisser_step4_label">Вставьте сюда:</string>
+    <string name="boykisser_step4_field_hint">Вставьте ссылку на VPN-ключ</string>
+    <string name="boykisser_step4_submit">Поехали!</string>
     <string name="boykisser_confirm_title">Добавить Boykisser VPN?</string>
     <string name="boykisser_confirm_message">Добавить эту подписку Boykisser VPN в приложение?</string>
     <string name="boykisser_error_invalid_domain">Недопустимый домен</string>
