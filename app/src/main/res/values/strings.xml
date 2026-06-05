@@ -246,6 +246,14 @@
     <string name="boykisser_info_placeholder">add instruction to get subs!</string>
     <string name="boykisser_info_open_site">Open boykiss3r.site</string>
     <string name="boykisser_info_open_bot">Open Telegram bot</string>
+    <string name="boykisser_step1_intro">In order to connect you need a VPN key.</string>
+    <string name="boykisser_step2_label">Tap the button to open the bot:</string>
+    <string name="boykisser_step2_button">Open the bot</string>
+    <string name="boykisser_step3_intro">After the subscription is granted, you\'ll see something like this:</string>
+    <string name="boykisser_step3_hint">Tap the link in Telegram to copy it.</string>
+    <string name="boykisser_step4_label">Paste it here:</string>
+    <string name="boykisser_step4_field_hint">Paste the VPN key link</string>
+    <string name="boykisser_step4_submit">Let\'s go!</string>
     <string name="boykisser_confirm_title">Add Boykisser VPN?</string>
     <string name="boykisser_confirm_message">Add this Boykisser VPN subscription to the app?</string>
     <string name="boykisser_error_invalid_domain">Invalid domain</string>
