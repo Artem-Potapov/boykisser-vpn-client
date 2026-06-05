@@ -8,8 +8,8 @@ Promotes "Boykisser VPN" until the user has a valid subscription on an approved 
   `!PromotedSubscription.hasValidSubscription(...)`.
 - **Subscriptions row** (`SubscriptionsActivity` → `BoykisserPromoRow`): magenta
   "VPN by Boykisser (Recommended)" at the top of the list, same visibility rule.
-- **Info screen** (`BoykisserInfoActivity`): placeholder text + links to
-  `https://boykiss3r.site` and `https://t.me/boykisser_vpn_bot`.
+- **Nag screen** (`BoykisserInfoActivity`): 4-step onboarding roadmap that walks the user from
+  "no key" to a validated paste-and-submit. See [`boykisser-nag-screen.md`](boykisser-nag-screen.md).
 
 ## Detection
 `PromotedSubscription` (pure, unit-tested):
