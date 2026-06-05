@@ -243,9 +243,6 @@
     <string name="boykisser_banner_cta">Add</string>
     <string name="boykisser_cd_dismiss">Dismiss</string>
     <string name="boykisser_info_title">Boykisser VPN</string>
-    <string name="boykisser_info_placeholder">add instruction to get subs!</string>
-    <string name="boykisser_info_open_site">Open boykiss3r.site</string>
-    <string name="boykisser_info_open_bot">Open Telegram bot</string>
     <string name="boykisser_step1_intro">In order to connect you need a VPN key.</string>
     <string name="boykisser_step2_label">Tap the button to open the bot:</string>
     <string name="boykisser_step2_button">Open the bot</string>

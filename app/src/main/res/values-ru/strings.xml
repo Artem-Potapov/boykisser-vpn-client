@@ -244,9 +244,6 @@
     <string name="boykisser_banner_cta">Добавить</string>
     <string name="boykisser_cd_dismiss">Закрыть</string>
     <string name="boykisser_info_title">Бойкиссер ВПН</string>
-    <string name="boykisser_info_placeholder">add instruction to get subs!</string>
-    <string name="boykisser_info_open_site">Открыть boykiss3r.site</string>
-    <string name="boykisser_info_open_bot">Открыть Telegram-бота</string>
     <string name="boykisser_step1_intro">Чтобы подключиться, вам нужен ключ для VPN.</string>
     <string name="boykisser_step2_label">Нажмите кнопку, чтобы открыть бота:</string>
     <string name="boykisser_step2_button">Открыть бота</string>
