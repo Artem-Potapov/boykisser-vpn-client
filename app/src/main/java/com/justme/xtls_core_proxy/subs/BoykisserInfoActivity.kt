@@ -58,7 +58,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -75,20 +74,25 @@ class BoykisserInfoActivity : LocalizedComponentActivity() {
         enableEdgeToEdge()
         setContent {
             XTLS_CORE_PROXYTheme {
-                BoykisserInfoScreen(onBack = { finish() })
+                BoykisserInfoScreen(
+                    onBack = { finish() },
+                    onSubmitted = { finish() }
+                )
             }
         }
     }
 
     companion object {
-        const val SITE_URL = "https://boykiss3r.site"
         const val BOT_URL = "https://t.me/boykisser_vpn_bot"
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BoykisserInfoScreen(onBack: () -> Unit) {
+private fun BoykisserInfoScreen(
+    onBack: () -> Unit,
+    onSubmitted: () -> Unit
+) {
     val context = LocalContext.current
 
     fun openUrl(url: String) {
@@ -119,35 +123,68 @@ private fun BoykisserInfoScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(top = 16.dp, bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = stringResource(R.string.boykisser_info_placeholder),
-                style = MaterialTheme.typography.headlineLarge,
-                color = BoykisserMagenta,
-                textAlign = TextAlign.Center
-            )
-            Button(
-                onClick = { openUrl(BoykisserInfoActivity.SITE_URL) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = BoykisserMagenta,
-                    contentColor = Color.White
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.boykisser_info_open_site))
+            RoadmapStep(number = 1, side = HorizontalSide.Start) {
+                Text(
+                    text = stringResource(R.string.boykisser_step1_intro),
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
-            Button(
-                onClick = { openUrl(BoykisserInfoActivity.BOT_URL) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = BoykisserMagenta,
-                    contentColor = Color.White
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.boykisser_info_open_bot))
+            ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.Start)
+
+            RoadmapStep(number = 2, side = HorizontalSide.Start) {
+                Text(
+                    text = stringResource(R.string.boykisser_step2_label),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Button(
+                    onClick = { openUrl(BoykisserInfoActivity.BOT_URL) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BoykisserMagenta,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.boykisser_step2_button))
+                }
+            }
+            ArrowConnector(fromSide = HorizontalSide.Start, toSide = HorizontalSide.End)
+
+            RoadmapStep(number = 3, side = HorizontalSide.End) {
+                Text(
+                    text = stringResource(R.string.boykisser_step3_intro),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                BotMessageMock()
+                Text(
+                    text = stringResource(R.string.boykisser_step3_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            ArrowConnector(fromSide = HorizontalSide.End, toSide = HorizontalSide.Center)
+
+            RoadmapStep(number = 4, side = HorizontalSide.Center) {
+                Text(
+                    text = stringResource(R.string.boykisser_step4_label),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                PasteAndSubmit(
+                    onApproved = { approved ->
+                        context.startActivity(
+                            Intent(context, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                putExtra(MainActivity.EXTRA_ADD_BOYKISSER_SUB, approved)
+                            }
+                        )
+                        onSubmitted()
+                    }
+                )
             }
         }
     }
