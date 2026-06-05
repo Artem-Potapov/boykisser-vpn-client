@@ -38,6 +38,12 @@ class BoykisserCallbackTest {
     }
 
     @Test
+    fun validate_returnsNullForUserinfoHostSpoof() {
+        // Approved domain only in the userinfo (before '@') -> real host is evil.com.
+        assertNull(BoykisserCallback.validate("https://boykiss3r.site@evil.com/sub"))
+    }
+
+    @Test
     fun constants_matchDocumentedManifestValues() {
         assertEquals("bkvpn", BoykisserCallback.SCHEME)
         assertEquals("boykiss3r.site", BoykisserCallback.APPLINK_HOST)

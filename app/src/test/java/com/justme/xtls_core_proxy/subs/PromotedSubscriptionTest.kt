@@ -31,6 +31,20 @@ class PromotedSubscriptionTest {
     }
 
     @Test
+    fun isApprovedLink_rejectsUserinfoHostSpoof() {
+        // The host is taken from URI.getHost(), NOT the userinfo before '@'. A link that
+        // only mentions an approved domain in its userinfo resolves to the real host
+        // (evil.com) and must be rejected. This is the highest-value allowlist bypass
+        // class, so it is pinned here: a future swap of the parser (e.g. URI -> Uri.parse
+        // or hand-rolled splitting) must keep failing these.
+        assertFalse(PromotedSubscription.isApprovedLink("https://boykiss3r.site@evil.com/sub"))
+        assertFalse(PromotedSubscription.isApprovedLink("https://somenewsteps.space@evil.com/"))
+        // Inverse: foreign userinfo in front of a genuinely approved host is still that
+        // approved host, so it is correctly accepted.
+        assertTrue(PromotedSubscription.isApprovedLink("https://evil.com@boykiss3r.site/sub"))
+    }
+
+    @Test
     fun hasValidSubscription_trueForApprovedHostFetchedAtLeastOnce() {
         val valid = sub(url = "https://a.boykiss3r.site/s", lastFetchedAt = 1_000L)
         assertTrue(PromotedSubscription.hasValidSubscription(listOf(valid)))
