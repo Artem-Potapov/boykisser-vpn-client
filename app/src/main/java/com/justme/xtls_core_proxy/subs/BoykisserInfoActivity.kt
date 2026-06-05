@@ -49,9 +49,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -93,8 +93,13 @@ private fun BoykisserInfoScreen(
     onSubmitted: () -> Unit
 ) {
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val showArrows = configuration.screenHeightDp >= 800
+    // Default to showing arrows when the window hasn't measured yet (heightPx == 0):
+    // on a tall screen this avoids a one-frame flicker; on a short screen the
+    // measurement lands before the user can perceive anything.
+    val showArrows = with(LocalDensity.current) {
+        val heightPx = LocalWindowInfo.current.containerSize.height
+        heightPx == 0 || heightPx.toDp() >= 800.dp
+    }
 
     fun openUrl(url: String) {
         val opened = runCatching {
@@ -270,21 +275,20 @@ private fun ArrowConnector(
         val tLen = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(1f)
         val ux = tx / tLen
         val uy = ty / tLen
-        val perpX = -uy
-        val perpY = ux
+        // Perpendicular to the tangent (ux, uy) is (-uy, ux) — used for chevron spread.
         val spread = headLenPx * 0.4f
         val baseX = xTo - ux * headLenPx
         val baseY = yTo - uy * headLenPx
         drawLine(
             color = color,
-            start = Offset(baseX + perpX * spread, baseY + perpY * spread),
+            start = Offset(baseX - uy * spread, baseY + ux * spread),
             end = Offset(xTo, yTo),
             strokeWidth = strokeWidthPx,
             cap = StrokeCap.Round
         )
         drawLine(
             color = color,
-            start = Offset(baseX - perpX * spread, baseY - perpY * spread),
+            start = Offset(baseX + uy * spread, baseY - ux * spread),
             end = Offset(xTo, yTo),
             strokeWidth = strokeWidthPx,
             cap = StrokeCap.Round
