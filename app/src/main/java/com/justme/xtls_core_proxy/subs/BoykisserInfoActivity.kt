@@ -123,8 +123,8 @@ private fun BoykisserInfoScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(horizontal = 24.dp)
                 .padding(top = 16.dp, bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
