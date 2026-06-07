@@ -87,7 +87,7 @@ class BoykisserInfoActivity : LocalizedComponentActivity() {
     }
 
     companion object {
-        const val BOT_URL = "https://t.me/boykisser_vpn_bot"
+        const val BOT_URL = "https://t.me/boykisser_vpn_bot?start=FromApp"
     }
 }
 
