@@ -84,6 +84,8 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
+import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
+import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
 import com.justme.xtls_core_proxy.state.SubGroup
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
@@ -105,6 +107,7 @@ class MainActivity : LocalizedComponentActivity() {
     private val viewModel: VpnViewModel by viewModels()
     private var pendingProfileId: Long = -1L
     private var pendingBoykisserUrl by mutableStateOf<String?>(null)
+    private var showSideloadWarning by mutableStateOf(false)
 
     private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
@@ -151,6 +154,8 @@ class MainActivity : LocalizedComponentActivity() {
                 }
             }
         }
+        showSideloadWarning =
+            SideloadWarningRepository.shouldShow(this, BuildConfig.VERSION_CODE)
         enableEdgeToEdge()
         setContent {
             XTLS_CORE_PROXYTheme {
@@ -228,6 +233,18 @@ class MainActivity : LocalizedComponentActivity() {
                             TextButton(onClick = { pendingBoykisserUrl = null }) {
                                 Text(stringResource(R.string.add_dialog_button_cancel))
                             }
+                        }
+                    )
+                }
+
+                if (showSideloadWarning) {
+                    SideloadWarningDialog(
+                        onDismiss = {
+                            SideloadWarningRepository.markShown(
+                                this@MainActivity,
+                                BuildConfig.VERSION_CODE
+                            )
+                            showSideloadWarning = false
                         }
                     )
                 }
