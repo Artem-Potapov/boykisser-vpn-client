@@ -258,4 +258,14 @@
     <!-- Quick Settings tile -->
     <string name="tile_label">VPN</string>
     <string name="tile_toast_no_profiles">Please add a configuration in the app first</string>
+
+    <!-- Sideloading / developer-verification warning -->
+    <string name="sideload_warn_title">You could lose access to your VPN</string>
+    <string name="sideload_warn_body">Google will soon require every Android app — including ones installed outside the Play Store — to come from a developer who has verified their identity with Google. On certified devices, apps from unverified developers will be blocked. This starts THIS SEPTEMBER and will stop you from updating this app unless I hand my passport to Google — and in the future, maybe you\'ll have to hand yours too, if we don't stop it now. Don\'t sit this out — tap \"Take action\": learn how to stop it, sign the petition, and tell others before it\'s too late.</string>
+    <string name="sideload_warn_learn_more">Take action</string>
+    <!-- Campaign URL. Locale-aware: values-ru overrides with the /ru/ page. -->
+    <string name="sideload_warn_url">https://keepandroidopen.org/</string>
+    <string name="sideload_warn_dismiss">Dismiss</string>
+    <string name="settings_sideload_title">Don\'t let Google block your updates</string>
+    <string name="settings_sideload_subtitle">Why Google\'s verification rules will block updates</string>
 </resources>
