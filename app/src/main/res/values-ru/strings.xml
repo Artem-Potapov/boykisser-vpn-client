@@ -259,4 +259,13 @@
     <!-- Quick Settings tile -->
     <string name="tile_label">VPN</string>
     <string name="tile_toast_no_profiles">Сначала добавьте конфигурацию в приложении</string>
+
+    <!-- Sideloading / developer-verification warning -->
+    <string name="sideload_warn_title">Вы можете потерять доступ к VPN</string>
+    <string name="sideload_warn_body">Google скоро потребует, чтобы каждое Android-приложение — включая установленные вне Play Store — было от разработчика, подтвердившего свою личность в Google. На сертифицированных устройствах приложения от неподтверждённых разработчиков будут заблокированы. Этот процесс начнётся в СЕНТЯБРЕ этого года и запретит вам обновлять это приложение, если я не отдам свой паспорт гуглу. А в будущем может вам придётся отдать ваш, если мы это не остановим. Не оставайтесь в стороне — нажмите «Действовать»: узнайте, как остановить это, подпишите петицию и расскажите другим, пока не поздно.</string>
+    <string name="sideload_warn_learn_more">Действовать</string>
+    <string name="sideload_warn_url">https://keepandroidopen.org/ru/</string>
+    <string name="sideload_warn_dismiss">Закрыть</string>
+    <string name="settings_sideload_title">Не дайте Google заблокировать обновления</string>
+    <string name="settings_sideload_subtitle">Почему правила верификации Google заблокируют обновления</string>
 </resources>
