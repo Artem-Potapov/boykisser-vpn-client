@@ -22,6 +22,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -30,6 +34,7 @@ import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LanguageSettingsActivity
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.KillSwitchSettingsActivity
+import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.split.SplitTunnelSettingsActivity
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
@@ -62,6 +67,7 @@ private fun SettingsHubScreen(
     onOpenLanguage: () -> Unit,
 ) {
     val context = LocalContext.current
+    var showSideloadWarning by remember { mutableStateOf(false) }
     val currentLang = SupportedLanguage.current(context)
     val langLabel = when (currentLang) {
         SupportedLanguage.AUTO -> stringResource(R.string.lang_auto)
@@ -111,6 +117,15 @@ private fun SettingsHubScreen(
                 subtitle = langLabel,
                 onClick = onOpenLanguage
             )
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_sideload_title),
+                subtitle = stringResource(R.string.settings_sideload_subtitle),
+                onClick = { showSideloadWarning = true }
+            )
+            if (showSideloadWarning) {
+                SideloadWarningDialog(onDismiss = { showSideloadWarning = false })
+            }
         }
     }
 }
