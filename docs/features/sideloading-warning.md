@@ -16,12 +16,13 @@ distributed (F-Droid, IzzyOnDroid, Obtainium, direct APK).
 - `sideload/SideloadWarningRepository.kt` — SharedPreferences (`xray_prefs`,
   key `sideload_warning_last_version`); `shouldShow` / `markShown`.
 - `sideload/SideloadWarningDialog.kt` — themed Material3 `AlertDialog`;
-  "Learn more" opens `KEEP_ANDROID_OPEN_URL` (https://keepandroidopen.org/).
+  "Learn more" opens the campaign URL read from `R.string.sideload_warn_url`.
 
 ## Strings
 `sideload_warn_*` and `settings_sideload_*` in `values/strings.xml` and
-`values-ru/strings.xml`. The campaign URL is a code constant, not a string
-resource.
+`values-ru/strings.xml`. The campaign URL is a locale-aware string resource
+(`sideload_warn_url`): `values/` → `https://keepandroidopen.org/`, `values-ru/`
+→ `https://keepandroidopen.org/ru/`.
 
 ## Tests
 `app/src/test/.../sideload/SideloadWarningRepositoryTest.kt` covers the

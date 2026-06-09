@@ -12,9 +12,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.net.toUri
 import com.justme.xtls_core_proxy.R
 
-/** Campaign page explaining Google's developer-verification mandate and how to push back. */
-const val KEEP_ANDROID_OPEN_URL = "https://keepandroidopen.org/"
-
 /**
  * Themed warning that Google's developer-verification mandate threatens
  * sideloading. Reused by MainActivity (once-per-version on launch) and by the
@@ -27,13 +24,15 @@ const val KEEP_ANDROID_OPEN_URL = "https://keepandroidopen.org/"
 @Composable
 fun SideloadWarningDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
+    // Locale-aware: values-ru overrides this with the .../ru/ campaign page.
+    val learnMoreUrl = stringResource(R.string.sideload_warn_url)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sideload_warn_title)) },
         text = { Text(stringResource(R.string.sideload_warn_body)) },
         confirmButton = {
             TextButton(onClick = {
-                openUrl(context, KEEP_ANDROID_OPEN_URL)
+                openUrl(context, learnMoreUrl)
                 onDismiss()
             }) {
                 Text(stringResource(R.string.sideload_warn_learn_more))
