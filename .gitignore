@@ -23,3 +23,4 @@ xray-go/go.mod
 /app/src/main/assets/geosite.dat
 /app/src/main/assets/geosite_IR.dat
 /app/src/main/assets/geosite_RU.dat
+key.properties
