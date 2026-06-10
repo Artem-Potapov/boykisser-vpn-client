@@ -78,6 +78,15 @@ android {
         versionName = "1.0.2R"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // Real-phone ABIs only. arm64-v8a covers all modern devices; armeabi-v7a
+            // keeps older 32-bit ARM phones working (minSdk 29). x86/x86_64 are
+            // emulator / Intel-Chromebook only, so dropping them removes two of the
+            // four ~32 MB libgojni.so copies from EVERY artifact (APK and AAB alike),
+            // even though the gomobile xray.aar still contains all four.
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
 
     signingConfigs {
@@ -94,11 +103,25 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+        }
+    }
+    // Per-ABI APK delivery for the F-Droid / direct-download path: assembleRelease emits
+    // one APK per ABI (each carrying only its own ~32 MB libgojni.so), so a device
+    // downloads ~1/2 the native payload instead of all of it. The Accrescent/AAB path
+    // (bundleRelease) splits per-ABI automatically and ignores this block. isUniversalApk
+    // also emits one works-everywhere APK as a fallback for plain direct downloads.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
         }
     }
     compileOptions {
