@@ -84,10 +84,14 @@ try {
     echo "Building AAR for targets: $targets"
 
     Write-Host "Running gomobile bind..."
+    # -ldflags=-checklinkname=0: Xray-core's deps use //go:linkname against internal
+    # runtime symbols; Go 1.23+ rejects that at link time by default, so the build fails
+    # without this. Mirrors build-xray-aar.bash, which already passes it.
     Invoke-Checked {
         gomobile bind `
             "-target=$targets" `
             "-androidapi=$($AndroidApi)" `
+            "-ldflags=-checklinkname=0" `
             -o $outputPath `
             .
     } "gomobile bind failed"
