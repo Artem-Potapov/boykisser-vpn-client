@@ -1,5 +1,7 @@
 import java.util.Properties
 import java.io.FileInputStream
+import java.io.File
+import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.android.application)
@@ -15,6 +17,10 @@ if (keystorePropertiesFile!!.exists()) {
 
 val xrayAarFile = layout.projectDirectory.file("libs/xray.aar").asFile
 val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+// Single source of truth for the app version; reused in defaultConfig and the APK
+// output file names (androidComponents block below).
+val appVersionName = "1.0.2R"
 
 val buildXrayAar by tasks.registering(Exec::class) {
     group = "build setup"
@@ -75,7 +81,7 @@ android {
         minSdk = 29
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0.2R"
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -142,6 +148,51 @@ android {
         }
     }
 }
+
+// Rename build outputs to boykisser-<abi>-<buildType>-<version>.apk (default is
+// app-<abi>-<buildType>.apk). AGP 9 removed the legacy applicationVariants API, so this
+// uses androidComponents.onVariants. <abi> is "universal" for the non-split fallback APK.
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val abi = output.filters.find {
+                it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI
+            }?.identifier ?: "universal"
+            (output as com.android.build.api.variant.impl.VariantOutputImpl).outputFileName.set(
+                "boykisser-$abi-${variant.buildType}-$appVersionName.apk"
+            )
+        }
+    }
+}
+
+// Emit a <apkName>.sha256sum next to each release APK (e.g.
+// boykisser-arm64-v8a-release-1.0.2R.apk.sha256sum) on every assembleRelease. Content is
+// the standard `sha256sum` line ("<hex>  <filename>"), so users can verify with
+// `sha256sum -c <file>.sha256sum` from the output directory.
+val sha256ReleaseApks = tasks.register("sha256ReleaseApks") {
+    description = "Writes a <name>.sha256sum file next to each release APK."
+    group = "verification"
+    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
+    doLast {
+        val dir = apkDir.get().asFile
+        val apks = dir.listFiles { f -> f.isFile && f.name.endsWith(".apk") } ?: emptyArray()
+        apks.forEach { apk ->
+            val md = MessageDigest.getInstance("SHA-256")
+            apk.inputStream().buffered().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    md.update(buffer, 0, read)
+                }
+            }
+            val hex = md.digest().joinToString("") { b -> "%02x".format(b) }
+            File(dir, "${apk.name}.sha256sum").writeText("$hex  ${apk.name}\n")
+        }
+        logger.lifecycle("sha256ReleaseApks: wrote ${apks.size} .sha256sum file(s) to ${dir.path}")
+    }
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(sha256ReleaseApks) }
 
 tasks.named("preBuild") {
     dependsOn(verifyXrayAar)
