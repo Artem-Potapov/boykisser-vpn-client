@@ -86,12 +86,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            // Real-phone ABIs only. arm64-v8a covers all modern devices; armeabi-v7a
-            // keeps older 32-bit ARM phones working (minSdk 29). x86/x86_64 are
-            // emulator / Intel-Chromebook only, so dropping them removes two of the
-            // four ~32 MB libgojni.so copies from EVERY artifact (APK and AAB alike),
-            // even though the gomobile xray.aar still contains all four.
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            // arm64-v8a + armeabi-v7a cover all real phones (old and new). x86_64 is added
+            // ONLY so the universal APK (and the AAB) can run natively on x86_64 emulators /
+            // Chromebooks — the per-ABI split APKs still carry just their own ABI, so the lean
+            // arm64/armv7 downloads are unaffected. (32-bit x86 stays dropped — it's dead.)
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
         }
     }
 
