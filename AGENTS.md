@@ -168,6 +168,20 @@ Why (optional):
 - <reason 2>
 ```
 
+## Release Builds & Minification
+- Release builds set `isMinifyEnabled = true` — R8 **shrinks and optimizes**. `-dontobfuscate` in
+  `app/proguard-rules.pro` keeps names, but **do not rely on it**: write keep rules as if obfuscation
+  were enabled, so they stay correct if it is ever removed.
+- **Keep-rule rule — if your change reaches code R8's static analysis cannot see, add a matching
+  `-keep` in `app/proguard-rules.pro`.** That includes: reflection (`Class.forName`, `Method.invoke`,
+  `getDeclaredMethod`), JNI / `native` methods, dynamic class loading, and anything across the gomobile
+  `xray.aar` bridge. R8 will otherwise strip or rename it, and the breakage shows up **only at runtime**
+  (e.g. `bridge/XrayBridge.kt` → `xraybridge.**`, `go.**`). A green build does not prove safety — install
+  the release APK and exercise the path.
+- Release signing reads `key.properties` (gitignored) into `signingConfigs("release")`. The keystore key
+  must be **RSA or EC**; Android's APK Signature Scheme v2/v3 rejects **EdDSA/Ed25519**. The R8
+  `mapping.txt` (`app/build/outputs/mapping/release/`) deobfuscates production stack traces.
+
 ## Architecture Notes
 ```mermaid
 flowchart LR
@@ -230,6 +244,9 @@ logs flow through `LogRepository` back to the UI.
   contention and inconsistent outputs.
 - When nested `AGENTS.md` files exist, apply root instructions first, then append nested instructions
   from root toward the working directory.
+- Before finishing or merging a branch, run a **Release** build (`./gradlew.bat :app:assembleRelease`).
+  R8 minification, lint-vital, and signing surface problems that debug builds hide — catching them early
+  beats discovering them at release time.
 - Do not perform deploy/release publication steps without explicit maintainer approval.
 
 ## Extensibility Hooks
