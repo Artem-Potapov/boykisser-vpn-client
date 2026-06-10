@@ -72,10 +72,10 @@ android {
 
     defaultConfig {
         applicationId = "com.justme.xtls_core_proxy"
-        minSdk = 30
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0.2a"
+        versionName = "1.0.2R"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
