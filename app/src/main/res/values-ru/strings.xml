@@ -268,4 +268,10 @@
     <string name="sideload_warn_dismiss">Закрыть</string>
     <string name="settings_sideload_title">Не дайте Google заблокировать обновления</string>
     <string name="settings_sideload_subtitle">Почему правила верификации Google заблокируют обновления</string>
+
+    <!-- Name-theft warning popup -->
+    <string name="name_theft_title">⚠️ Они украли наше название</string>
+    <string name="name_theft_body">12 июня 2026 года канал «ЧВК Фембойчик» (t.me/femboiVPN) выпустил продукт под названием «Boykisser VPN». Но мы выпустили Boykisser VPN ещё в ФЕВРАЛЕ 2026 — убедитесь сами: t.me/boykisservpn_news.\n\nЕсли вы видите это сообщение, значит владелец того поддельного VPN присвоил это приложение и выдаёт его за своё.\n\nЭто приложение сделано владельцем t.me/boykisservpn_news. Настоящий Boykisser VPN — здесь: t.me/boykisser_vpn_bot.</string>
+    <string name="name_theft_dismiss">Закрыть</string>
+    <string name="name_theft_dismiss_countdown">Закрыть (%1$d)</string>
 </resources>
