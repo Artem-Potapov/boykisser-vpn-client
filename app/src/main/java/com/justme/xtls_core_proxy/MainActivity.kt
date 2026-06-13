@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -82,6 +83,8 @@ import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.nametheft.NameTheftDialog
+import com.justme.xtls_core_proxy.nametheft.NameTheftWarning
 import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
@@ -95,6 +98,7 @@ import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
 import com.justme.xtls_core_proxy.subs.SubscriptionsActivity
 import com.justme.xtls_core_proxy.ui.theme.BoykisserMagenta
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import java.time.LocalDate
 
 class MainActivity : LocalizedComponentActivity() {
 
@@ -102,6 +106,11 @@ class MainActivity : LocalizedComponentActivity() {
         const val EXTRA_TILE_AUTOCONNECT = "extra_tile_autoconnect"
         const val EXTRA_TILE_PROFILE_ID = "extra_tile_profile_id"
         const val EXTRA_ADD_BOYKISSER_SUB = "extra_add_boykisser_sub"
+
+        // TEMP: the sideload ("Keep Android Open") launch popup is disabled. The
+        // dialog, repository, strings, and the Settings-hub entry remain — flip
+        // this back to true to restore the once-per-version launch prompt.
+        const val SIDELOAD_WARNING_LAUNCH_ENABLED = false
     }
 
     private val viewModel: VpnViewModel by viewModels()
@@ -155,11 +164,22 @@ class MainActivity : LocalizedComponentActivity() {
             }
         }
         showSideloadWarning =
-            SideloadWarningRepository.shouldShow(this, BuildConfig.VERSION_CODE)
+            SIDELOAD_WARNING_LAUNCH_ENABLED &&
+                SideloadWarningRepository.shouldShow(this, BuildConfig.VERSION_CODE)
         enableEdgeToEdge()
         setContent {
             XTLS_CORE_PROXYTheme {
                 var pasteKind by rememberSaveable { mutableStateOf<PasteKind?>(null) }
+
+                val nameTheftContext = LocalContext.current
+                var nameTheftDecision by rememberSaveable { mutableStateOf<Boolean?>(null) }
+                var nameTheftDismissed by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    if (nameTheftDecision == null) {
+                        nameTheftDecision =
+                            NameTheftWarning.resolve(nameTheftContext, LocalDate.now())
+                    }
+                }
 
                 MainScreen(
                     viewModel = viewModel,
@@ -247,6 +267,10 @@ class MainActivity : LocalizedComponentActivity() {
                             showSideloadWarning = false
                         }
                     )
+                }
+
+                if (nameTheftDecision == true && !nameTheftDismissed) {
+                    NameTheftDialog(onDismiss = { nameTheftDismissed = true })
                 }
             }
         }
