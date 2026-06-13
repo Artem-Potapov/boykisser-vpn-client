@@ -174,7 +174,8 @@ private fun SubscriptionsScreen(
 ) {
     val subscriptions by viewModel.subscriptions.collectAsState()
     var pendingDelete by remember { mutableStateOf<Subscription?>(null) }
-    val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
+    // val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
+    val showPromo = false // TEMP: promoted subscription silenced — restore the line above
 
     Scaffold(
         topBar = {
