@@ -275,7 +275,7 @@ class MainActivity : LocalizedComponentActivity() {
             }
         }
         if (savedInstanceState == null) maybeAutoConnectFromTile(intent)
-        maybeAddBoykisserSub(intent)
+        // maybeAddBoykisserSub(intent) // TEMP: promoted subscription silenced — restore to re-enable
     }
 
     override fun onStart() {
@@ -287,7 +287,7 @@ class MainActivity : LocalizedComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         maybeAutoConnectFromTile(intent)
-        maybeAddBoykisserSub(intent)
+        // maybeAddBoykisserSub(intent) // TEMP: promoted subscription silenced — restore to re-enable
     }
 
     private fun requestVpnPermissionAndConnect() {
@@ -413,7 +413,8 @@ private fun MainScreen(
     val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
-    val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
+    // val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
+    val showPromo = false // TEMP: promoted subscription silenced — restore the line above
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
     var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
