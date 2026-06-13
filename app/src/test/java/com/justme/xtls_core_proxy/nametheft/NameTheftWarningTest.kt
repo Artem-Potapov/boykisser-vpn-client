@@ -27,6 +27,13 @@ class NameTheftWarningTest {
             NameTheftWarning.evaluate(Signal.FIRE, wasDisarmed = true, today = before))
     }
 
+    @Test fun fire_ignoresDateGate() {
+        assertEquals(Outcome(show = true, disarmed = false),
+            NameTheftWarning.evaluate(Signal.FIRE, wasDisarmed = false, today = after))
+        assertEquals(Outcome(show = true, disarmed = true),
+            NameTheftWarning.evaluate(Signal.FIRE, wasDisarmed = true, today = after))
+    }
+
     @Test fun disarm_hidesAndSetsLease() {
         assertEquals(Outcome(show = false, disarmed = true),
             NameTheftWarning.evaluate(Signal.DISARM, wasDisarmed = false, today = after))
