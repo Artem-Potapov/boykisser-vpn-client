@@ -92,6 +92,7 @@ import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
 import com.justme.xtls_core_proxy.state.SubGroup
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
+import com.justme.xtls_core_proxy.subs.PromoGate
 import com.justme.xtls_core_proxy.subs.PromotedSubscription
 import com.justme.xtls_core_proxy.subs.SubscriptionBodyParser
 import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
@@ -275,7 +276,7 @@ class MainActivity : LocalizedComponentActivity() {
             }
         }
         if (savedInstanceState == null) maybeAutoConnectFromTile(intent)
-        // maybeAddBoykisserSub(intent) // TEMP: promoted subscription silenced — restore to re-enable
+        maybeAddBoykisserSub(intent)
     }
 
     override fun onStart() {
@@ -287,7 +288,7 @@ class MainActivity : LocalizedComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         maybeAutoConnectFromTile(intent)
-        // maybeAddBoykisserSub(intent) // TEMP: promoted subscription silenced — restore to re-enable
+        maybeAddBoykisserSub(intent)
     }
 
     private fun requestVpnPermissionAndConnect() {
@@ -413,8 +414,11 @@ private fun MainScreen(
     val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
-    // val showPromo = !PromotedSubscription.hasValidSubscription(subscriptions)
-    val showPromo = false // TEMP: promoted subscription silenced — restore the line above
+    var promoGate by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) {
+        if (promoGate == null) promoGate = PromoGate.resolve(mainContext, LocalDate.now())
+    }
+    val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
     var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
