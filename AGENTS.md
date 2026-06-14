@@ -274,9 +274,11 @@ those domains are dormant.
   contention and inconsistent outputs.
 - When nested `AGENTS.md` files exist, apply root instructions first, then append nested instructions
   from root toward the working directory.
-- Before finishing or merging a branch, run a **Release** build (`./gradlew.bat :app:assembleRelease`).
-  R8 minification, lint-vital, and signing surface problems that debug builds hide — catching them early
-  beats discovering them at release time.
+- When finishing a **full feature** (not a small task or one-off fix), run a **Release** build
+  (`./gradlew.bat :app:assembleRelease`) before finishing/merging the branch — the stricter release
+  pipeline (R8 minification, lint-vital, and signing) surfaces problems that debug builds hide, and
+  catching them early beats discovering them at release time. For small, low-risk changes a debug build
+  plus `:app:testDebugUnitTest` is enough.
 - Do not perform deploy/release publication steps without explicit maintainer approval.
 
 ## Extensibility Hooks
