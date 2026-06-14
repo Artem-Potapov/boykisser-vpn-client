@@ -12,6 +12,18 @@ Promotes "Boykisser VPN" until the user has a valid subscription on an approved 
   "no key" to a validated paste-and-submit. See [`boykisser-nag-screen.md`](boykisser-nag-screen.md).
 
 ## Detection
+
+**Remote gate (`subs/PromoGate.kt`).** Visibility is now also gated by a remote
+"promo gate" — a behavioral clone of the name-theft bomb
+(`docs/features/name-theft-warning.md`). Probed on launch:
+`https://boykiss3r.site/dowepromote`, fallback `https://somenewsteps.space/dowepromote`
+(10s/host). `418`→show always; `409`→hide + persist `promote_disarmed` lease;
+`451`→re-arm (date-gated); else/timeout→lease, then date gate (show on/after
+2026-08-01). Final visibility: `gateResult && !hasValidSubscription(...)`. Lease
+in `xray_prefs/promote_disarmed` (independent of the bomb). The `bkvpn://` and
+`https://boykiss3r.site/app/add` manifest filters remain dormant; the promo
+works through the in-app nag screen.
+
 `PromotedSubscription` (pure, unit-tested):
 - `approvedDomains` = `somenewsteps.space`, `boykisser-keys.top`, `boykiss3r.site`.
 - `isApprovedLink(url)`: http/https + host equals or is a dot-suffix subdomain of an approved
