@@ -1,5 +1,5 @@
 # Project Overview
-XTLS Core Proxy is an Android 13+ MVP VPN client that runs Xray-core in tun-only mode without
+XTLS Core Proxy is an MVP Android VPN client (minSdk 29 / Android 10+, targets API 36) that runs Xray-core in tun-only mode without
 `tun2socks`, using an Android `VpnService` TUN interface passed into Xray through a gomobile-built
 Go bridge (`app/libs/xray.aar`). The app accepts either `vless://` URIs or raw Xray JSON, normalizes
 runtime config to a single `tun` inbound, and manages tunnel lifecycle from a Jetpack Compose UI.
@@ -34,7 +34,9 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
 │       │   │   ├── log/            LogRepository — sanitized state/log surface
+│       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
 │       │   │   ├── settings/       Per-server + settings hub screens
+│       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel feature
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel
 │       │   │   ├── subs/           Subscription fetch/parse/refresh
@@ -50,9 +52,13 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       └── test/java/...           JVM unit tests (mirrors main package structure)
 ├── docs/
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
+│   │   ├── boykisser-nag-screen.md
+│   │   ├── boykisser-vpn.md
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
-│   │   └── qs-tile-vpn-toggle.md
+│   │   ├── name-theft-warning.md
+│   │   ├── qs-tile-vpn-toggle.md
+│   │   └── sideloading-warning.md
 │   ├── qa/                         QA scenarios
 │   └── superpowers/                Working artifacts (plans/specs); specs not committed
 ├── gradle/
@@ -203,6 +209,30 @@ The UI collects user input (VLESS URI or JSON), then `VpnViewModel` converts it 
 `ConfigBuilder` and starts `XrayVpnService`. The service creates a TUN interface, passes its fd into
 `XrayBridge`, and starts/stops Xray-core through the Go mobile bridge. Connection state and sanitized
 logs flow through `LogRepository` back to the UI.
+
+## Dormant / Temporarily-Disabled Features
+These features are intentionally **switched off in the working tree**. Their code is **commented out
+at the call sites only** — every definition is kept in place as dead code. Do **not** "clean up" the
+resulting unused-symbol / unused-resource warnings by deleting the dead code, and do **not** re-enable
+them without maintainer approval. Restore by uncommenting.
+
+- **Promoted "Boykisser VPN" subscription — fully silenced.** The home banner (`MainActivity`,
+  `showPromo = false`), the Subscriptions "Recommended" row (`subs/SubscriptionsActivity`), the nag
+  screen (`subs/BoykisserInfoActivity`), and the inbound add path are all dormant. In
+  `AndroidManifest.xml` the two `subs/BoykisserLinkActivity` `<intent-filter>`s are commented out, so
+  the `bkvpn://add` **deep link** and the `https://boykiss3r.site/app/add` **App Link** no longer
+  resolve; the `MainActivity.maybeAddBoykisserSub(...)` calls are commented out too. `PromotedSubscription`,
+  `BoykisserCallback`, both Boykisser activities, and the `boykisser_*` strings remain intact. NOTE:
+  `BoykisserLinkActivity` is still declared `android:exported="true"` but now has no intent-filters, so
+  nothing can launch it implicitly. See `docs/features/boykisser-vpn.md` and `docs/features/boykisser-nag-screen.md`.
+- **Sideload "Keep Android Open" launch popup — disabled.** Gated off behind
+  `MainActivity.SIDELOAD_WARNING_LAUNCH_ENABLED = false`. The dialog, `SideloadWarningRepository`, the
+  strings, and the on-demand Settings-hub entry all remain; flip the flag to restore the once-per-version
+  launch prompt. See `docs/features/sideloading-warning.md`.
+
+Note: `boykiss3r.site` / `somenewsteps.space` are still **live** as the name-theft warning's status-probe
+hosts (`nametheft/NameTheftWarning.kt`) — that is a different, active path; only the promo *add* routes on
+those domains are dormant.
 
 ## Testing Strategy
 - Unit tests: JUnit4 tests under `app/src/test` (for example, `ConfigBuilderTest`) validate runtime
