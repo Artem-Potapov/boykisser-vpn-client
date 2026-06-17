@@ -36,6 +36,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +72,7 @@ private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
 
     var prefs by remember { mutableStateOf(KillSwitchRepository.load(context)) }
     var permissionGranted by remember { mutableStateOf(hasUsageAccess(context)) }
+    var showConsentGate by rememberSaveable { mutableStateOf(false) }
 
     // Re-check permission on every ON_RESUME so returning from system Settings
     // immediately unlocks the toggle. (LaunchedEffect(Unit) only runs once.)
@@ -147,8 +149,12 @@ private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
                 Switch(
                     checked = prefs.enabled,
                     onCheckedChange = { newValue ->
-                        KillSwitchRepository.save(context, enabled = newValue, packages = prefs.packages)
-                        prefs = KillSwitchRepository.load(context)
+                        if (newValue) {
+                            showConsentGate = true
+                        } else {
+                            KillSwitchRepository.save(context, enabled = false, packages = prefs.packages)
+                            prefs = KillSwitchRepository.load(context)
+                        }
                     },
                     enabled = permissionGranted
                 )
@@ -166,6 +172,21 @@ private fun KillSwitchSettingsScreen(onBack: () -> Unit) {
                 Text(stringResource(R.string.kill_switch_choose_apps))
             }
         }
+    }
+
+    if (showConsentGate) {
+        KillSwitchConsentDialog(
+            isFirstConsent = !KillSwitchRepository.hasConsented(context),
+            onAccept = {
+                KillSwitchRepository.save(context, enabled = true, packages = prefs.packages)
+                KillSwitchRepository.markConsented(context)
+                prefs = KillSwitchRepository.load(context)
+                showConsentGate = false
+            },
+            onDecline = {
+                showConsentGate = false
+            },
+        )
     }
 }
 
