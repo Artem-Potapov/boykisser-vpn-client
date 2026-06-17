@@ -22,6 +22,11 @@
     <string name="kill_switch_select_apps">Select apps</string>
     <string name="kill_switch_selected_count">Selected apps: %1$d</string>
     <string name="kill_switch_choose_apps">Choose apps →</string>
+    <string name="kill_switch_consent_title">⚠️ Warning: device-wide exposure</string>
+    <string name="kill_switch_consent_body">When a controlled app opens, the VPN disconnects entirely — not just for that app, but for every app on your device. Your real IP address, DNS queries, and network traffic will be visible until the app leaves the foreground.\n\nThis feature exists because some apps detect any active VPN interface and refuse to work, even when split-tunneled. Disabling the VPN completely is the only way to make them run.</string>
+    <string name="kill_switch_consent_accept">I understand</string>
+    <string name="kill_switch_consent_accept_countdown">I understand (%1$d)</string>
+    <string name="kill_switch_consent_cancel">Cancel</string>
 
     <!-- Language picker -->
     <string name="settings_language_title">Language</string>
