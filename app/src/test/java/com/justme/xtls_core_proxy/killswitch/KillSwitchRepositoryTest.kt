@@ -78,7 +78,7 @@ class KillSwitchRepositoryTest {
     }
 
     @Test
-    fun hasConsented_returnsTrue_afterMarkConsented() {
+    fun hasConsented_returnsTrue_whenPrefsStoreTrue() {
         whenever(prefs.getBoolean(eq("kill_switch_consented"), eq(false))).thenReturn(true)
 
         assertTrue(KillSwitchRepository.hasConsented(context))
