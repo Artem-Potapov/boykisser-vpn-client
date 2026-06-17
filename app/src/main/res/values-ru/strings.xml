@@ -23,6 +23,11 @@
     <string name="kill_switch_select_apps">Выбрать приложения</string>
     <string name="kill_switch_selected_count">Выбрано приложений: %1$d</string>
     <string name="kill_switch_choose_apps">Выбрать приложения →</string>
+    <string name="kill_switch_consent_title">⚠️ Внимание: все приложения будут раскрыты</string>
+    <string name="kill_switch_consent_body">Когда контролируемое приложение открывается, VPN полностью отключается — не только для этого приложения, а для всех приложений на устройстве. Ваш настоящий IP-адрес, DNS-запросы и сетевой трафик будут видны, пока приложение активно.\n\nЭта функция существует, потому что некоторые приложения определяют наличие любого VPN-интерфейса и отказываются работать, даже при раздельном туннелировании. Полное отключение VPN — единственный способ их запустить.</string>
+    <string name="kill_switch_consent_accept">Я понимаю</string>
+    <string name="kill_switch_consent_accept_countdown">Я понимаю (%1$d)</string>
+    <string name="kill_switch_consent_cancel">Отмена</string>
 
     <!-- Language picker -->
     <string name="language_cd_back">Назад</string>
