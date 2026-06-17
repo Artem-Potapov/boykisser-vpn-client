@@ -16,6 +16,7 @@ object KillSwitchRepository {
     private const val PREFS_NAME = "xray_prefs"
     private const val KEY_ENABLED = "kill_switch_enabled"
     private const val KEY_PACKAGES = "kill_switch_packages"
+    private const val KEY_CONSENTED = "kill_switch_consented"
 
     data class Preferences(
         val enabled: Boolean,
@@ -42,5 +43,15 @@ object KillSwitchRepository {
             apply()
         }
         _state.value = Preferences(enabled = enabled, packages = packages)
+    }
+
+    fun hasConsented(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_CONSENTED, false)
+    }
+
+    fun markConsented(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_CONSENTED, true).apply()
     }
 }

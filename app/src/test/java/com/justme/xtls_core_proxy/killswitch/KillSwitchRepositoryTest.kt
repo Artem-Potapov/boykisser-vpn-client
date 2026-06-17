@@ -69,4 +69,26 @@ class KillSwitchRepositoryTest {
         }
         verify(editor).apply()
     }
+
+    @Test
+    fun hasConsented_returnsFalse_whenNeverConsented() {
+        whenever(prefs.getBoolean(eq("kill_switch_consented"), eq(false))).thenReturn(false)
+
+        assertFalse(KillSwitchRepository.hasConsented(context))
+    }
+
+    @Test
+    fun hasConsented_returnsTrue_afterMarkConsented() {
+        whenever(prefs.getBoolean(eq("kill_switch_consented"), eq(false))).thenReturn(true)
+
+        assertTrue(KillSwitchRepository.hasConsented(context))
+    }
+
+    @Test
+    fun markConsented_writesTrue() {
+        KillSwitchRepository.markConsented(context)
+
+        verify(editor).putBoolean(eq("kill_switch_consented"), eq(true))
+        verify(editor).apply()
+    }
 }
