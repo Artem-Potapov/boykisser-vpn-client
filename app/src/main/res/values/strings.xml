@@ -13,6 +13,11 @@
     <string name="vpn_status_paused">Paused: %1$s is open</string>
     <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_connecting">Connecting</string>
+    <string name="vpn_exposed_title">⚠️ VPN is OFF — you\'re exposed</string>
+    <string name="vpn_exposed_text">Real IP visible to every app. %1$s is open.</string>
+    <string name="vpn_exposed_big">The VPN is OFF for every app on this device right now — not just %1$s. Your real IP address, DNS queries, and traffic are exposed until you leave that app. Protection returns automatically when it is no longer in the foreground.</string>
+    <string name="vpn_exposed_channel_name">Exposure alerts</string>
+    <string name="vpn_exposed_channel_desc">Warns when the VPN is off for all apps because a controlled app is open.</string>
     <string name="kill_switch_title">Kill-on-foreground apps</string>
     <string name="kill_switch_cd_back">Back</string>
     <string name="kill_switch_enabled">Enable kill-on-foreground</string>
@@ -23,7 +28,7 @@
     <string name="kill_switch_selected_count">Selected apps: %1$d</string>
     <string name="kill_switch_choose_apps">Choose apps →</string>
     <string name="kill_switch_consent_title">⚠️ Warning: device-wide exposure</string>
-    <string name="kill_switch_consent_body">When a controlled app opens, the VPN disconnects entirely — not just for that app, but for every app on your device. Your real IP address, DNS queries, and network traffic will be visible until the app leaves the foreground.\n\nThis feature exists because some apps detect any active VPN interface and refuse to work, even when split-tunneled. Disabling the VPN completely is the only way to make them run.</string>
+    <string name="kill_switch_consent_body">When a chosen app opens, the VPN disconnects entirely — not just for that app, but for every app on your device. Your real IP address, DNS queries, and network traffic will be visible until the app leaves the foreground.\n\nThis feature exists because some apps detect any active VPN interface and refuse to work, even when split-tunneled. Disabling the VPN completely is the only way to make them run.</string>
     <string name="kill_switch_consent_accept">I understand</string>
     <string name="kill_switch_consent_accept_countdown">I understand (%1$d)</string>
     <string name="kill_switch_consent_cancel">Cancel</string>
