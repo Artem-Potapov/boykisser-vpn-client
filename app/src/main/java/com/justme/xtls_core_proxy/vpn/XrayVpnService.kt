@@ -50,7 +50,6 @@ class XrayVpnService : VpnService() {
         const val EXTRA_PROFILE_ID = "extra_profile_id"
 
         private const val CHANNEL_ID = "xray_vpn_channel"
-        private const val NOTIFICATION_ID = 1101
         private const val ERROR_CHANNEL_ID = "xray_vpn_error_channel"
         private const val ERROR_NOTIFICATION_ID = 1102
     }
@@ -118,7 +117,7 @@ class XrayVpnService : VpnService() {
         }
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(localizedString(R.string.vpn_status_connecting)))
+        startForeground(VpnNotifications.NOTIFICATION_ID, buildNotification(localizedString(R.string.vpn_status_connecting)))
 
         // Defensive re-check: a caller (e.g. the QS tile) may have pre-flighted
         // VpnService.prepare() before dispatching ACTION_START, and the user
@@ -262,8 +261,11 @@ class XrayVpnService : VpnService() {
             LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
             try {
                 tearDownTunnel()
-                updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
+                // State first, then the notification: notify() is a silent no-op when
+                // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
+                // correct even if the exposed-notification build ever throws.
                 LogRepository.setConnectionState(VpnConnectionState.PAUSED)
+                VpnNotifications.postExposed(this@XrayVpnService, triggerPackageLabel)
             } catch (error: Throwable) {
                 LogRepository.append("killTunnel failed: ${error.message}")
                 LogRepository.setConnectionState(VpnConnectionState.ERROR)
@@ -292,8 +294,8 @@ class XrayVpnService : VpnService() {
             }
             bringUpTunnel(profile)
                 .onSuccess {
-                    updateNotification(localizedString(R.string.vpn_status_connected))
                     LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                    updateNotification(localizedString(R.string.vpn_status_connected))
                 }
                 .onFailure { error ->
                     LogRepository.append("reviveTunnel failed: ${error.message}")
@@ -433,6 +435,8 @@ class XrayVpnService : VpnService() {
         )
         errorChannel.description = localizedString(R.string.vpn_error_channel_description)
         manager.createNotificationChannel(errorChannel)
+
+        VpnNotifications.createExposedChannel(this)
     }
 
     private fun buildNotification(contentText: String): Notification {
@@ -456,7 +460,7 @@ class XrayVpnService : VpnService() {
 
     private fun updateNotification(contentText: String) {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(contentText))
+        manager.notify(VpnNotifications.NOTIFICATION_ID, buildNotification(contentText))
     }
 
     private fun postReviveErrorNotification() {
