@@ -92,6 +92,7 @@ class KillSwitchConsentGateTest {
 
             waitForGateToOpen()
             composeRule.onNodeWithText(str(R.string.kill_switch_consent_accept)).performClick()
+            // The repository write after accept is async; wait (≤2s) for it to land before asserting.
             composeRule.waitUntil(timeoutMillis = 2_000) {
                 KillSwitchRepository.load(context).enabled
             }
@@ -105,6 +106,8 @@ class KillSwitchConsentGateTest {
             composeRule.waitForIdle()
             composeRule.onNode(isToggleable()).performClick()
             composeRule.onNodeWithText(str(R.string.kill_switch_consent_title)).assertIsDisplayed()
+            // During the countdown, cancel must be inert (mirrors the security guard in test 1).
+            composeRule.onNodeWithText(str(R.string.kill_switch_consent_cancel)).assertIsNotEnabled()
 
             waitForGateToOpen()
             composeRule.onNodeWithText(str(R.string.kill_switch_consent_cancel)).performClick()
