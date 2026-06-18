@@ -146,11 +146,23 @@ class KillSwitchConsentGateTest {
             composeRule.onNode(isToggleable()).performClick()
             composeRule.onNodeWithText(str(R.string.kill_switch_consent_title)).assertIsDisplayed()
 
-            scenario.recreate()
+            // Let the first-consent countdown tick down from 5 so we can prove rotation
+            // PRESERVES progress rather than resetting to the full duration.
+            val midLabel = str(R.string.kill_switch_consent_accept_countdown, 3)
+            composeRule.waitUntil(timeoutMillis = 4_000) {
+                composeRule.onAllNodesWithText(midLabel).fetchSemanticsNodes().isNotEmpty()
+            }
+
+            scenario.recreate() // config change mid-countdown
             composeRule.waitForIdle()
 
+            // No bypass: gate still up, nothing committed.
             composeRule.onNodeWithText(str(R.string.kill_switch_consent_title)).assertIsDisplayed()
             assertFalse(KillSwitchRepository.load(context).enabled)
+            // Not reset to full: the "(5)" label must not reappear. A `remember` (non-saveable)
+            // regression would restart at 5 and fail here; rememberSaveable restores the elapsed value.
+            composeRule.onNodeWithText(str(R.string.kill_switch_consent_accept_countdown, 5))
+                .assertDoesNotExist()
         }
     }
 }

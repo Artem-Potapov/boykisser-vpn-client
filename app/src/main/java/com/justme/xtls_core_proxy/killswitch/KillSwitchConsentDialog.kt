@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.killswitch
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +35,10 @@ fun KillSwitchConsentDialog(
             remaining -= 1
         }
     }
+
+    // Block back while the countdown runs; after it completes this handler disables and
+    // back falls through to AlertDialog's dismissOnBackPress (= canAct), which declines.
+    BackHandler(enabled = !canAct) {}
 
     AlertDialog(
         onDismissRequest = { onDecline() },
