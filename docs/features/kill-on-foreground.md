@@ -72,10 +72,13 @@ When kill fires for an app that is also in the split-tunnel list, the tunnel is 
 
 ## Notifications
 
-Two channels, by design:
+Three channels, by design (actual ids in code are `xray_vpn_*`):
 
-- **`vpn_channel`** (low importance): the existing foreground-service status notification. Flips between "Connected" and "Paused: \<app label\> is open" via [`LogRepository`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt)/`VpnConnectionState`. Silent.
-- **`vpn_error_channel`** (default importance): posts when `reviveTunnel()` fails. Distinct ID so it survives the foreground service stopping. Tapping opens `MainActivity`. The kill path is silent on failure because the user is actively in the controlled app and will see it complain anyway; the revive path is loud because the user is not in our app and would otherwise not learn the VPN died.
+- **`xray_vpn_channel`** (low importance, silent): the foreground-service status notification for the **connected/connecting** state. Updated in place under `NOTIFICATION_ID = 1101`.
+- **`xray_vpn_exposed_channel`** (high importance, heads-up): the **paused/exposed** indicator. While a controlled app holds the tunnel down, `killTunnel` posts this via `VpnNotifications.postExposed(...)` under the **same** `NOTIFICATION_ID = 1101`, so it replaces the connected notification in place (no stacking). It spells out — via `BigTextStyle`, a red accent, and the trigger app's label — that the VPN is OFF for *every* app and the real IP is exposed. `reviveTunnel` reverts to the low-channel connected notification automatically. A new channel id is required because Android ignores app-side importance increases on an existing channel.
+- **`xray_vpn_error_channel`** (default importance): posts when `reviveTunnel()` fails, under a distinct id (`1102`) so it survives the foreground service stopping. Tapping opens `MainActivity`.
+
+State writes (`setConnectionState`) are ordered **ahead of** the notification post, and `NotificationManager.notify()` is a silent no-op when `POST_NOTIFICATIONS` is denied, so a missing notification permission never stalls the paused↔connected state machine.
 
 ## Known limitations
 
