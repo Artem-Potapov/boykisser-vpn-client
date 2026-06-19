@@ -1,7 +1,9 @@
 package com.justme.xtls_core_proxy.vpn
 
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -32,5 +34,20 @@ class VpnNotificationsTest {
         // no-op when denied). Passes whether or not the permission is granted.
         VpnNotifications.createExposedChannel(context)
         VpnNotifications.postExposed(context, "Test App")
+    }
+
+    @Test
+    fun buildExposed_attachesDeleteIntent() {
+        // The exposed notification must carry a deleteIntent so the service can re-post it
+        // when the user swipes it away (Android 14+ makes ongoing FGS notifications
+        // user-dismissable, with no flag to prevent it).
+        val deleteIntent = PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent("com.justme.xtls_core_proxy.test.DISMISS"),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = VpnNotifications.buildExposed(context, "Test App", deleteIntent)
+        assertEquals(deleteIntent, notification.deleteIntent)
     }
 }

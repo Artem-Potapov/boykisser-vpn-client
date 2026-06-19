@@ -47,6 +47,10 @@ class XrayVpnService : VpnService() {
     companion object {
         const val ACTION_START = "com.justme.xtls_core_proxy.action.START"
         const val ACTION_STOP = "com.justme.xtls_core_proxy.action.STOP"
+        // Fired by the ongoing notification's deleteIntent when the user swipes it away.
+        // Android 14+ makes ongoing foreground-service notifications user-dismissable with
+        // no opt-out flag, so we re-post to keep the status persistent while the VPN runs.
+        const val ACTION_NOTIFICATION_DISMISSED = "com.justme.xtls_core_proxy.action.NOTIFICATION_DISMISSED"
         const val EXTRA_PROFILE_ID = "extra_profile_id"
 
         private const val CHANNEL_ID = "xray_vpn_channel"
@@ -59,6 +63,10 @@ class XrayVpnService : VpnService() {
     private var running = false
 
     @Volatile private var currentProfileId: Long = -1L
+
+    // Last controlled-app label that triggered the exposed state; used to rebuild the
+    // exposed notification if the user swipes it away while paused.
+    @Volatile private var lastTriggerLabel: String = ""
 
     private var killSwitchMonitor: UsageStatsForegroundAppMonitor? = null
     private var screenReceiver: BroadcastReceiver? = null
@@ -89,6 +97,13 @@ class XrayVpnService : VpnService() {
             }
 
             ACTION_STOP -> stopVpn()
+
+            ACTION_NOTIFICATION_DISMISSED -> {
+                // User swiped the ongoing notification (allowed on Android 14+). Re-post it
+                // so the connected/exposed status stays visible while the VPN runs; if we are
+                // no longer running this was a stale delivery, so just clean up.
+                if (running) repostOngoingNotification() else stopSelf()
+            }
         }
         return START_NOT_STICKY
     }
@@ -265,7 +280,12 @@ class XrayVpnService : VpnService() {
                 // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
                 // correct even if the exposed-notification build ever throws.
                 LogRepository.setConnectionState(VpnConnectionState.PAUSED)
-                VpnNotifications.postExposed(this@XrayVpnService, triggerPackageLabel)
+                lastTriggerLabel = triggerPackageLabel
+                VpnNotifications.postExposed(
+                    this@XrayVpnService,
+                    triggerPackageLabel,
+                    notificationDismissIntent()
+                )
             } catch (error: Throwable) {
                 LogRepository.append("killTunnel failed: ${error.message}")
                 LogRepository.setConnectionState(VpnConnectionState.ERROR)
@@ -455,12 +475,46 @@ class XrayVpnService : VpnService() {
             .setContentText(contentText)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setDeleteIntent(notificationDismissIntent())
             .build()
     }
 
     private fun updateNotification(contentText: String) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(VpnNotifications.NOTIFICATION_ID, buildNotification(contentText))
+    }
+
+    /**
+     * PendingIntent fired when the user swipes away the ongoing FGS notification.
+     * Android 14+ makes ongoing FGS notifications user-dismissable with no opt-out
+     * flag, so the deleteIntent lets us re-post and keep the status visible. Targets
+     * this already-running foreground service, so getService is not background-blocked.
+     */
+    private fun notificationDismissIntent(): PendingIntent {
+        val intent = Intent(this, XrayVpnService::class.java)
+            .setAction(ACTION_NOTIFICATION_DISMISSED)
+        return PendingIntent.getService(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /** Re-posts the notification matching the current state after a user dismissal. */
+    private fun repostOngoingNotification() {
+        when (LogRepository.connectionState.value) {
+            VpnConnectionState.PAUSED ->
+                VpnNotifications.postExposed(this, lastTriggerLabel, notificationDismissIntent())
+            VpnConnectionState.CONNECTING ->
+                updateNotification(localizedString(R.string.vpn_status_connecting))
+            VpnConnectionState.CONNECTED ->
+                updateNotification(localizedString(R.string.vpn_status_connected))
+            VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR -> {
+                // Nothing ongoing to restore.
+            }
+        }
     }
 
     private fun postReviveErrorNotification() {
