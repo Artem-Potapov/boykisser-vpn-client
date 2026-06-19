@@ -59,7 +59,7 @@ internal object VpnNotifications {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(context, EXPOSED_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_vpn_tile)
+            .setSmallIcon(R.drawable.boykisser_notification_icon)
             .setColor(ContextCompat.getColor(context, R.color.warning_red))
             .setContentTitle(localized(context, R.string.vpn_exposed_title))
             .setContentText(localized(context, R.string.vpn_exposed_text, triggerLabel))

@@ -450,7 +450,7 @@ class XrayVpnService : VpnService() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.boykisser_notification_icon)
             .setContentTitle(localizedString(R.string.vpn_notification_title))
             .setContentText(contentText)
             .setContentIntent(pendingIntent)
@@ -481,7 +481,7 @@ class XrayVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val notification = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.boykisser_notification_icon)
             .setContentTitle(localizedString(R.string.vpn_notification_title))
             .setContentText(localizedString(messageRes))
             .setContentIntent(pendingIntent)
