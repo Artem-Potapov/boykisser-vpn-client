@@ -102,7 +102,12 @@ class XrayVpnService : VpnService() {
                 // User swiped the ongoing notification (allowed on Android 14+). Re-post it
                 // so the connected/exposed status stays visible while the VPN runs; if we are
                 // no longer running this was a stale delivery, so just clean up.
-                if (running) repostOngoingNotification() else stopSelf()
+                // Marshal the re-post onto tunnelOpScope so it serializes behind any in-flight
+                // kill/revive (which write the same NOTIFICATION_ID); a swipe mid-transition then
+                // reads the settled state instead of racing the authoritative notification writer.
+                // If the VPN has stopped by the time it runs, connectionState is DISCONNECTED and
+                // repostOngoingNotification() is a no-op.
+                if (running) tunnelOpScope.launch { repostOngoingNotification() } else stopSelf()
             }
         }
         return START_NOT_STICKY
