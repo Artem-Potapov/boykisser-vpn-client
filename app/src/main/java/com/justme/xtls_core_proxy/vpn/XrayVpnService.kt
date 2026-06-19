@@ -480,6 +480,11 @@ class XrayVpnService : VpnService() {
             .setContentText(contentText)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            // Show the FGS notification immediately. Android 12+ otherwise defers the
+            // foreground-service notification up to 10s (the system decides per start), which
+            // left the status notification missing on cold/first connects. specialUse is not a
+            // deferral-exempt FGS type, so we must opt out of deferral explicitly.
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setOnlyAlertOnce(true)
             .setDeleteIntent(notificationDismissIntent())
             .build()
