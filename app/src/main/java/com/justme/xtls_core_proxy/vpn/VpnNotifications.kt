@@ -49,7 +49,11 @@ internal object VpnNotifications {
     }
 
     /** Builds the alarming exposure notification (red accent, BigText, trigger label). */
-    fun buildExposed(context: Context, triggerLabel: String): Notification {
+    fun buildExposed(
+        context: Context,
+        triggerLabel: String,
+        deleteIntent: PendingIntent? = null,
+    ): Notification {
         val contentIntent = PendingIntent.getActivity(
             context,
             0,
@@ -69,6 +73,8 @@ internal object VpnNotifications {
             )
             .setContentIntent(contentIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setDeleteIntent(deleteIntent)
             .build()
     }
 
@@ -77,8 +83,8 @@ internal object VpnNotifications {
      * `NotificationManager.notify()` is a silent no-op (does not throw) when
      * POST_NOTIFICATIONS is denied, so this never stalls the caller.
      */
-    fun postExposed(context: Context, triggerLabel: String) {
+    fun postExposed(context: Context, triggerLabel: String, deleteIntent: PendingIntent? = null) {
         context.getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildExposed(context, triggerLabel))
+            .notify(NOTIFICATION_ID, buildExposed(context, triggerLabel, deleteIntent))
     }
 }
