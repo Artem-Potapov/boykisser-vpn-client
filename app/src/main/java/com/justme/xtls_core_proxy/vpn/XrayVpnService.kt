@@ -258,6 +258,12 @@ class XrayVpnService : VpnService() {
             LogRepository.append("TUN established with fd=$fd")
             LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
 
+            // Loop-avoidance: Xray's own sockets bypass the tun via protect().
+            // Must succeed before Xray dials, or (with self-exclusion removed in
+            // Task 2) the proxy socket would route into the tun and loop. getOrThrow()
+            // also surfaces a controller-install failure from the Go bridge.
+            XrayBridge.registerProtector(this@XrayVpnService).getOrThrow()
+
             XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
             LogRepository.append("Xray core started")
         }
