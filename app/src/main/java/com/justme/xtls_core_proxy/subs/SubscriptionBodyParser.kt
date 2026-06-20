@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.subs
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
@@ -22,17 +23,13 @@ object SubscriptionBodyParser {
 
     fun parseBody(body: String): ParseOutcome {
         val effective = decodeOuterBase64IfApplicable(body.trim())
-        val lines = effective.split("\r\n", "\n")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("#") }
-            .filter { it.contains("://") || it.contains("{") || looksLikeBase64Line(it) }
+        val candidates = extractCandidates(effective)
 
         val parsed = mutableListOf<ParsedConfig>()
         var errors = 0
         val nameCounts = mutableMapOf<String, Int>()
 
-        for ((index, raw) in lines.withIndex()) {
-            val candidate = unwrapPerLineBase64(raw) ?: raw
+        for ((index, candidate) in candidates.withIndex()) {
             val result = runCatching {
                 val storage = ConfigBuilder.toProfileStorageConfig(candidate)
                 val dirty = ConfigBuilder.dnsDiagnosis(storage) == ConfigBuilder.DnsStatus.DIRTY
@@ -50,6 +47,45 @@ object SubscriptionBodyParser {
             parsed += ParsedConfig(displayName = unique, config = finalConfig, sanitizedDns = dirty)
         }
         return ParseOutcome(parsed = parsed, parseErrorCount = errors)
+    }
+
+    /**
+     * Splits a subscription body into individual candidate config strings.
+     *
+     * A whole-body JSON document — a single config object (`{…}`) or an array of them (`[…]`) — is
+     * detected up front and kept intact. Without this, the newline split below shatters a
+     * pretty-printed JSON config into per-line fragments that each fail to parse, so a valid
+     * single-config subscription yields zero profiles. Everything else (vless:// lists, base64
+     * blobs, one config per line) goes through the line-oriented path with per-line base64
+     * unwrapping, exactly as before.
+     */
+    private fun extractCandidates(effective: String): List<String> {
+        wholeJsonCandidates(effective)?.let { return it }
+        return effective.split("\r\n", "\n")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .filter { it.contains("://") || it.contains("{") || looksLikeBase64Line(it) }
+            .map { unwrapPerLineBase64(it) ?: it }
+    }
+
+    /**
+     * Returns candidate config strings when [effective] is a single JSON document, or null to fall
+     * back to line parsing. A malformed JSON document also returns null (fall back), preserving the
+     * prior best-effort behavior rather than discarding the whole body.
+     */
+    private fun wholeJsonCandidates(effective: String): List<String>? {
+        val trimmed = effective.trim()
+        return when {
+            trimmed.startsWith("[") -> runCatching {
+                val arr = JSONArray(trimmed)
+                (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.toString() }
+            }.getOrNull()?.takeIf { it.isNotEmpty() }
+            trimmed.startsWith("{") -> runCatching {
+                JSONObject(trimmed) // validate; throws if malformed -> fall back to line parsing
+                listOf(trimmed)
+            }.getOrNull()
+            else -> null
+        }
     }
 
     private fun decodeOuterBase64IfApplicable(trimmed: String): String {
