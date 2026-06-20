@@ -68,6 +68,16 @@ class ConfigBuilderDnsTest {
     }
 
     @Test
+    fun makeSecureDns_injectsBothCloudflareServersAsFallback() {
+        // No secure resolver present -> inject primary + secondary for serialQuery failover.
+        val servers = JSONObject(ConfigBuilder.makeSecureDns(absent))
+            .getJSONObject("dns").getJSONArray("servers")
+        assertEquals(2, servers.length())
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH, servers.getString(0))
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH_SECONDARY, servers.getString(1))
+    }
+
+    @Test
     fun makeSecureDns_stripsPlaintextResolver() {
         val cfg = """
             {"dns":{"servers":["8.8.8.8","1.0.0.1"]},
