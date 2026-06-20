@@ -116,11 +116,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmDnsFixAndAdd() {
         val warning = _dnsWarning.value ?: return
         viewModelScope.launch {
-            val secured = ConfigBuilder.makeSecureDns(
-                ConfigBuilder.toProfileStorageConfig(warning.rawConfig)
-            )
-            dao.insert(Profile(name = warning.name, config = secured, sanitizedDns = true))
-            _dnsWarning.value = null
+            try {
+                val secured = ConfigBuilder.makeSecureDns(
+                    ConfigBuilder.toProfileStorageConfig(warning.rawConfig)
+                )
+                dao.insert(Profile(name = warning.name, config = secured, sanitizedDns = true))
+            } catch (t: Throwable) {
+                LogRepository.append("confirmDnsFixAndAdd: failed to insert secured profile: ${t.message}")
+            } finally {
+                _dnsWarning.value = null
+            }
         }
     }
 
