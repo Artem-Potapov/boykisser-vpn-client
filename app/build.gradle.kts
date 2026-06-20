@@ -20,7 +20,7 @@ val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase =
 
 // Single source of truth for the app version; reused in defaultConfig and the APK
 // output file names (androidComponents block below).
-val appVersionName = "2.0.0PRE"
+val appVersionName = "2.0.0R"
 
 val buildXrayAar by tasks.registering(Exec::class) {
     group = "build setup"
