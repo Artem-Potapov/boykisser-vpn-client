@@ -117,8 +117,12 @@ intent-filter, which is all the always-on / boot mechanism needs.
 - **Crash leak gap** (above) — auto-recovery, not a sealed gap; lockdown is the only seal and is a
   separate concern.
 - **Custom-dialer configs aren't protected.** `RegisterDialerController` only takes effect with Xray's
-  default system dialer. This app only produces standard `vless` / `freedom` outbounds (default
-  dialer), so it never fires; a config installing a custom dialer is not a path this app produces.
+  default system dialer. This app produces standard VLESS, Hysteria2, `freedom`, `blackhole`, and `dns`
+  outbounds through Xray's default dialer; a config installing a custom dialer is not a path this app
+  produces. **Hysteria2 caveat:** it rides QUIC/UDP, so whether its sockets actually go through the
+  default dialer (and are therefore `protect()`'d out of the tun) is **device-unverified** — release-device
+  QA must confirm the global controller covers them before Hysteria2 is declared supported. See
+  [hysteria2-support.md](hysteria2-support.md).
 
 ## Testing
 

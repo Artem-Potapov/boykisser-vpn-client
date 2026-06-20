@@ -38,7 +38,7 @@ that's merely missing DoH is fixed silently, with no nag).
 ```jsonc
 "dns": { "servers": ["https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"], "queryStrategy": "UseIP" }
 "outbounds": [
-  { "tag": "proxy", "protocol": "vless", ...,
+  { "tag": "proxy", "protocol": "vless" | "hysteria", ...,
     "streamSettings": { ..., "sockopt": { "domainStrategy": "ForceIP" } } },  // server-name bootstrap → DoH
   ... ,
   { "tag": "dns-out", "protocol": "dns" }
