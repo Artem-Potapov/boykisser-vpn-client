@@ -27,17 +27,11 @@ object ConfigBuilder {
     }
 
     fun fromJson(raw: String): String {
-        val root = JSONObject(raw)
-        val inbounds = root.optJSONArray("inbounds") ?: JSONArray()
-        rejectLocalProxyInbounds(inbounds)
-
-        root.put("inbounds", JSONArray().put(tunInboundJson()))
-
-        if (!root.has("outbounds")) {
+        val sanitized = replaceJsonInboundsWithTun(raw)
+        if (!JSONObject(sanitized).has("outbounds")) {
             throw IllegalArgumentException("Runtime config must include outbounds")
         }
-
-        return root.toString()
+        return sanitized
     }
 
     fun toProfileStorageConfig(input: String): String {
@@ -50,14 +44,10 @@ object ConfigBuilder {
         }
     }
 
-    private fun rejectLocalProxyInbounds(inbounds: JSONArray) {
-        for (index in 0 until inbounds.length()) {
-            val inbound = inbounds.optJSONObject(index) ?: continue
-            val protocol = inbound.optString("protocol").lowercase()
-            if (protocol == "socks" || protocol == "http") {
-                throw IllegalArgumentException("Local $protocol inbound is not allowed in tun-only mode")
-            }
-        }
+    fun replaceJsonInboundsWithTun(config: String): String {
+        val root = JSONObject(config)
+        root.put("inbounds", JSONArray().put(tunInboundJson()))
+        return root.toString()
     }
 
     private fun buildXrayJson(profile: VlessProfile): JSONObject {
