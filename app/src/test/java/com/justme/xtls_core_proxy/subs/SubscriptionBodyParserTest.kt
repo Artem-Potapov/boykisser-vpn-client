@@ -190,6 +190,17 @@ class SubscriptionBodyParserTest {
     }
 
     @Test
+    fun parsesHysteria2WithUnencodedFragment() {
+        // An unencoded space in the #fragment must not cause the whole entry to be dropped.
+        val link = "hysteria2://secret@hy.example.com:443/?sni=cdn.hy.example.com#My US Server"
+        val outcome = SubscriptionBodyParser.parseBody("$link\n")
+
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(1, outcome.parsed.size)
+        assertEquals("My US Server", outcome.parsed[0].displayName)
+    }
+
+    @Test
     fun parsesBase64WrappedHysteria2Body() {
         val encoded = Base64.getEncoder().encodeToString("$hysteria2\n$hysteria2NoFragment".toByteArray())
         val outcome = SubscriptionBodyParser.parseBody(encoded)

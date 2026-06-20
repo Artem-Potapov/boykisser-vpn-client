@@ -51,6 +51,14 @@ class ClipboardAddRouterTest {
     }
 
     @Test
+    fun hysteria2WithUnencodedFragment_returnsHysteria2() {
+        // Provider links commonly carry unencoded spaces/emoji in the #fragment; this must
+        // not classify the link as Invalid.
+        val uri = "hysteria2://secret@example.com:443/?sni=cdn.example.com#US Server 1"
+        assertEquals(ClipboardKind.Hysteria2(uri), ClipboardAddRouter.classify(uri))
+    }
+
+    @Test
     fun hysteria2MissingAuthOrBadObfs_returnsInvalid() {
         assertEquals(ClipboardKind.Invalid, ClipboardAddRouter.classify("hysteria2://example.com:443/"))
         assertEquals(ClipboardKind.Invalid, ClipboardAddRouter.classify("hy2://secret@example.com:443/?obfs=gecko"))

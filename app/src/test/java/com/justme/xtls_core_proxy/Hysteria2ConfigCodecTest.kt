@@ -335,4 +335,69 @@ class Hysteria2ConfigCodecTest {
     fun parseUri_rejectsInvalidMultiPort() {
         Hysteria2ConfigCodec.parseUri("hy2://secret@example.com:443,70000/")
     }
+
+    @Test
+    fun parseUri_acceptsUnencodedFragment() {
+        // Real-world share links carry unencoded spaces/emoji in the #fragment; java.net.URI
+        // rejects those unless the fragment is stripped before parsing. The fragment is not
+        // used by parseUri (display name is derived separately), so it must not block parsing.
+        val profile = Hysteria2ConfigCodec.parseUri(
+            "hysteria2://secret@example.com:443/?sni=cdn.example.com#US Server 1"
+        )
+
+        assertEquals("secret", profile.auth)
+        assertEquals("example.com", profile.host)
+        assertEquals(443, profile.port)
+        assertEquals("cdn.example.com", profile.serverName)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun parseUri_rejectsSalamanderWithoutPassword() {
+        // obfs=salamander with no obfs-password would silently build a no-obfs config that
+        // cannot connect; the spec makes a missing required obfs setting a hard failure.
+        Hysteria2ConfigCodec.parseUri("hysteria2://secret@example.com:443/?obfs=salamander")
+    }
+
+    @Test
+    fun mergeProfileIntoJson_preservesSockoptAndUnknownStreamSettingsKeys() {
+        // makeSecureDns stamps sockopt.domainStrategy=ForceIP onto the stored config; a simple-editor
+        // save must not discard it (nor unknown streamSettings keys) when merging the edited profile.
+        val source = """
+            {
+              "outbounds": [{
+                "tag": "proxy",
+                "protocol": "hysteria",
+                "settings": { "version": 2, "address": "old.example.com", "port": 443 },
+                "streamSettings": {
+                  "network": "hysteria",
+                  "security": "tls",
+                  "tlsSettings": { "serverName": "old.example.com" },
+                  "hysteriaSettings": { "version": 2, "auth": "old" },
+                  "sockopt": { "domainStrategy": "ForceIP" },
+                  "customKey": "keep-me"
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val merged = Hysteria2ConfigCodec.mergeProfileIntoJson(
+            source,
+            Hysteria2Profile(
+                auth = "new",
+                host = "new.example.com",
+                port = 8443,
+                serverName = "cdn.new.example.com",
+                alpn = "h3"
+            )
+        )
+
+        val ss = JSONObject(merged)
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("streamSettings")
+        assertEquals("ForceIP", ss.getJSONObject("sockopt").getString("domainStrategy"))
+        assertEquals("keep-me", ss.getString("customKey"))
+        assertEquals("new", ss.getJSONObject("hysteriaSettings").getString("auth"))
+        assertEquals("cdn.new.example.com", ss.getJSONObject("tlsSettings").getString("serverName"))
+    }
 }
