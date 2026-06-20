@@ -163,6 +163,11 @@ object SubscriptionBodyParser {
     internal fun deriveJsonDisplayName(rawJson: String, index: Int): String {
         return runCatching {
             val root = JSONObject(rawJson)
+
+            // Prefer the human-facing label many providers ship at the top level (e.g.
+            // "remarks": "🇵🇱Польша PL-W1"); it beats the generic outbound tag ("proxy").
+            root.optString("remarks").takeIf { it.isNotBlank() }?.let { return@runCatching it }
+
             val outbounds = root.optJSONArray("outbounds")
             val first = outbounds?.optJSONObject(0)
             first?.optString("tag")?.takeIf { it.isNotBlank() }?.let { return@runCatching it }

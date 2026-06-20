@@ -121,6 +121,43 @@ class SubscriptionBodyParserTest {
     }
 
     @Test
+    fun jsonConfigPrefersTopLevelRemarksOverOutboundTag() {
+        val withRemarks = """
+            {
+              "remarks": "🇵🇱Польша PL-W1",
+              "outbounds": [
+                {
+                  "tag": "proxy",
+                  "protocol": "vless",
+                  "settings": {
+                    "vnext": [
+                      {
+                        "address": "json.example.com",
+                        "port": 443,
+                        "users": [
+                          {
+                            "id": "44444444-4444-4444-4444-444444444444",
+                            "encryption": "none"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "streamSettings": {
+                    "network": "tcp",
+                    "security": "none"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+        val outcome = SubscriptionBodyParser.parseBody(withRemarks)
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(1, outcome.parsed.size)
+        assertEquals("🇵🇱Польша PL-W1", outcome.parsed[0].displayName)
+    }
+
+    @Test
     fun parsesPlainNewlineSeparatedVless() {
         val outcome = SubscriptionBodyParser.parseBody(
             "$vlessReality\n$vlessTls\n$vlessNoFragment\n"
