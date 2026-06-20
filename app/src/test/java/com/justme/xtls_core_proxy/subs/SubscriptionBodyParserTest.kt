@@ -43,6 +43,83 @@ class SubscriptionBodyParserTest {
         }
     """.trimIndent().replace("\n", " ")
 
+    // Pretty-printed (multi-line) single JSON config, as real subscription endpoints emit it.
+    // Mirrors the failing real-world body: a "mixed" (socks+http) inbound, a plaintext-DNS block,
+    // and routing with no port-53 rule. Every object is expanded so no single line is valid JSON.
+    private val prettyJsonConfig = """
+        {
+          "dns": {
+            "servers": [
+              {
+                "address": "8.8.8.8"
+              }
+            ]
+          },
+          "inbounds": [
+            {
+              "port": 10808,
+              "protocol": "mixed",
+              "tag": "mixed"
+            }
+          ],
+          "outbounds": [
+            {
+              "tag": "proxy",
+              "protocol": "vless",
+              "settings": {
+                "vnext": [
+                  {
+                    "address": "json.example.com",
+                    "port": 443,
+                    "users": [
+                      {
+                        "id": "44444444-4444-4444-4444-444444444444",
+                        "encryption": "none"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "streamSettings": {
+                "network": "tcp",
+                "security": "none"
+              }
+            },
+            {
+              "tag": "direct",
+              "protocol": "freedom"
+            }
+          ],
+          "routing": {
+            "rules": [
+              {
+                "type": "field",
+                "outboundTag": "proxy",
+                "network": "tcp,udp"
+              }
+            ]
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun parsesMultiLinePrettyJsonConfigBody() {
+        val outcome = SubscriptionBodyParser.parseBody(prettyJsonConfig)
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(1, outcome.parsed.size)
+        val runtime = ConfigBuilder.buildRuntimeConfig(outcome.parsed[0].config)
+        // Inbounds collapsed to the single tun inbound; plaintext 8.8.8.8 replaced by DoH.
+        assertTrue(runtime.contains("\"protocol\":\"tun\""))
+        assertTrue(runtime.contains(ConfigBuilder.CLOUDFLARE_DOH))
+    }
+
+    @Test
+    fun parsesJsonArrayOfConfigs() {
+        val outcome = SubscriptionBodyParser.parseBody("[\n$prettyJsonConfig,\n$prettyJsonConfig\n]")
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(2, outcome.parsed.size)
+    }
+
     @Test
     fun parsesPlainNewlineSeparatedVless() {
         val outcome = SubscriptionBodyParser.parseBody(
