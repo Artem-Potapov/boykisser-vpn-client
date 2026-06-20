@@ -68,36 +68,78 @@ class ConfigBuilderTest {
         assertEquals("tun", inbound.getString("protocol"))
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun fromJson_rejectsSocksInbound() {
+    @Test
+    fun fromJson_sanitizesSocksInbound() {
         val input = """
             {
-              "inbounds": [
-                {"protocol": "socks", "tag": "loopback"}
-              ],
-              "outbounds": [
-                {"protocol": "freedom", "tag": "direct"}
-              ]
+              "inbounds": [{"protocol": "socks", "tag": "loopback"}],
+              "outbounds": [{"protocol": "freedom", "tag": "direct"}]
             }
         """.trimIndent()
 
-        ConfigBuilder.fromJson(input)
+        val config = JSONObject(ConfigBuilder.fromJson(input))
+        val inbounds = config.getJSONArray("inbounds")
+
+        assertEquals(1, inbounds.length())
+        assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun fromJson_rejectsHttpInbound() {
+    @Test
+    fun fromJson_sanitizesHttpInbound() {
+        val input = """
+            {
+              "inbounds": [{"protocol": "http", "tag": "loopback"}],
+              "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+            }
+        """.trimIndent()
+
+        val config = JSONObject(ConfigBuilder.fromJson(input))
+        val inbounds = config.getJSONArray("inbounds")
+
+        assertEquals(1, inbounds.length())
+        assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
+    }
+
+    @Test
+    fun replaceJsonInboundsWithTun_dropsLocalProxiesKeepsOutbounds() {
         val input = """
             {
               "inbounds": [
-                {"protocol": "http", "tag": "loopback"}
+                {"protocol": "mixed", "port": 10808, "tag": "mixed"},
+                {"protocol": "http", "port": 10809, "tag": "http"}
               ],
               "outbounds": [
+                {"protocol": "vless", "tag": "proxy"},
                 {"protocol": "freedom", "tag": "direct"}
               ]
             }
         """.trimIndent()
 
-        ConfigBuilder.fromJson(input)
+        val config = JSONObject(ConfigBuilder.replaceJsonInboundsWithTun(input))
+        val inbounds = config.getJSONArray("inbounds")
+
+        assertEquals(1, inbounds.length())
+        assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
+        assertEquals(
+            "vless",
+            config.getJSONArray("outbounds").getJSONObject(0).getString("protocol")
+        )
+    }
+
+    @Test
+    fun replaceJsonInboundsWithTun_replacesAnExistingForeignTun() {
+        val input = """
+            {
+              "inbounds": [{"protocol": "tun", "settings": {"name": "foreign_tun", "MTU": 9000}}],
+              "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+            }
+        """.trimIndent()
+
+        val settings = JSONObject(ConfigBuilder.replaceJsonInboundsWithTun(input))
+            .getJSONArray("inbounds").getJSONObject(0).getJSONObject("settings")
+
+        assertEquals("xray_tun", settings.getString("name"))
+        assertEquals(1500, settings.getInt("MTU"))
     }
 
     @Test
