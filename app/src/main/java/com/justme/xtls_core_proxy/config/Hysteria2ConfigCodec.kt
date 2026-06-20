@@ -354,10 +354,7 @@ object Hysteria2ConfigCodec {
 
         val salamanderPassword = profile.salamanderPassword?.trim().orEmpty()
         if (salamanderPassword.isNotBlank()) {
-            finalmask.put("udp", JSONArray().put(JSONObject().apply {
-                put("type", "salamander")
-                put("settings", JSONObject().put("password", salamanderPassword))
-            }))
+            mergeSalamanderUdpEntry(finalmask, salamanderPassword)
         }
 
         val quicParams = finalmask.optJSONObject("quicParams") ?: JSONObject()
@@ -385,6 +382,24 @@ object Hysteria2ConfigCodec {
         }
 
         return finalmask.takeIf { it.length() > 0 }
+    }
+
+    private fun mergeSalamanderUdpEntry(finalmask: JSONObject, salamanderPassword: String) {
+        val udp = finalmask.optJSONArray("udp") ?: JSONArray()
+        for (index in 0 until udp.length()) {
+            val entry = udp.optJSONObject(index) ?: continue
+            if (!entry.optString("type").equals("salamander", ignoreCase = true)) continue
+            val settings = entry.optJSONObject("settings") ?: JSONObject().also { entry.put("settings", it) }
+            settings.put("password", salamanderPassword)
+            finalmask.put("udp", udp)
+            return
+        }
+
+        udp.put(JSONObject().apply {
+            put("type", "salamander")
+            put("settings", JSONObject().put("password", salamanderPassword))
+        })
+        finalmask.put("udp", udp)
     }
 
     private fun findFirstHysteria2Outbound(root: JSONObject): JSONObject? {
