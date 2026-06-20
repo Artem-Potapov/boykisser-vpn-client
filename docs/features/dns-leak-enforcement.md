@@ -93,7 +93,7 @@ machinery and was judged not worth it.
 | Generated `vless://` | Secure **by construction** — `buildXrayJson` delegates its final shape to `makeSecureDns`. |
 | Pasted / manual / clipboard | `addProfile` gates on `dnsDiagnosis`: **DIRTY** → warn-and-fix dialog (*Fix it* = `makeSecureDns` + insert `sanitizedDns=true`; *Don't add* = nothing inserted, toast); ABSENT/SECURE → `makeSecureDns` silently, insert `sanitizedDns=false`. All three `addProfile` call sites flow through this one gate. |
 | Subscription | No user present → dirty entries are **auto-fixed** at parse and the resulting profile carries `sanitizedDns=true` (a "DNS fixed" badge), so a malicious subscription is visible. |
-| Connect (runtime) | `buildRuntimeConfig → fromJson` always normalizes (sanitize inbounds → `makeSecureDns` → assert), so **pre-2B stored profiles and any directly-inserted config are auto-secured on connect** — no data migration of stored configs needed. |
+| Connect (runtime) | `buildRuntimeConfig → fromJson` always normalizes (sanitize inbounds → `makeSecureDns` → assert), so **pre-2B stored profiles and any directly-inserted config are auto-secured on connect** — no data migration of stored configs needed. Belt-and-suspenders: `toProfileStorageConfig` already canonicalizes imported-JSON inbounds to tun at storage, so this is a backstop, not the only line of defense. |
 
 ## The `DnsStatus` classifier and its deliberate asymmetry
 
@@ -118,10 +118,15 @@ nag/badge without improving safety. **Do not widen `dnsDiagnosis` to mirror `mak
 
 ### Bundled concern: inbound sanitization
 
-`replaceJsonInboundsWithTun` strips whatever inbounds a config ships (real-world 3x-ui panel configs
-carry local `socks`/`http`/`mixed` inbounds and no tun inbound) and forces the canonical tun inbound.
-This **replaced** the old `rejectLocalProxyInbounds`, which *rejected* socks/http — so such configs now
-import instead of erroring. Folded into 2B deliberately because it shares the `fromJson` path.
+`replaceJsonInboundsWithTun` strips whatever inbounds a config ships (real-world 3x-ui / Hysteria2 panel
+configs carry local `socks`/`http`/`mixed`/`dokodemo-door` inbounds and no tun inbound) and forces the
+canonical tun inbound. This **replaced** the old `rejectLocalProxyInbounds`, which *rejected* socks/http —
+so such configs now import instead of erroring. It runs at **both** layers: `toProfileStorageConfig`
+canonicalizes imported JSON to the tun inbound at **storage** (so a stored imported config matches the
+generated `vless://` / `hysteria2://` configs, which are tun-only by construction), and `fromJson`
+re-applies it at **connect** as the runtime backstop. Foreign inbounds are functionally inert anyway —
+there is no `tun2socks` to drive a local `socks`/`http` listener — but persisting them produced a
+confusing, non-canonical stored config; canonicalizing at storage keeps the two layers consistent.
 
 ### Subscription parsing fixes (surfaced during on-device QA)
 
