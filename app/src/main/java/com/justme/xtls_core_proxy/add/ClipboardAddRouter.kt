@@ -1,12 +1,14 @@
 package com.justme.xtls_core_proxy.add
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.Hysteria2ConfigCodec
 import java.net.URI
 
 sealed class ClipboardKind {
     object Empty : ClipboardKind()
     data class Subscription(val url: String) : ClipboardKind()
     data class Vless(val uri: String) : ClipboardKind()
+    data class Hysteria2(val uri: String) : ClipboardKind()
     data class UnsupportedScheme(val scheme: String) : ClipboardKind()
     data class Json(val text: String) : ClipboardKind()
     object Invalid : ClipboardKind()
@@ -28,6 +30,10 @@ object ClipboardAddRouter {
 
         if (startsWithIgnoreCase(trimmed, "vless://")) {
             return classifyVless(trimmed)
+        }
+
+        if (Hysteria2ConfigCodec.isHysteria2Uri(trimmed)) {
+            return classifyHysteria2(trimmed)
         }
 
         if (startsWithIgnoreCase(trimmed, "trojan://")) {
@@ -57,6 +63,15 @@ object ClipboardAddRouter {
         } else {
             ClipboardKind.Invalid
         }
+    }
+
+    private fun classifyHysteria2(trimmed: String): ClipboardKind {
+        return runCatching {
+            Hysteria2ConfigCodec.parseUri(trimmed)
+        }.fold(
+            onSuccess = { ClipboardKind.Hysteria2(trimmed) },
+            onFailure = { ClipboardKind.Invalid }
+        )
     }
 
     private fun classifyAsJson(trimmed: String): ClipboardKind {

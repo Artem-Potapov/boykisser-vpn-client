@@ -220,17 +220,21 @@
     <string name="add_menu_from_clipboard_with_hint">From Clipboard (%1$s)</string>
     <string name="add_clipboard_hint_subscription">URL</string>
     <string name="add_clipboard_hint_vless">VLESS link</string>
+    <string name="add_clipboard_hint_hysteria2">Hysteria2 link</string>
     <string name="add_clipboard_hint_unsupported">unsupported</string>
     <string name="add_clipboard_hint_json">JSON</string>
     <string name="add_clipboard_hint_empty">empty</string>
     <string name="add_clipboard_hint_invalid">unrecognized</string>
     <string name="add_menu_subscription">Add subscription</string>
+    <string name="add_menu_server_link">Add server link</string>
     <string name="add_menu_vless">Add server (VLESS link)</string>
     <string name="add_menu_json">Add server (JSON)</string>
 
     <!-- Add-FAB paste dialogs -->
     <string name="add_dialog_subscription_title">Add subscription</string>
     <string name="add_dialog_subscription_hint">Paste a subscription URL (http:// or https://).</string>
+    <string name="add_dialog_server_link_title">Add server link</string>
+    <string name="add_dialog_server_link_hint">Paste a vless://, hysteria2://, or hy2:// link.</string>
     <string name="add_dialog_vless_title">Add VLESS server</string>
     <string name="add_dialog_vless_hint">Paste a vless:// link.</string>
     <string name="add_dialog_json_title">Add server (JSON)</string>

@@ -39,6 +39,24 @@ class ClipboardAddRouterTest {
     }
 
     @Test
+    fun validHysteria2Uri_returnsHysteria2() {
+        val uri = "hysteria2://secret@example.com:443/?sni=cdn.example.com#demo"
+        assertEquals(ClipboardKind.Hysteria2(uri), ClipboardAddRouter.classify(uri))
+    }
+
+    @Test
+    fun validHy2UriWithMultiPort_returnsHysteria2() {
+        val uri = "hy2://secret@example.com:123,5000-6000/?sni=cdn.example.com#demo"
+        assertEquals(ClipboardKind.Hysteria2(uri), ClipboardAddRouter.classify(uri))
+    }
+
+    @Test
+    fun hysteria2MissingAuthOrBadObfs_returnsInvalid() {
+        assertEquals(ClipboardKind.Invalid, ClipboardAddRouter.classify("hysteria2://example.com:443/"))
+        assertEquals(ClipboardKind.Invalid, ClipboardAddRouter.classify("hy2://secret@example.com:443/?obfs=gecko"))
+    }
+
+    @Test
     fun vlessMissingUuidOrPort_returnsInvalid() {
         val missingUuidEmpty = "vless://@example.com:443?security=tls#demo"
         val missingUuidNoAt = "vless://example.com:443?security=tls#demo"
