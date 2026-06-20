@@ -119,10 +119,11 @@ intent-filter, which is all the always-on / boot mechanism needs.
 - **Custom-dialer configs aren't protected.** `RegisterDialerController` only takes effect with Xray's
   default system dialer. This app produces standard VLESS, Hysteria2, `freedom`, `blackhole`, and `dns`
   outbounds through Xray's default dialer; a config installing a custom dialer is not a path this app
-  produces. **Hysteria2 caveat:** it rides QUIC/UDP, so whether its sockets actually go through the
-  default dialer (and are therefore `protect()`'d out of the tun) is **device-unverified** — release-device
-  QA must confirm the global controller covers them before Hysteria2 is declared supported. See
-  [hysteria2-support.md](hysteria2-support.md).
+  produces. **Hysteria2 note:** it rides QUIC/UDP, so whether its sockets go through the default dialer
+  (and are therefore `protect()`'d out of the tun) was the key runtime unknown. It is now **confirmed
+  on-device** — a release build against a real Hysteria2 server egresses through the proxy with no
+  dial-to-self loop, which is only possible if those QUIC/UDP sockets are `protect()`'d. Re-verify if the
+  bridge or xray-core's dialer changes. See [hysteria2-support.md](hysteria2-support.md).
 
 ## Testing
 
