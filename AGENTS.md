@@ -58,7 +58,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── boykisser-vpn.md
 │   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
-│   │   ├── hysteria2-support.md      Hysteria2 share links, codec, protocol-aware editor, QUIC protect() caveat
+│   │   ├── hysteria2-support.md      Hysteria2 share links, codec, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── name-theft-warning.md

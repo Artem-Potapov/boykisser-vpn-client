@@ -9,10 +9,11 @@ normalized to the canonical tun inbound + secure-DNS posture, exactly like VLESS
 safety counterparts are [DNS-Leak Enforcement](dns-leak-enforcement.md) (2B) and
 [Fail-Closed Startup](failclosed-startup.md) (2A).
 
-> **Support status: implemented, NOT yet device-verified.** Hysteria2 uses QUIC/UDP, and whether those
-> sockets are covered by the global `protect()` dial controller is the one runtime fact JVM tests
-> cannot prove (see [DNS and `protect()`](#dns-and-protect)). Do **not** advertise Hysteria2 as
-> verified-working until the on-device QA below passes.
+> **Support status: implemented and confirmed connecting on-device.** A real Hysteria2 server connects
+> and egresses through the proxy on a release build — which proves the QUIC/UDP sockets are covered by the
+> global `protect()` dial controller (otherwise the dial would loop and fail; see
+> [DNS and `protect()`](#dns-and-protect)). The remaining manual QA items below (LAN DNS-leak capture,
+> Salamander, FinalMask, subscription-while-connected) are still recommended before a release.
 
 ## Supported inputs
 
@@ -155,12 +156,13 @@ port-53-first rule, and `sockopt.domainStrategy: ForceIP` merged onto the Hyster
 the server hostname bootstrap resolves over DoH, failing closed. Hysteria2 adds **no** DNS policy of its
 own; `makeSecureDns` remains the single source of truth.
 
-**Open runtime risk — `protect()` over QUIC/UDP.** Loop-avoidance relies on the Go bridge's one global
+**`protect()` over QUIC/UDP — confirmed on-device.** Loop-avoidance relies on the Go bridge's one global
 `RegisterDialerController`, which only covers sockets dialed by Xray's **default system dialer**
 ([failclosed-startup.md](failclosed-startup.md)). Whether Xray's Hysteria2 QUIC/UDP outbound dials
-through that default dialer — and is therefore `protect()`'d out of the tun — is **unverified by the JVM
-test suite** and can only be confirmed on a device. If device QA shows Hysteria2 sockets are *not*
-protected, the feature must not ship as supported until the bridge/runtime layer is fixed.
+through that default dialer — and is therefore `protect()`'d out of the tun — cannot be proven by the JVM
+test suite, so it was the highest runtime unknown. It is now **confirmed on a release build against a real
+Hysteria2 server**: traffic egresses through the proxy with no dial-to-self loop, which is only possible if
+the QUIC/UDP sockets are `protect()`'d. Re-verify on-device if the bridge or xray-core's dialer changes.
 
 ## Testing
 
@@ -174,23 +176,22 @@ JVM unit tests (all pure, run under `:app:testDebugUnitTest`):
 | [`add/ClipboardAddRouterTest`](../../app/src/test/java/com/justme/xtls_core_proxy/add/ClipboardAddRouterTest.kt) | Clipboard classifies valid Hysteria2 links as `ClipboardKind.Hysteria2`; missing-auth / bad-obfs → `Invalid`. |
 | [`subs/SubscriptionBodyParserTest`](../../app/src/test/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParserTest.kt) | Plain and base64 Hysteria2 link lists; display name from fragment, host/port, and JSON `settings.address:port`. |
 
-Manual device QA (release build, real Hysteria2 server — **required before declaring support**):
+Manual device QA (release build, real Hysteria2 server):
 
-1. Install the **release** APK (exercises R8 / reflection paths).
-2. Add a baseline Hysteria2 profile from a `hysteria2://` / `hy2://` link; connect; confirm traffic
-   exits through the proxy (perceived public IP is the server's).
+1. ✅ Install the **release** APK (exercises R8 / reflection paths).
+2. ✅ Add a baseline Hysteria2 profile from a `hysteria2://` / `hy2://` link; connect; confirm traffic
+   exits through the proxy (perceived public IP is the server's) — **confirmed**, which also proves
+   `protect()` covers the QUIC/UDP sockets.
 3. Capture LAN DNS and confirm **no plaintext query for the Hysteria2 server hostname** appears.
 4. Refresh a subscription while connected; confirm it rides the tunnel.
 5. Connect a Salamander profile.
 6. Connect a FinalMask QUIC-params profile (port hop and/or bandwidth fields).
 7. Explicit stop, then reconnect — normal lifecycle still works.
 
-If no real Hysteria2 server/device is available, record QA as **blocked** in the branch handoff — do not
-mark support verified.
+Items 1–2 are confirmed on-device; 3–7 remain recommended before a release.
 
 ## Known limitations
 
-- QUIC/UDP `protect()` coverage is device-unverified (above).
 - Only Salamander obfs; only the listed FinalMask fields are structured (everything else via raw JSON).
 - No multi-port runtime fan-out beyond what Xray's `udpHop` does — the first concrete port seeds
   `settings.port` and the full expression is handed to `udpHop.ports`.
