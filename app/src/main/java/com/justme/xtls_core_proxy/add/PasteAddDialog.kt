@@ -27,12 +27,12 @@ fun PasteAddDialog(
 ) {
     val titleRes = when (kind) {
         PasteKind.SUBSCRIPTION_URL -> R.string.add_dialog_subscription_title
-        PasteKind.VLESS_LINK -> R.string.add_dialog_vless_title
+        PasteKind.SERVER_LINK -> R.string.add_dialog_server_link_title
         PasteKind.JSON_CONFIG -> R.string.add_dialog_json_title
     }
     val hintRes = when (kind) {
         PasteKind.SUBSCRIPTION_URL -> R.string.add_dialog_subscription_hint
-        PasteKind.VLESS_LINK -> R.string.add_dialog_vless_hint
+        PasteKind.SERVER_LINK -> R.string.add_dialog_server_link_hint
         PasteKind.JSON_CONFIG -> R.string.add_dialog_json_hint
     }
 

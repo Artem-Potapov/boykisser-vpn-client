@@ -25,7 +25,7 @@ import com.justme.xtls_core_proxy.R
 internal fun AddFabMenu(
     onPickClipboard: () -> Unit,
     onPickSubscription: () -> Unit,
-    onPickVless: () -> Unit,
+    onPickServerLink: () -> Unit,
     onPickJson: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -71,10 +71,10 @@ internal fun AddFabMenu(
                 }
             )
             DropdownMenuItem(
-                text = { Text(stringResource(R.string.add_menu_vless)) },
+                text = { Text(stringResource(R.string.add_menu_server_link)) },
                 onClick = {
                     expanded = false
-                    onPickVless()
+                    onPickServerLink()
                 }
             )
             DropdownMenuItem(
@@ -94,6 +94,7 @@ private fun clipboardHintResFor(context: Context): Int {
         ClipboardKind.Empty -> R.string.add_clipboard_hint_empty
         is ClipboardKind.Subscription -> R.string.add_clipboard_hint_subscription
         is ClipboardKind.Vless -> R.string.add_clipboard_hint_vless
+        is ClipboardKind.Hysteria2 -> R.string.add_clipboard_hint_hysteria2
         is ClipboardKind.UnsupportedScheme -> R.string.add_clipboard_hint_unsupported
         is ClipboardKind.Json -> R.string.add_clipboard_hint_json
         ClipboardKind.Invalid -> R.string.add_clipboard_hint_invalid

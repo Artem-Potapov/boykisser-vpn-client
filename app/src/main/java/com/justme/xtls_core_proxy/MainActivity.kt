@@ -205,7 +205,7 @@ class MainActivity : LocalizedComponentActivity() {
                     },
                     onClipboardAdd = { handleClipboardAdd() },
                     onPickPasteSubscription = { pasteKind = PasteKind.SUBSCRIPTION_URL },
-                    onPickPasteVless = { pasteKind = PasteKind.VLESS_LINK },
+                    onPickPasteServerLink = { pasteKind = PasteKind.SERVER_LINK },
                     onPickPasteJson = { pasteKind = PasteKind.JSON_CONFIG },
                     onEditProfile = { profile ->
                         serverSettingsLauncher.launch(
@@ -373,7 +373,7 @@ class MainActivity : LocalizedComponentActivity() {
         val classified = ClipboardAddRouter.classify(raw)
         val matchesKind = when (kind) {
             PasteKind.SUBSCRIPTION_URL -> classified is ClipboardKind.Subscription
-            PasteKind.VLESS_LINK -> classified is ClipboardKind.Vless
+            PasteKind.SERVER_LINK -> classified is ClipboardKind.Vless || classified is ClipboardKind.Hysteria2
             PasteKind.JSON_CONFIG -> classified is ClipboardKind.Json
         }
         if (matchesKind) {
@@ -399,6 +399,11 @@ class MainActivity : LocalizedComponentActivity() {
             }
             is ClipboardKind.Vless -> {
                 val name = SubscriptionBodyParser.deriveVlessDisplayName(kind.uri, 0)
+                viewModel.addProfile(name, kind.uri)
+                toast(getString(R.string.add_toast_server_added))
+            }
+            is ClipboardKind.Hysteria2 -> {
+                val name = SubscriptionBodyParser.deriveHysteria2DisplayName(kind.uri, 0)
                 viewModel.addProfile(name, kind.uri)
                 toast(getString(R.string.add_toast_server_added))
             }
@@ -430,7 +435,7 @@ private fun MainScreen(
     onOpenBoykisserInfo: () -> Unit,
     onClipboardAdd: () -> Unit,
     onPickPasteSubscription: () -> Unit,
-    onPickPasteVless: () -> Unit,
+    onPickPasteServerLink: () -> Unit,
     onPickPasteJson: () -> Unit,
     onEditProfile: (Profile) -> Unit
 ) {
@@ -475,7 +480,7 @@ private fun MainScreen(
             AddFabMenu(
                 onPickClipboard = onClipboardAdd,
                 onPickSubscription = onPickPasteSubscription,
-                onPickVless = onPickPasteVless,
+                onPickServerLink = onPickPasteServerLink,
                 onPickJson = onPickPasteJson
             )
         }
