@@ -10,10 +10,10 @@ object ConfigBuilder {
         val trimmed = input.trim()
         require(trimmed.isNotEmpty()) { "Configuration input is empty" }
 
-        return if (trimmed.startsWith("vless://", ignoreCase = true)) {
-            fromVlessUri(trimmed)
-        } else {
-            fromJson(trimmed)
+        return when {
+            trimmed.startsWith("vless://", ignoreCase = true) -> fromVlessUri(trimmed)
+            Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> fromHysteria2Uri(trimmed)
+            else -> fromJson(trimmed)
         }
     }
 
@@ -24,6 +24,15 @@ object ConfigBuilder {
 
     fun templateJsonFromVlessProfile(profile: VlessProfile): String {
         return buildXrayJson(profile).toString()
+    }
+
+    fun fromHysteria2Uri(uri: String): String {
+        val profile = Hysteria2ConfigCodec.parseUri(uri)
+        return Hysteria2ConfigCodec.toXrayJson(profile)
+    }
+
+    fun templateJsonFromHysteria2Profile(profile: Hysteria2Profile): String {
+        return Hysteria2ConfigCodec.toXrayJson(profile)
     }
 
     fun fromJson(raw: String): String {
@@ -43,10 +52,10 @@ object ConfigBuilder {
     fun toProfileStorageConfig(input: String): String {
         val trimmed = input.trim()
         require(trimmed.isNotEmpty()) { "Configuration input is empty" }
-        return if (trimmed.startsWith("vless://", ignoreCase = true)) {
-            fromVlessUri(trimmed)
-        } else {
-            trimmed
+        return when {
+            trimmed.startsWith("vless://", ignoreCase = true) -> fromVlessUri(trimmed)
+            Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> fromHysteria2Uri(trimmed)
+            else -> trimmed
         }
     }
 
