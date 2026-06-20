@@ -64,6 +64,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    data class DnsWarning(val name: String, val rawConfig: String)
+
+    private val _dnsWarning = MutableStateFlow<DnsWarning?>(null)
+    val dnsWarning: StateFlow<DnsWarning?> = _dnsWarning.asStateFlow()
+
     val logs = LogRepository.logs
     val connectionState = LogRepository.connectionState
 
@@ -96,9 +101,31 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addProfile(name: String, config: String) {
         viewModelScope.launch {
-            val storedConfig = ConfigBuilder.toProfileStorageConfig(config)
-            dao.insert(Profile(name = name, config = storedConfig))
+            val storage = ConfigBuilder.toProfileStorageConfig(config)
+            if (runCatching { ConfigBuilder.dnsDiagnosis(storage) }.getOrNull() ==
+                ConfigBuilder.DnsStatus.DIRTY
+            ) {
+                _dnsWarning.value = DnsWarning(name = name, rawConfig = config)
+                return@launch
+            }
+            val stored = runCatching { ConfigBuilder.makeSecureDns(storage) }.getOrDefault(storage)
+            dao.insert(Profile(name = name, config = stored, sanitizedDns = false))
         }
+    }
+
+    fun confirmDnsFixAndAdd() {
+        val warning = _dnsWarning.value ?: return
+        viewModelScope.launch {
+            val secured = ConfigBuilder.makeSecureDns(
+                ConfigBuilder.toProfileStorageConfig(warning.rawConfig)
+            )
+            dao.insert(Profile(name = warning.name, config = secured, sanitizedDns = true))
+            _dnsWarning.value = null
+        }
+    }
+
+    fun dismissDnsWarning() {
+        _dnsWarning.value = null
     }
 
     fun updateProfile(profile: Profile) {

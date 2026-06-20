@@ -279,6 +279,14 @@
     <string name="settings_sideload_title">Не дайте Google заблокировать обновления</string>
     <string name="settings_sideload_subtitle">Почему правила верификации Google заблокируют обновления</string>
 
+    <!-- DNS warn-and-fix dialog + profile badge -->
+    <string name="dns_warn_title">Небезопасный DNS в этой конфигурации</string>
+    <string name="dns_warn_message">Эта конфигурация отправляет DNS напрямую — это может раскрыть, какие сайты вы посещаете. Исправить? Если вы не уверены, что это значит, откажитесь — сервер не будет добавлен.</string>
+    <string name="dns_warn_fix">Исправить</string>
+    <string name="dns_warn_decline">Не добавлять</string>
+    <string name="dns_warn_declined_toast">Не добавлено — эта конфигурация раскрыла бы DNS</string>
+    <string name="profile_badge_dns_corrected">DNS исправлен</string>
+
     <!-- Name-theft warning popup -->
     <string name="name_theft_title">⚠️ Они украли наше название</string>
     <string name="name_theft_body">12 июня 2026 года канал «ЧВК Фембойчик» (t.me/femboiVPN) выпустил продукт под названием «Boykisser VPN». Но мы выпустили Boykisser VPN ещё в ФЕВРАЛЕ 2026 — убедитесь сами: t.me/boykisservpn_news.\n\nЕсли вы видите это сообщение, значит владелец того поддельного VPN присвоил это приложение и выдаёт его за своё.\n\nЭто приложение сделано владельцем t.me/boykisservpn_news. Настоящий Boykisser VPN — здесь: t.me/boykisser_vpn_bot.</string>

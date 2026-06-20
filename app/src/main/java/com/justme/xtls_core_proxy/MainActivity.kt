@@ -171,6 +171,7 @@ class MainActivity : LocalizedComponentActivity() {
         setContent {
             XTLS_CORE_PROXYTheme {
                 var pasteKind by rememberSaveable { mutableStateOf<PasteKind?>(null) }
+                val dnsWarning by viewModel.dnsWarning.collectAsState()
 
                 val nameTheftContext = LocalContext.current
                 var nameTheftDecision by rememberSaveable { mutableStateOf<Boolean?>(null) }
@@ -253,6 +254,32 @@ class MainActivity : LocalizedComponentActivity() {
                         dismissButton = {
                             TextButton(onClick = { pendingBoykisserUrl = null }) {
                                 Text(stringResource(R.string.add_dialog_button_cancel))
+                            }
+                        }
+                    )
+                }
+
+                val dnsWarnContext = LocalContext.current
+                if (dnsWarning != null) {
+                    AlertDialog(
+                        onDismissRequest = { viewModel.dismissDnsWarning() },
+                        title = { Text(stringResource(R.string.dns_warn_title)) },
+                        text = { Text(stringResource(R.string.dns_warn_message)) },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.confirmDnsFixAndAdd() }) {
+                                Text(stringResource(R.string.dns_warn_fix))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                viewModel.dismissDnsWarning()
+                                Toast.makeText(
+                                    dnsWarnContext,
+                                    R.string.dns_warn_declined_toast,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }) {
+                                Text(stringResource(R.string.dns_warn_decline))
                             }
                         }
                     )
@@ -794,13 +821,21 @@ private fun ProfileRow(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
-            Text(
-                text = profile.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (profile.sanitizedDns) {
+                    Text(
+                        text = stringResource(R.string.profile_badge_dns_corrected),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
 
             Button(
                 onClick = onConnect,
