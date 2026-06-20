@@ -28,7 +28,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── add/            Paste/clipboard/subscription routing into Add UI
 │       │   │   ├── apps/           Installed-app picker (kill-switch / split-tunnel)
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
-│       │   │   ├── config/         ConfigBuilder, ProfileConfigCodec, JsonFormatter
+│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization → docs/features), ProfileConfigCodec, JsonFormatter
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
@@ -37,12 +37,12 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
 │       │   │   ├── settings/       Per-server + settings hub screens
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
-│       │   │   ├── split/          Split-tunnel feature
+│       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel
 │       │   │   ├── subs/           Subscription fetch/parse/refresh
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme
-│       │   │   └── vpn/            XrayVpnService — VpnService + xray-core lifecycle
+│       │   │   └── vpn/            XrayVpnService — VpnService + xray-core lifecycle; fail-closed startup → docs/features
 │       │   └── res/
 │       │       ├── drawable/, mipmap-*/
 │       │       ├── values/         strings.xml (source of truth), colors, themes
@@ -54,6 +54,8 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
+│   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
+│   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── name-theft-warning.md
@@ -70,7 +72,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   └── generate-agent-bundles.sh
 ├── xray-go/
 │   ├── go.mod, go.sum
-│   └── xray_bridge.go              Go entry points: StartXray, StopXray
+│   └── xray_bridge.go              Go entry points: StartXray, StopXray, RegisterProtector (protect() dial controller)
 ├── build.gradle.kts                Root Gradle config
 ├── settings.gradle.kts
 ├── gradle.properties
@@ -210,6 +212,18 @@ The UI collects user input (VLESS URI or JSON), then `VpnViewModel` converts it 
 `XrayBridge`, and starts/stops Xray-core through the Go mobile bridge. Connection state and sanitized
 logs flow through `LogRepository` back to the UI.
 
+Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
+together — change them as a pair):
+
+- **`ConfigBuilder` normalizes *every* config to a secure-DNS shape before it runs** — DoH-only
+  resolver, all port-53 routed into Xray's DNS module, and the proxy server's own hostname forced
+  through DoH (`ForceIP`). See [`docs/features/dns-leak-enforcement.md`](docs/features/dns-leak-enforcement.md).
+- **Loop-avoidance is socket-level, not app-exclusion:** the Go bridge installs one global Xray dial
+  controller that calls back into a reverse-bound **`Protector`** so Xray's own sockets are pulled out
+  of the tun via `VpnService.protect()`, while the *whole app* is tunneled. `onStartCommand` is a
+  total `StartCommandDecision` and returns `START_REDELIVER_INTENT` for crash/always-on recovery. See
+  [`docs/features/failclosed-startup.md`](docs/features/failclosed-startup.md).
+
 ## Dormant / Temporarily-Disabled Features
 These features are intentionally **switched off in the working tree**. Their code is **commented out
 at the call sites only** — every definition is kept in place as dead code. Do **not** "clean up" the
@@ -254,7 +268,14 @@ those domains are dormant.
 - Never commit secrets or personal endpoints; treat pasted `vless://` links, UUIDs, and REALITY keys as
   sensitive.
 - `LogRepository` redacts UUID/publicKey/shortId patterns before displaying logs.
-- `ConfigBuilder` enforces tun-only behavior and rejects local `socks`/`http` inbounds in MVP mode.
+- `ConfigBuilder` is the single chokepoint that enforces tun-only behavior by **sanitizing any
+  config's inbounds into the canonical `tun` inbound** (it no longer *rejects* `socks`/`http` — it
+  rewrites them, so real-world panel configs import) and **enforces a fail-closed secure-DNS posture**
+  on every config (DoH-only resolver, port-53 → `dns-out`, `ForceIP` server-name bootstrap). See
+  `docs/features/dns-leak-enforcement.md`.
+- Loop-avoidance is socket-level via `VpnService.protect()` (a global Xray dial controller in the Go
+  bridge), not app-exclusion, so the whole app is tunneled and only Xray's own sockets bypass — no
+  app traffic leaks around the tun. See `docs/features/failclosed-startup.md`.
 - `.gitignore` already excludes local/dev artifacts (`local.properties`, generated `app/libs/*.aar`,
   geo data assets, and `xray-go/go.sum`).
 - Dependency intake is dynamic in AAR scripts (`go get ...@main`, `go get ...@latest`).
@@ -279,6 +300,14 @@ those domains are dormant.
   pipeline (R8 minification, lint-vital, and signing) surfaces problems that debug builds hide, and
   catching them early beats discovering them at release time. For small, low-risk changes a debug build
   plus `:app:testDebugUnitTest` is enough.
+- **Documentation is part of the branch lifecycle — when finishing a branch / merging into `main`,
+  update the maintainer docs to match the merged behavior.** Specifically: (1) add a
+  `docs/features/<feature>.md` for each new feature; (2) **correct any existing `docs/features/` doc
+  whose described behavior the change altered** — a doc that drifts from code is *worse* than no doc,
+  because it reads as authoritative and is wrong (e.g. a maintainer could "re-fix" an already-fixed
+  bug); and (3) update this `AGENTS.md` where the change invalidated it — the `docs/features/` index,
+  the Repository Structure tree, Architecture Notes, Security & Compliance, and Extensibility Hooks.
+  Do this **before** the merge, not as a later chore.
 - Do not perform deploy/release publication steps without explicit maintainer approval.
 
 ## Extensibility Hooks
@@ -287,11 +316,15 @@ those domains are dormant.
   (`fromVlessUri`, `fromJson`, outbound/routing builders).
 - VPN lifecycle extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt`
-  for TUN setup, DNS/routes, and foreground notification behavior.
+  for TUN setup, DNS/routes, and foreground notification behavior. `onStartCommand` routing is a pure
+  `vpn/StartCommandDecision.kt`; split-tunnel / whole-app self-handling is a pure
+  `split/SplitTunnelPlanner.kt` — extend those rather than inlining new `when` branches in the service.
 - Bridge extension points:
   - Kotlin reflection candidates in
     `app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt` (`classNames` list).
-  - Go lifecycle surface in `xray-go/xray_bridge.go` (`StartXray`, `StopXray`).
+  - Go lifecycle surface in `xray-go/xray_bridge.go` (`StartXray`, `StopXray`, `RegisterProtector` —
+    the `protect()` dial controller; the `Protector` reverse-binding interface is keep-ruled via
+    `-keep class xraybridge.**`).
 - Environment variables and script knobs:
 
 | Variable | Where used | Purpose |
