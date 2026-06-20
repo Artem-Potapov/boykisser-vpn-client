@@ -118,6 +118,21 @@ class ConfigBuilderDnsTest {
     }
 
     @Test
+    fun makeSecureDns_setsForceIpOnHysteria2Outbound() {
+        val cfg = """
+            {"outbounds":[{"protocol":"hysteria","tag":"proxy",
+              "settings":{"version":2,"address":"example.com","port":443},
+              "streamSettings":{"network":"hysteria","hysteriaSettings":{"version":2,"auth":"secret"}}},
+              {"protocol":"freedom","tag":"direct"}]}
+        """.trimIndent()
+        val proxy = JSONObject(ConfigBuilder.makeSecureDns(cfg)).getJSONArray("outbounds").getJSONObject(0)
+        assertEquals(
+            "ForceIP",
+            proxy.getJSONObject("streamSettings").getJSONObject("sockopt").getString("domainStrategy")
+        )
+    }
+
+    @Test
     fun makeSecureDns_isIdempotent() {
         val twice = ConfigBuilder.makeSecureDns(ConfigBuilder.makeSecureDns(dirty))
         assertEquals(ConfigBuilder.DnsStatus.SECURE, ConfigBuilder.dnsDiagnosis(twice))
@@ -138,6 +153,19 @@ class ConfigBuilderDnsTest {
     fun buildRuntimeConfig_vless_isSecureWithForceIp() {
         val cfg = ConfigBuilder.buildRuntimeConfig(
             "vless://11111111-1111-1111-1111-111111111111@demo.example:443?security=none"
+        )
+        assertEquals(ConfigBuilder.DnsStatus.SECURE, ConfigBuilder.dnsDiagnosis(cfg))
+        val proxy = JSONObject(cfg).getJSONArray("outbounds").getJSONObject(0)
+        assertEquals(
+            "ForceIP",
+            proxy.getJSONObject("streamSettings").getJSONObject("sockopt").getString("domainStrategy")
+        )
+    }
+
+    @Test
+    fun buildRuntimeConfig_hysteria2_isSecureWithForceIp() {
+        val cfg = ConfigBuilder.buildRuntimeConfig(
+            "hy2://secret@example.com:443/?sni=cdn.example.com"
         )
         assertEquals(ConfigBuilder.DnsStatus.SECURE, ConfigBuilder.dnsDiagnosis(cfg))
         val proxy = JSONObject(cfg).getJSONArray("outbounds").getJSONObject(0)

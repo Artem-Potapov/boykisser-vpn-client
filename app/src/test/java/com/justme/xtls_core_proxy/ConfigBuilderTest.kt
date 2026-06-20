@@ -27,6 +27,17 @@ class ConfigBuilderTest {
     }
 
     @Test
+    fun toProfileStorageConfig_convertsHysteria2ToJson() {
+        val input = "hy2://secret@example.com:443/?sni=cdn.example.com#HY2"
+        val stored = ConfigBuilder.toProfileStorageConfig(input)
+        val outbound = JSONObject(stored).getJSONArray("outbounds").getJSONObject(0)
+
+        assertTrue(stored.trimStart().startsWith("{"))
+        assertEquals("hysteria", outbound.getString("protocol"))
+        assertEquals(2, outbound.getJSONObject("settings").getInt("version"))
+    }
+
+    @Test
     fun fromVlessUri_buildsTunOnlyInboundAndVlessOutbound() {
         val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
             "?type=tcp&security=reality&pbk=abc123&sid=1a2b3c&fp=chrome&sni=cdn.example.com"
@@ -152,6 +163,16 @@ class ConfigBuilderTest {
         )
         assertTrue(vless.contains("\"protocol\":\"tun\""))
         assertTrue(json.contains("\"protocol\":\"tun\""))
+    }
+
+    @Test
+    fun buildRuntimeConfig_acceptsHysteria2Link() {
+        val runtime = ConfigBuilder.buildRuntimeConfig("hysteria2://secret@example.com:443/?sni=cdn.example.com")
+        val root = JSONObject(runtime)
+        val outbound = root.getJSONArray("outbounds").getJSONObject(0)
+
+        assertEquals("tun", root.getJSONArray("inbounds").getJSONObject(0).getString("protocol"))
+        assertEquals("hysteria", outbound.getString("protocol"))
     }
 
     @Test
