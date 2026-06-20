@@ -63,6 +63,19 @@ object ConfigBuilder {
     private val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
     private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
 
+    /**
+     * Classifies a config's DNS posture.
+     *
+     * Returns [DnsStatus.DIRTY] only when a port-53 routing rule sends traffic to a `freedom`-protocol
+     * outbound — the specific, user-warnable case where DNS queries are leaking in plaintext to the
+     * network. [DnsStatus.SECURE] and [DnsStatus.ABSENT] indicate no detected leak.
+     *
+     * **Asymmetry with [makeSecureDns]:** [makeSecureDns] re-routes ALL port-53 rules to `dns-out`
+     * regardless of their original target, so the running config is always secure even when this
+     * function returns [DnsStatus.SECURE] or [DnsStatus.ABSENT]. Do NOT widen this classifier to
+     * mirror that broader behavior — doing so would only expand the user-facing nag/badge without
+     * improving safety, since [makeSecureDns] already guarantees a clean runtime config on every path.
+     */
     fun dnsDiagnosis(config: String): DnsStatus {
         val root = JSONObject(config)
         val tagToProtocol = outboundTagProtocolMap(root)
