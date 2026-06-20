@@ -59,6 +59,7 @@ object ConfigBuilder {
     enum class DnsStatus { ABSENT, SECURE, DIRTY }
 
     const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
+    const val CLOUDFLARE_DOH_SECONDARY = "https://1.0.0.1/dns-query"
     private const val DNS_OUT_TAG = "dns-out"
     private val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
     private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
@@ -111,7 +112,13 @@ object ConfigBuilder {
             val addr = serverAddress(existing.opt(i)) ?: continue
             if (SECURE_DNS_PREFIXES.any { addr.startsWith(it, ignoreCase = true) }) secure.put(existing.opt(i))
         }
-        if (secure.length() == 0) secure.put(CLOUDFLARE_DOH)
+        // No secure resolver survived: inject Cloudflare's primary + secondary anycast endpoints.
+        // Both are IP-literal DoH (cert carries the IP as a SAN), so neither needs bootstrapping,
+        // and Xray's serialQuery tries them in order — 1.0.0.1 is a failover if 1.1.1.1 is unreachable.
+        if (secure.length() == 0) {
+            secure.put(CLOUDFLARE_DOH)
+            secure.put(CLOUDFLARE_DOH_SECONDARY)
+        }
         dns.put("servers", secure)
         if (!dns.has("queryStrategy")) dns.put("queryStrategy", "UseIP")
         root.put("dns", dns)
