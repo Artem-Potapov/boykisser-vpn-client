@@ -236,7 +236,7 @@ class XrayVpnService : VpnService() {
 
             val builder = Builder()
                 .setSession(localizedString(R.string.app_name))
-                .setMtu(1500)
+                .setMtu(ConfigBuilder.TUN_MTU)
                 .addAddress("10.7.0.1", 32)
                 .addAddress("fd00:1:fd00:1::1", 128)
                 .addRoute("0.0.0.0", 0)

@@ -71,6 +71,14 @@ object ConfigBuilder {
 
     enum class DnsStatus { ABSENT, SECURE, DIRTY }
 
+    /**
+     * MTU for the canonical tun inbound and the OS TUN interface. Kept below the usual 1500 path
+     * MTU so inner packets still fit after outbound encapsulation — VLESS TCP/TLS and especially
+     * Hysteria2 QUIC/UDP (+ Salamander) — without fragmenting under DF. Single source of truth for
+     * **every** tun-in: both `tunInboundJson` builders and `VpnService.Builder.setMtu`; keep them equal.
+     */
+    const val TUN_MTU = 1400
+
     const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
     const val CLOUDFLARE_DOH_SECONDARY = "https://1.0.0.1/dns-query"
     private const val DNS_OUT_TAG = "dns-out"
@@ -426,7 +434,7 @@ object ConfigBuilder {
             put("settings", JSONObject().apply {
                 put("name", "xray_tun")
                 put("network", "tcp,udp")
-                put("MTU", 1500)
+                put("MTU", TUN_MTU)
             })
         }
     }

@@ -455,7 +455,7 @@ object Hysteria2ConfigCodec {
             put("settings", JSONObject().apply {
                 put("name", "xray_tun")
                 put("network", "tcp,udp")
-                put("MTU", 1500)
+                put("MTU", ConfigBuilder.TUN_MTU)
             })
         }
     }

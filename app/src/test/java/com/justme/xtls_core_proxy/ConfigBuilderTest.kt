@@ -185,7 +185,8 @@ class ConfigBuilderTest {
             .getJSONArray("inbounds").getJSONObject(0).getJSONObject("settings")
 
         assertEquals("xray_tun", settings.getString("name"))
-        assertEquals(1500, settings.getInt("MTU"))
+        assertEquals(1400, settings.getInt("MTU"))
+        assertEquals(ConfigBuilder.TUN_MTU, settings.getInt("MTU"))
     }
 
     @Test
@@ -206,7 +207,10 @@ class ConfigBuilderTest {
         val root = JSONObject(runtime)
         val outbound = root.getJSONArray("outbounds").getJSONObject(0)
 
-        assertEquals("tun", root.getJSONArray("inbounds").getJSONObject(0).getString("protocol"))
+        val tunInbound = root.getJSONArray("inbounds").getJSONObject(0)
+        assertEquals("tun", tunInbound.getString("protocol"))
+        // The Hysteria2-generated tun inbound uses the same shared MTU as every other tun-in.
+        assertEquals(1400, tunInbound.getJSONObject("settings").getInt("MTU"))
         assertEquals("hysteria", outbound.getString("protocol"))
     }
 
