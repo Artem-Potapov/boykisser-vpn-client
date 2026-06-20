@@ -30,6 +30,7 @@ import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
 import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.state.ActiveProfileRepository
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
@@ -84,22 +85,13 @@ class XrayVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val profileId = intent.getLongExtra(EXTRA_PROFILE_ID, -1L)
-                if (profileId == -1L) {
-                    LogRepository.setConnectionState(VpnConnectionState.ERROR)
-                    LogRepository.emitError(R.string.vpn_start_failed_error)
-                    LogRepository.append("Refused to start: no profile ID provided")
-                    stopSelf()
-                } else {
-                    startVpn(profileId)
-                }
-            }
-
-            ACTION_STOP -> stopVpn()
-
-            ACTION_NOTIFICATION_DISMISSED -> {
+        val profileId = intent?.getLongExtra(EXTRA_PROFILE_ID, StartCommandDecision.SENTINEL)
+            ?: StartCommandDecision.SENTINEL
+        when (val decision = StartCommandDecision.decide(intent?.action, profileId)) {
+            is StartCommandDecision.StartProfile -> startVpn(decision.profileId)
+            StartCommandDecision.StartActiveProfile -> resolveActiveAndStart()
+            StartCommandDecision.Stop -> stopVpn()
+            StartCommandDecision.RepostNotification -> {
                 // User swiped the ongoing notification (allowed on Android 14+). Re-post it
                 // so the connected/exposed status stays visible while the VPN runs; if we are
                 // no longer running this was a stale delivery, so just clean up.
@@ -110,8 +102,39 @@ class XrayVpnService : VpnService() {
                 // repostOngoingNotification() is a no-op.
                 if (running) tunnelOpScope.launch { repostOngoingNotification() } else stopSelf()
             }
+            StartCommandDecision.RefuseNoProfile -> {
+                LogRepository.setConnectionState(VpnConnectionState.ERROR)
+                LogRepository.emitError(R.string.vpn_start_failed_error)
+                LogRepository.append("Refused to start: no profile ID provided")
+                stopSelf()
+            }
         }
-        return START_NOT_STICKY
+        // REDELIVER: an OS kill or process crash re-delivers the last ACTION_START
+        // (profile id included) so the same profile reconnects. An explicit stop calls
+        // no-arg stopSelf(), which clears all pending intents, so it is not redelivered.
+        return START_REDELIVER_INTENT
+    }
+
+    private fun resolveActiveAndStart() {
+        // System-initiated start (always-on / boot) arrives with startForegroundService
+        // semantics: we must call startForeground within the OS deadline (~5s) or be killed.
+        // pickOrPersistActive is an async Room read that can be slow on a cold boot, so
+        // promote to foreground BEFORE resolving, and tear it down if no profile resolves.
+        createNotificationChannel()
+        startForeground(
+            VpnNotifications.NOTIFICATION_ID,
+            buildNotification(localizedString(R.string.vpn_status_connecting))
+        )
+        serviceScope.launch {
+            val id = ActiveProfileRepository.pickOrPersistActive(this@XrayVpnService)
+            if (id == null) {
+                LogRepository.append("Always-on start: no active profile to bring up")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            } else {
+                startVpn(id)
+            }
+        }
     }
 
     override fun onRevoke() {
