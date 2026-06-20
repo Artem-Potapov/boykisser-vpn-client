@@ -31,7 +31,13 @@ object ConfigBuilder {
         if (!JSONObject(sanitized).has("outbounds")) {
             throw IllegalArgumentException("Runtime config must include outbounds")
         }
-        return sanitized
+        val secure = makeSecureDns(sanitized)
+        if (dnsDiagnosis(secure) == DnsStatus.DIRTY) {
+            // makeSecureDns drops every port-53->freedom rule, so this is unreachable
+            // unless makeSecureDns regresses. Fail closed if it ever does.
+            throw DirtyDnsException()
+        }
+        return secure
     }
 
     fun toProfileStorageConfig(input: String): String {
@@ -48,6 +54,131 @@ object ConfigBuilder {
         val root = JSONObject(config)
         root.put("inbounds", JSONArray().put(tunInboundJson()))
         return root.toString()
+    }
+
+    enum class DnsStatus { ABSENT, SECURE, DIRTY }
+
+    const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
+    private const val DNS_OUT_TAG = "dns-out"
+    private val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
+    private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
+
+    fun dnsDiagnosis(config: String): DnsStatus {
+        val root = JSONObject(config)
+        val tagToProtocol = outboundTagProtocolMap(root)
+        val rules = root.optJSONObject("routing")?.optJSONArray("rules") ?: JSONArray()
+
+        var hasPort53Rule = false
+        var leaking = false
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            if (!ruleMatchesDnsPort(rule)) continue
+            hasPort53Rule = true
+            if (tagToProtocol[rule.optString("outboundTag")] == "freedom") leaking = true
+        }
+
+        val servers = root.optJSONObject("dns")?.optJSONArray("servers")
+        val hasDnsBlock = servers != null && servers.length() > 0
+
+        return when {
+            leaking -> DnsStatus.DIRTY
+            hasDnsBlock || hasPort53Rule -> DnsStatus.SECURE
+            else -> DnsStatus.ABSENT
+        }
+    }
+
+    fun makeSecureDns(config: String): String {
+        val root = JSONObject(config)
+
+        // 1. DoH-only resolver: keep secure entries, strip plaintext, inject Cloudflare if none.
+        val dns = root.optJSONObject("dns") ?: JSONObject()
+        val existing = dns.optJSONArray("servers") ?: JSONArray()
+        val secure = JSONArray()
+        for (i in 0 until existing.length()) {
+            val addr = serverAddress(existing.opt(i)) ?: continue
+            if (SECURE_DNS_PREFIXES.any { addr.startsWith(it, ignoreCase = true) }) secure.put(existing.opt(i))
+        }
+        if (secure.length() == 0) secure.put(CLOUDFLARE_DOH)
+        dns.put("servers", secure)
+        if (!dns.has("queryStrategy")) dns.put("queryStrategy", "UseIP")
+        root.put("dns", dns)
+
+        // 2. Ensure the dns-out outbound exists.
+        val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also { root.put("outbounds", it) }
+        if (!hasOutboundTag(outbounds, DNS_OUT_TAG)) {
+            outbounds.put(JSONObject().put("tag", DNS_OUT_TAG).put("protocol", "dns"))
+        }
+
+        // 3. ForceIP on the proxy outbound (first non-direct/block/dns), merged into sockopt.
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.optJSONObject(i) ?: continue
+            if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
+            val ss = ob.optJSONObject("streamSettings") ?: JSONObject().also { ob.put("streamSettings", it) }
+            val sockopt = ss.optJSONObject("sockopt") ?: JSONObject().also { ss.put("sockopt", it) }
+            sockopt.put("domainStrategy", "ForceIP")
+            break
+        }
+
+        // 4. port-53 -> dns-out, first; drop any pre-existing port-53 rules; preserve the rest.
+        val routing = root.optJSONObject("routing") ?: JSONObject().also { root.put("routing", it) }
+        val existingRules = routing.optJSONArray("rules") ?: JSONArray()
+        val cleaned = JSONArray()
+        cleaned.put(JSONObject().put("type", "field").put("port", 53).put("outboundTag", DNS_OUT_TAG))
+        for (i in 0 until existingRules.length()) {
+            val rule = existingRules.optJSONObject(i) ?: continue
+            if (ruleMatchesDnsPort(rule)) continue
+            cleaned.put(rule)
+        }
+        routing.put("rules", cleaned)
+        root.put("routing", routing)
+
+        return root.toString()
+    }
+
+    private fun serverAddress(entry: Any?): String? = when (entry) {
+        is String -> entry
+        is JSONObject -> entry.optString("address").ifBlank { null }
+        else -> null
+    }
+
+    private fun outboundTagProtocolMap(root: JSONObject): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        val obs = root.optJSONArray("outbounds") ?: return map
+        for (i in 0 until obs.length()) {
+            val ob = obs.optJSONObject(i) ?: continue
+            val tag = ob.optString("tag")
+            if (tag.isNotBlank()) map[tag] = ob.optString("protocol").lowercase()
+        }
+        return map
+    }
+
+    private fun hasOutboundTag(outbounds: JSONArray, tag: String): Boolean {
+        for (i in 0 until outbounds.length()) {
+            if (outbounds.optJSONObject(i)?.optString("tag") == tag) return true
+        }
+        return false
+    }
+
+    private fun ruleMatchesDnsPort(rule: JSONObject): Boolean {
+        if (!rule.has("port")) return false
+        return when (val portVal = rule.opt("port")) {
+            is Int -> portVal == 53
+            is String -> portStringIncludes53(portVal)
+            else -> portStringIncludes53(portVal?.toString() ?: return false)
+        }
+    }
+
+    private fun portStringIncludes53(s: String): Boolean = s.split(",").any { token ->
+        val t = token.trim()
+        when {
+            t == "53" -> true
+            t.contains("-") -> {
+                val lo = t.substringBefore("-").trim().toIntOrNull()
+                val hi = t.substringAfter("-").trim().toIntOrNull()
+                lo != null && hi != null && 53 in lo..hi
+            }
+            else -> false
+        }
     }
 
     private fun buildXrayJson(profile: VlessProfile): JSONObject {
@@ -78,7 +209,10 @@ object ConfigBuilder {
                 })
             })
         })
-        return root
+        // Delegate DNS + ForceIP to makeSecureDns so the canonical shape lives in one place:
+        // adds the DoH dns block, the dns-out outbound, the port-53 -> dns-out rule (first,
+        // preserving the geoip:private rule), and ForceIP on the proxy (vless) outbound.
+        return JSONObject(makeSecureDns(root.toString()))
     }
 
     private fun buildVlessOutbound(profile: VlessProfile): JSONObject {
@@ -292,3 +426,7 @@ data class VlessProfile(
     val headerType: String? = null,
     val quicSecurity: String? = null
 )
+
+class DirtyDnsException(
+    message: String = "DNS normalization failed to produce a secure config"
+) : IllegalArgumentException(message)
