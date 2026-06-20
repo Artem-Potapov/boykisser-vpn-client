@@ -24,11 +24,21 @@ internal object VpnNotifications {
     const val EXPOSED_CHANNEL_ID = "xray_vpn_exposed_channel"
 
     /**
-     * Shared with [XrayVpnService] so the exposed notification REPLACES the
-     * ongoing foreground-service notification in place (same id) rather than
-     * stacking a second one.
+     * Id of the ongoing foreground-service status notification (connecting / connected /
+     * paused). The exposed heads-up alert uses [EXPOSED_NOTIFICATION_ID] instead — see there.
      */
     const val NOTIFICATION_ID = 1101
+
+    /**
+     * The exposed heads-up alert is posted under its OWN id, NOT [NOTIFICATION_ID].
+     *
+     * A notification's channel is fixed at its first post. [NOTIFICATION_ID] is first
+     * posted as the ongoing FGS notification on the low-importance channel, so re-posting
+     * the exposed alert on that same id keeps it low and silent — it can never heads-up.
+     * A fresh id is a fresh post, so the alert adopts the high-importance
+     * [EXPOSED_CHANNEL_ID] and alerts as intended. (1102 is the error notification.)
+     */
+    const val EXPOSED_NOTIFICATION_ID = 1103
 
     private fun localized(context: Context, @StringRes resId: Int, vararg args: Any): String =
         SupportedLanguage.localize(context).getString(resId, *args)
@@ -79,12 +89,23 @@ internal object VpnNotifications {
     }
 
     /**
-     * Posts the exposure notification under [NOTIFICATION_ID] (in place).
-     * `NotificationManager.notify()` is a silent no-op (does not throw) when
+     * Posts the exposure heads-up alert under [EXPOSED_NOTIFICATION_ID] — a separate id
+     * from the ongoing FGS notification, so it lands on the high-importance channel and
+     * can alert. `NotificationManager.notify()` is a silent no-op (does not throw) when
      * POST_NOTIFICATIONS is denied, so this never stalls the caller.
      */
     fun postExposed(context: Context, triggerLabel: String, deleteIntent: PendingIntent? = null) {
         context.getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildExposed(context, triggerLabel, deleteIntent))
+            .notify(EXPOSED_NOTIFICATION_ID, buildExposed(context, triggerLabel, deleteIntent))
+    }
+
+    /**
+     * Removes the exposed alert (on revive or stop). The ongoing FGS notification lives
+     * under a different id ([NOTIFICATION_ID]) and is managed separately, so
+     * `stopForeground` does not clear this one.
+     */
+    fun cancelExposed(context: Context) {
+        context.getSystemService(NotificationManager::class.java)
+            .cancel(EXPOSED_NOTIFICATION_ID)
     }
 }

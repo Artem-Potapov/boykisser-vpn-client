@@ -308,6 +308,10 @@ class XrayVpnService : VpnService() {
                 // correct even if the exposed-notification build ever throws.
                 LogRepository.setConnectionState(VpnConnectionState.PAUSED)
                 lastTriggerLabel = triggerPackageLabel
+                // Quiet, persistent FGS notification (id 1101, low channel) drops to a
+                // paused status line; the loud heads-up exposed alert is a SEPARATE
+                // notification on the high channel (id 1103) so it can actually alert.
+                updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
                 VpnNotifications.postExposed(
                     this@XrayVpnService,
                     triggerPackageLabel,
@@ -342,6 +346,8 @@ class XrayVpnService : VpnService() {
             bringUpTunnel(profile)
                 .onSuccess {
                     LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                    // Dismiss the separate exposed heads-up; restore the connected status.
+                    VpnNotifications.cancelExposed(this@XrayVpnService)
                     updateNotification(localizedString(R.string.vpn_status_connected))
                 }
                 .onFailure { error ->
@@ -447,6 +453,8 @@ class XrayVpnService : VpnService() {
         currentProfileId = -1L
         LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
         LogRepository.append("VPN stopped")
+        // The exposed alert is a separate notification id; stopForeground won't remove it.
+        VpnNotifications.cancelExposed(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -537,8 +545,12 @@ class XrayVpnService : VpnService() {
     /** Re-posts the notification matching the current state after a user dismissal. */
     private fun repostOngoingNotification() {
         when (LogRepository.connectionState.value) {
-            VpnConnectionState.PAUSED ->
+            VpnConnectionState.PAUSED -> {
+                // Two notifications back the paused state (the quiet FGS line + the loud
+                // exposed alert); restore both, since either could have been the one swiped.
+                updateNotification(localizedString(R.string.vpn_status_paused, lastTriggerLabel))
                 VpnNotifications.postExposed(this, lastTriggerLabel, notificationDismissIntent())
+            }
             VpnConnectionState.CONNECTING ->
                 updateNotification(localizedString(R.string.vpn_status_connecting))
             VpnConnectionState.CONNECTED ->
