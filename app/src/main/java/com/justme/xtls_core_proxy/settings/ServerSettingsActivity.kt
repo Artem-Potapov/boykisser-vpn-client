@@ -58,7 +58,6 @@ import com.justme.xtls_core_proxy.config.ProfileConfigCodec
 import com.justme.xtls_core_proxy.config.SimpleServerFields
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
-import org.json.JSONObject
 
 class ServerSettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -895,34 +894,24 @@ private fun defaultSimpleServerFields(): SimpleServerFields {
     )
 }
 
-private enum class EditableServerProtocol {
+internal enum class EditableServerProtocol {
     VLESS,
     HYSTERIA2,
     ADVANCED_ONLY
 }
 
-private fun detectEditableServerProtocol(config: String): EditableServerProtocol {
+internal fun detectEditableServerProtocol(config: String): EditableServerProtocol {
     if (config.isBlank()) return EditableServerProtocol.VLESS
-    return runCatching {
+    if (runCatching { ProfileConfigCodec.extractVlessProfile(config) }.isSuccess) {
+        return EditableServerProtocol.VLESS
+    }
+    val hysteria2Parsed = runCatching {
         when (ProfileConfigCodec.detectKind(config)) {
-            ConfigKind.VLESS_URI -> EditableServerProtocol.VLESS
-            ConfigKind.HYSTERIA2_URI -> EditableServerProtocol.HYSTERIA2
-            ConfigKind.JSON -> {
-                val root = JSONObject(config)
-                val outbounds = root.optJSONArray("outbounds")
-                val first = outbounds?.optJSONObject(0)
-                when {
-                    first?.optString("protocol").equals("vless", ignoreCase = true) -> {
-                        EditableServerProtocol.VLESS
-                    }
-                    first?.optString("protocol").equals("hysteria", ignoreCase = true) -> {
-                        EditableServerProtocol.HYSTERIA2
-                    }
-                    else -> EditableServerProtocol.ADVANCED_ONLY
-                }
-            }
+            ConfigKind.HYSTERIA2_URI -> Hysteria2ConfigCodec.parseUri(config)
+            else -> Hysteria2ConfigCodec.parseProfileFromJson(config)
         }
-    }.getOrDefault(EditableServerProtocol.ADVANCED_ONLY)
+    }
+    return if (hysteria2Parsed.isSuccess) EditableServerProtocol.HYSTERIA2 else EditableServerProtocol.ADVANCED_ONLY
 }
 
 private fun defaultHysteria2SimpleFields(): Hysteria2SimpleFields {
