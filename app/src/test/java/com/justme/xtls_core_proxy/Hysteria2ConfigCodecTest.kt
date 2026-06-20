@@ -185,6 +185,64 @@ class Hysteria2ConfigCodecTest {
         )
     }
 
+    @Test
+    fun mergeProfileIntoJson_preservesNonSalamanderUdpEntries() {
+        val source = """
+            {
+              "outbounds": [{
+                "protocol": "hysteria",
+                "settings": { "version": 2, "address": "old.example.com", "port": 443 },
+                "streamSettings": {
+                  "network": "hysteria",
+                  "security": "tls",
+                  "tlsSettings": { "serverName": "old.example.com" },
+                  "hysteriaSettings": { "version": 2, "auth": "old" },
+                  "finalmask": {
+                    "udp": [
+                      { "type": "mkcp-original", "settings": { "seed": "keep-me" } },
+                      { "type": "salamander", "settings": { "password": "old-mask" } }
+                    ],
+                    "quicParams": { "maxIdleTimeout": 60 }
+                  }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val merged = Hysteria2ConfigCodec.mergeProfileIntoJson(
+            source,
+            Hysteria2Profile(
+                auth = "new",
+                host = "new.example.com",
+                port = 8443,
+                serverName = "cdn.new.example.com",
+                salamanderPassword = "new-mask",
+                finalmaskJson = """
+                    {
+                      "udp": [
+                        { "type": "mkcp-original", "settings": { "seed": "keep-me" } },
+                        { "type": "salamander", "settings": { "password": "old-mask" } }
+                      ],
+                      "quicParams": { "maxIdleTimeout": 60 }
+                    }
+                """.trimIndent()
+            )
+        )
+
+        val udp = JSONObject(merged)
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("finalmask")
+            .getJSONArray("udp")
+
+        assertEquals(2, udp.length())
+        assertEquals("mkcp-original", udp.getJSONObject(0).getString("type"))
+        assertEquals("keep-me", udp.getJSONObject(0).getJSONObject("settings").getString("seed"))
+        assertEquals("salamander", udp.getJSONObject(1).getString("type"))
+        assertEquals("new-mask", udp.getJSONObject(1).getJSONObject("settings").getString("password"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun parseUri_rejectsMissingAuth() {
         Hysteria2ConfigCodec.parseUri("hysteria2://example.com:443/")
