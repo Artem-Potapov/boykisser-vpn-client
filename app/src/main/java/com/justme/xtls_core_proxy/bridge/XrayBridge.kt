@@ -2,7 +2,11 @@ package com.justme.xtls_core_proxy.bridge
 
 // i18n: audited 2026-05-21, no user-visible strings
 
+import android.net.VpnService
+import com.justme.xtls_core_proxy.log.LogRepository
+import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
+import java.lang.reflect.Proxy
 
 object XrayBridge {
     private val classNames = listOf(
@@ -33,6 +37,52 @@ object XrayBridge {
             val method = findMethod(clazz, listOf("StopXray", "stopXray"), 0)
             val response = method.invoke(null)
             if (response is String && response.isNotBlank()) {
+                throw IllegalStateException(response)
+            }
+        }
+    }
+
+    /**
+     * Registers a [VpnService.protect] callback for every socket Xray dials, so
+     * Xray's own outbound sockets (proxy link + DoH query) bypass the tun.
+     *
+     * Uses a dynamic [Proxy] against the gomobile-generated protector interface so
+     * the facade is robust to gomobile's package/method-name mangling (the interface
+     * is resolved by reflection, the proxy is built against whatever type that is).
+     * getOrThrow() therefore gates the connect on BOTH a binding failure (interface
+     * not found / proxy rejected) and a non-blank Go status string (controller install
+     * failed). Must be called before [startXray].
+     */
+    fun registerProtector(vpnService: VpnService): Result<Unit> {
+        return runCatching {
+            val clazz = bridgeClass()
+            val registerMethod = findMethod(clazz, listOf("RegisterProtector", "registerProtector"), 1)
+            val protectorInterface = registerMethod.parameterTypes[0]
+            val handler = InvocationHandler { proxy, method, args ->
+                when (method.name) {
+                    "equals" -> proxy === args?.getOrNull(0)
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "toString" -> "XrayProtectorProxy"
+                    else -> {
+                        // The sole gomobile interface method: protect(fd) -> Boolean.
+                        // gomobile maps Go `int` to a Java `long`, so accept any Number.
+                        val fd = (args?.getOrNull(0) as? Number)?.toInt()
+                            ?: throw IllegalStateException("Unexpected protector callback: ${method.name}")
+                        val ok = vpnService.protect(fd)
+                        if (!ok) {
+                            LogRepository.append("protect(fd=$fd) returned false — socket may not be excluded from tun")
+                        }
+                        ok
+                    }
+                }
+            }
+            val proxy = Proxy.newProxyInstance(
+                protectorInterface.classLoader,
+                arrayOf(protectorInterface),
+                handler
+            )
+            val response = registerMethod.invoke(null, proxy) as? String ?: ""
+            if (response.isNotBlank()) {
                 throw IllegalStateException(response)
             }
         }
