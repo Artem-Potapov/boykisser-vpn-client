@@ -106,8 +106,10 @@
     <string name="server_error_parse_advanced_prefix">Не удалось разобрать расширенную конфигурацию в простые поля: %1$s</string>
     <string name="server_error_simple_invalid_prefix">Простые поля заполнены неверно: %1$s</string>
     <string name="server_error_validation_failed_prefix">Проверка конфигурации не пройдена: %1$s</string>
+    <string name="server_error_advanced_only">Эту конфигурацию можно редактировать только в расширенном режиме</string>
     <string name="server_label_host">IP / хост сервера</string>
     <string name="server_label_port">Порт</string>
+    <string name="server_label_udp_port">UDP-порт</string>
     <string name="server_label_network">Сеть</string>
     <string name="server_network_tcp">TCP (Raw)</string>
     <string name="server_network_kcp">mKCP</string>
@@ -162,7 +164,16 @@
     <string name="server_label_allow_insecure">Разрешить небезопасное</string>
     <string name="server_allow_insecure_no">Нет</string>
     <string name="server_allow_insecure_yes">Да</string>
-    <string name="server_advanced_uri_or_json">vless:// URI или JSON Xray</string>
+    <string name="server_label_hysteria2_auth">Auth / пароль Hysteria2</string>
+    <string name="server_label_pinned_cert_sha256">SHA-256 сертификата</string>
+    <string name="server_label_salamander_password">Пароль Salamander</string>
+    <string name="server_label_hysteria2_congestion">Congestion</string>
+    <string name="server_label_upload_bandwidth">Скорость отправки</string>
+    <string name="server_label_download_bandwidth">Скорость загрузки</string>
+    <string name="server_label_udp_hop_ports">Порты UDP hop</string>
+    <string name="server_label_udp_hop_interval">Интервал UDP hop</string>
+    <string name="server_hint_hysteria2_finalmask">Поля Hysteria2 обновляют streamSettings.finalmask. Неизвестные ключи FinalMask сохраняются.</string>
+    <string name="server_advanced_uri_or_json">Ссылка на сервер или JSON Xray</string>
     <string name="server_cd_format_json">Форматировать JSON с отступом в 2 пробела</string>
     <string name="server_hint_advanced_save">Изменения в расширенном режиме сохраняются как введено после проверки. Нажмите кнопку форматирования, чтобы отформатировать JSON с отступом в 2 пробела.</string>
 

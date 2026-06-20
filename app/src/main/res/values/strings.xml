@@ -105,8 +105,10 @@
     <string name="server_error_parse_advanced_prefix">Unable to parse Advanced config into Simple fields: %1$s</string>
     <string name="server_error_simple_invalid_prefix">Simple fields are invalid: %1$s</string>
     <string name="server_error_validation_failed_prefix">Config validation failed: %1$s</string>
+    <string name="server_error_advanced_only">This config can only be edited in Advanced mode</string>
     <string name="server_label_host">Server IP / Host</string>
     <string name="server_label_port">Port</string>
+    <string name="server_label_udp_port">UDP Port</string>
     <string name="server_label_network">Network</string>
     <string name="server_network_tcp">TCP (Raw)</string>
     <string name="server_network_kcp">mKCP</string>
@@ -161,7 +163,16 @@
     <string name="server_label_allow_insecure">Allow Insecure</string>
     <string name="server_allow_insecure_no">No</string>
     <string name="server_allow_insecure_yes">Yes</string>
-    <string name="server_advanced_uri_or_json">vless:// URI or Xray JSON</string>
+    <string name="server_label_hysteria2_auth">Hysteria2 Auth / Password</string>
+    <string name="server_label_pinned_cert_sha256">Pinned certificate SHA-256</string>
+    <string name="server_label_salamander_password">Salamander password</string>
+    <string name="server_label_hysteria2_congestion">Congestion</string>
+    <string name="server_label_upload_bandwidth">Upload bandwidth</string>
+    <string name="server_label_download_bandwidth">Download bandwidth</string>
+    <string name="server_label_udp_hop_ports">UDP hop ports</string>
+    <string name="server_label_udp_hop_interval">UDP hop interval</string>
+    <string name="server_hint_hysteria2_finalmask">Structured Hysteria2 fields update streamSettings.finalmask. Unknown FinalMask JSON keys are preserved.</string>
+    <string name="server_advanced_uri_or_json">Server link or Xray JSON</string>
     <string name="server_cd_format_json">Format JSON with 2-space indentation</string>
     <string name="server_hint_advanced_save">Advanced changes are saved exactly as typed after validation. Click the format button to beautify JSON with 2-space indentation.</string>
 

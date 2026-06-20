@@ -2,6 +2,7 @@ package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.Hysteria2ConfigCodec
 import com.justme.xtls_core_proxy.config.Hysteria2Profile
+import com.justme.xtls_core_proxy.config.Hysteria2SimpleFields
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -127,6 +128,43 @@ class Hysteria2ConfigCodecTest {
         assertEquals("200mbps", profile.downloadBandwidth)
         assertEquals("20000-50000", profile.portHopPorts)
         assertEquals("30", profile.udpHopInterval)
+        assertEquals(
+            60,
+            JSONObject(requireNotNull(profile.finalmaskJson))
+                .getJSONObject("quicParams")
+                .getInt("maxIdleTimeout")
+        )
+    }
+
+    @Test
+    fun simpleFieldsRoundTripToProfileAndJson() {
+        val fields = Hysteria2SimpleFields(
+            auth = "secret",
+            host = "example.com",
+            port = "443",
+            portHopPorts = "443,20000-21000",
+            serverName = "cdn.example.com",
+            alpn = "h3",
+            allowInsecure = "true",
+            pinnedPeerCertSha256 = "ABCD",
+            salamanderPassword = "mask",
+            congestion = "brutal",
+            uploadBandwidth = "100mbps",
+            downloadBandwidth = "200mbps",
+            udpHopInterval = "15",
+            finalmaskJson = """{"quicParams":{"maxIdleTimeout":60}}"""
+        )
+
+        val json = Hysteria2ConfigCodec.toXrayJson(fields.toProfile())
+        val profile = Hysteria2ConfigCodec.parseProfileFromJson(json)
+
+        assertEquals("secret", profile.auth)
+        assertEquals("443,20000-21000", profile.portHopPorts)
+        assertEquals("mask", profile.salamanderPassword)
+        assertEquals("brutal", profile.congestion)
+        assertEquals("100mbps", profile.uploadBandwidth)
+        assertEquals("200mbps", profile.downloadBandwidth)
+        assertEquals("15", profile.udpHopInterval)
         assertEquals(
             60,
             JSONObject(requireNotNull(profile.finalmaskJson))
