@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 
 enum class ConfigKind {
     VLESS_URI,
+    HYSTERIA2_URI,
     JSON
 }
 
@@ -130,6 +131,8 @@ object ProfileConfigCodec {
     fun detectKind(input: String): ConfigKind {
         return if (input.trim().startsWith("vless://", ignoreCase = true)) {
             ConfigKind.VLESS_URI
+        } else if (Hysteria2ConfigCodec.isHysteria2Uri(input)) {
+            ConfigKind.HYSTERIA2_URI
         } else {
             ConfigKind.JSON
         }
@@ -138,6 +141,9 @@ object ProfileConfigCodec {
     fun extractVlessProfile(input: String): VlessProfile {
         return when (detectKind(input)) {
             ConfigKind.VLESS_URI -> parseVlessUri(input)
+            ConfigKind.HYSTERIA2_URI -> throw IllegalArgumentException(
+                "Hysteria2 link does not contain a vless outbound"
+            )
             ConfigKind.JSON -> parseVlessProfileFromJson(input)
         }
     }
@@ -145,6 +151,9 @@ object ProfileConfigCodec {
     fun applyBasicEdits(originalConfig: String, updatedProfile: VlessProfile): String {
         val baseJson = when (detectKind(originalConfig)) {
             ConfigKind.VLESS_URI -> ConfigBuilder.fromVlessUri(originalConfig)
+            ConfigKind.HYSTERIA2_URI -> throw IllegalArgumentException(
+                "Hysteria2 link does not contain a vless outbound"
+            )
             ConfigKind.JSON -> originalConfig
         }
         return mergeVlessProfileIntoJson(baseJson, updatedProfile)
