@@ -22,6 +22,12 @@ class SubscriptionBodyParserTest {
         "vless://33333333-3333-3333-3333-333333333333@c.example.com:8080" +
             "?type=tcp&security=none"
 
+    private val hysteria2 =
+        "hysteria2://secret@hy.example.com:443/?sni=cdn.hy.example.com#HY2%20Server"
+
+    private val hysteria2NoFragment =
+        "hy2://secret@hy2.example.com:443/?sni=cdn.hy2.example.com"
+
     private val rawJsonOutbound = """
         {
           "outbounds": [
@@ -169,6 +175,49 @@ class SubscriptionBodyParserTest {
         assertEquals("c.example.com:8080", outcome.parsed[2].displayName)
         assertTrue(outcome.parsed[0].config.trimStart().startsWith("{"))
         assertTrue(ConfigBuilder.buildRuntimeConfig(outcome.parsed[0].config).contains("\"protocol\":\"tun\""))
+    }
+
+    @Test
+    fun parsesPlainNewlineSeparatedHysteria2() {
+        val outcome = SubscriptionBodyParser.parseBody("$hysteria2\n$hysteria2NoFragment\n")
+
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(2, outcome.parsed.size)
+        assertEquals("HY2 Server", outcome.parsed[0].displayName)
+        assertEquals("hy2.example.com:443", outcome.parsed[1].displayName)
+        assertTrue(outcome.parsed[0].config.trimStart().startsWith("{"))
+        assertTrue(ConfigBuilder.buildRuntimeConfig(outcome.parsed[0].config).contains("\"protocol\":\"tun\""))
+    }
+
+    @Test
+    fun parsesBase64WrappedHysteria2Body() {
+        val encoded = Base64.getEncoder().encodeToString("$hysteria2\n$hysteria2NoFragment".toByteArray())
+        val outcome = SubscriptionBodyParser.parseBody(encoded)
+
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals(2, outcome.parsed.size)
+    }
+
+    @Test
+    fun jsonConfigFallsBackToHysteria2AddressAndPort() {
+        val json = """
+            {
+              "outbounds": [{
+                "protocol": "hysteria",
+                "settings": { "version": 2, "address": "json-hy.example.com", "port": 8443 },
+                "streamSettings": {
+                  "network": "hysteria",
+                  "security": "tls",
+                  "hysteriaSettings": { "version": 2, "auth": "secret" }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val outcome = SubscriptionBodyParser.parseBody(json)
+
+        assertEquals(0, outcome.parseErrorCount)
+        assertEquals("json-hy.example.com:8443", outcome.parsed.first().displayName)
     }
 
     @Test

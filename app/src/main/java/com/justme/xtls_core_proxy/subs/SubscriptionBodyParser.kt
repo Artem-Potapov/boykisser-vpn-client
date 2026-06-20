@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.subs
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.Hysteria2ConfigCodec
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
@@ -20,6 +21,12 @@ object SubscriptionBodyParser {
 
     private val BASE64_BODY_PATTERN = Regex("^[A-Za-z0-9+/=_\\-\\s]+$")
     private val BASE64_LINE_PATTERN = Regex("^[A-Za-z0-9+/=_\\-]+$")
+
+    private fun containsSupportedShareLink(text: String): Boolean {
+        return text.contains("vless://", ignoreCase = true) ||
+            text.contains("hysteria2://", ignoreCase = true) ||
+            text.contains("hy2://", ignoreCase = true)
+    }
 
     fun parseBody(body: String): ParseOutcome {
         val effective = decodeOuterBase64IfApplicable(body.trim())
@@ -92,7 +99,7 @@ object SubscriptionBodyParser {
         if (trimmed.isEmpty()) return trimmed
         if (!BASE64_BODY_PATTERN.matches(trimmed)) return trimmed
         val decoded = decodeBase64Permissive(trimmed) ?: return trimmed
-        return if (decoded.contains("vless://", ignoreCase = true) || decoded.contains("{")) {
+        return if (containsSupportedShareLink(decoded) || decoded.contains("{")) {
             decoded
         } else {
             trimmed
@@ -103,7 +110,7 @@ object SubscriptionBodyParser {
         if (line.length < 8) return null
         if (!BASE64_LINE_PATTERN.matches(line)) return null
         val decoded = decodeBase64Permissive(line) ?: return null
-        if (!decoded.contains("vless://", ignoreCase = true) && !decoded.contains("{")) return null
+        if (!containsSupportedShareLink(decoded) && !decoded.contains("{")) return null
         return decoded.trim()
     }
 
@@ -136,10 +143,10 @@ object SubscriptionBodyParser {
 
     private fun deriveDisplayName(candidate: String, index: Int): String {
         val trimmed = candidate.trim()
-        return if (trimmed.startsWith("vless://", ignoreCase = true)) {
-            deriveVlessDisplayName(trimmed, index)
-        } else {
-            deriveJsonDisplayName(trimmed, index)
+        return when {
+            trimmed.startsWith("vless://", ignoreCase = true) -> deriveVlessDisplayName(trimmed, index)
+            Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> deriveHysteria2DisplayName(trimmed, index)
+            else -> deriveJsonDisplayName(trimmed, index)
         }
     }
 
@@ -156,6 +163,20 @@ object SubscriptionBodyParser {
         return when {
             host != null && port != null -> "$host:$port"
             host != null -> host
+            else -> "Config ${index + 1}"
+        }
+    }
+
+    internal fun deriveHysteria2DisplayName(uri: String, index: Int): String {
+        val fragmentRaw = uri.substringAfter('#', "").substringBefore('?').takeIf { it.isNotBlank() }
+        val fragment = fragmentRaw?.let {
+            runCatching { URLDecoder.decode(it, StandardCharsets.UTF_8.name()) }.getOrNull()
+        }?.takeIf { it.isNotBlank() }
+        if (fragment != null) return fragment
+
+        val profile = runCatching { Hysteria2ConfigCodec.parseUri(uri) }.getOrNull()
+        return when {
+            profile != null -> "${profile.host}:${profile.port}"
             else -> "Config ${index + 1}"
         }
     }
@@ -177,6 +198,18 @@ object SubscriptionBodyParser {
                 ?.let { return@runCatching it }
             ss?.optJSONObject("realitySettings")?.optString("serverName")?.takeIf { it.isNotBlank() }
                 ?.let { return@runCatching it }
+
+            val hysteriaSettings = first?.optJSONObject("settings")
+            if (first?.optString("protocol").equals("hysteria", ignoreCase = true) &&
+                hysteriaSettings?.optInt("version", -1) == 2
+            ) {
+                val address = hysteriaSettings.optString("address").takeIf { it.isNotBlank() }
+                val port = hysteriaSettings.optInt("port", -1).takeIf { it > 0 }
+                when {
+                    address != null && port != null -> return@runCatching "$address:$port"
+                    address != null -> return@runCatching address
+                }
+            }
 
             val vnext = first?.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0)
             val address = vnext?.optString("address")?.takeIf { it.isNotBlank() }
