@@ -94,8 +94,10 @@ hy2://     [auth@]host[:port-or-port-list]/?[key=value]&...#fragment
 
 The authority is parsed **manually**, not via `URI.host`/`URI.port`: Java's server-based authority
 parser returns `null` for a standard multi-port authority like `example.com:123,5000-6000`. Bracketed
-IPv6 (`[addr]:port`) is supported. Validation failures (missing auth, missing host, invalid port,
-invalid port-hop token, unsupported obfs) throw `IllegalArgumentException` and surface as the existing
+IPv6 (`[addr]:port`) is supported. The `#fragment` is stripped before URI parsing (it is display-name
+only), so links with unencoded spaces/emoji in the name still parse. Validation failures (missing auth,
+missing host, invalid port, invalid port-hop token, unsupported obfs, or `obfs=salamander` without an
+`obfs-password`) throw `IllegalArgumentException` and surface as the existing
 invalid/unsupported import UX.
 
 ## FinalMask and Salamander
