@@ -21,5 +21,6 @@ data class Profile(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val config: String,
-    val subscriptionId: Long? = null
+    val subscriptionId: Long? = null,
+    val sanitizedDns: Boolean = false
 )
