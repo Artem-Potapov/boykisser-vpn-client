@@ -50,11 +50,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.ConfigKind
+import com.justme.xtls_core_proxy.config.Hysteria2ConfigCodec
+import com.justme.xtls_core_proxy.config.Hysteria2SimpleFields
 import com.justme.xtls_core_proxy.config.JsonFormatter
 import com.justme.xtls_core_proxy.config.ProfileConfigCodec
 import com.justme.xtls_core_proxy.config.SimpleServerFields
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import org.json.JSONObject
 
 class ServerSettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,8 +123,13 @@ private fun ServerSettingsScreen(
     onBack: () -> Unit,
     onSave: (name: String, config: String) -> Unit
 ) {
+    val initialProtocol = remember(initialConfig) {
+        detectEditableServerProtocol(initialConfig)
+    }
     val initialConfigIsJson = remember(initialConfig) {
-        initialConfig.isNotBlank() && !initialConfig.trim().startsWith("vless://", ignoreCase = true)
+        initialConfig.isNotBlank() &&
+            runCatching { ProfileConfigCodec.detectKind(initialConfig) == ConfigKind.JSON }
+                .getOrDefault(false)
     }
 
     val initialSimpleFields = remember(initialConfig) {
@@ -133,21 +142,58 @@ private fun ServerSettingsScreen(
         }
     }
 
+    val initialHysteria2Fields = remember(initialConfig) {
+        if (initialConfig.isBlank()) {
+            defaultHysteria2SimpleFields()
+        } else {
+            runCatching {
+                val profile = if (ProfileConfigCodec.detectKind(initialConfig) == ConfigKind.HYSTERIA2_URI) {
+                    Hysteria2ConfigCodec.parseUri(initialConfig)
+                } else {
+                    Hysteria2ConfigCodec.parseProfileFromJson(initialConfig)
+                }
+                Hysteria2SimpleFields.fromProfile(profile)
+            }.getOrElse { defaultHysteria2SimpleFields() }
+        }
+    }
+
     var name by rememberSaveable { mutableStateOf(initialName) }
     var configText by rememberSaveable { mutableStateOf(initialConfig) }
-    var tabIndex by rememberSaveable { mutableIntStateOf(0) }
-    var simpleFields by remember { mutableStateOf(initialSimpleFields) }
+    var tabIndex by rememberSaveable(initialConfig) {
+        mutableIntStateOf(if (initialProtocol == EditableServerProtocol.ADVANCED_ONLY) 1 else 0)
+    }
+    var simpleProtocol by rememberSaveable(initialConfig) { mutableStateOf(initialProtocol) }
+    var vlessFields by remember { mutableStateOf(initialSimpleFields) }
+    var hysteria2Fields by remember { mutableStateOf(initialHysteria2Fields) }
     var parseMessage by remember { mutableStateOf<String?>(null) }
     var saveError by remember { mutableStateOf<String?>(null) }
     val resources = LocalResources.current
 
     fun buildConfigFromSimple(): Result<String> {
         return runCatching {
-            val vlessProfile = simpleFields.toVlessProfile()
-            if (initialConfigIsJson) {
-                ProfileConfigCodec.mergeVlessProfileIntoJson(initialConfig, vlessProfile)
-            } else {
-                ConfigBuilder.templateJsonFromVlessProfile(vlessProfile)
+            when (simpleProtocol) {
+                EditableServerProtocol.VLESS -> {
+                    val vlessProfile = vlessFields.toVlessProfile()
+                    if (initialConfigIsJson) {
+                        ProfileConfigCodec.mergeVlessProfileIntoJson(initialConfig, vlessProfile)
+                    } else {
+                        ConfigBuilder.templateJsonFromVlessProfile(vlessProfile)
+                    }
+                }
+                EditableServerProtocol.HYSTERIA2 -> {
+                    val hysteria2Profile = hysteria2Fields.toProfile()
+                    if (
+                        initialConfig.isNotBlank() &&
+                        ProfileConfigCodec.detectKind(initialConfig) != ConfigKind.HYSTERIA2_URI
+                    ) {
+                        Hysteria2ConfigCodec.mergeProfileIntoJson(initialConfig, hysteria2Profile)
+                    } else {
+                        ConfigBuilder.templateJsonFromHysteria2Profile(hysteria2Profile)
+                    }
+                }
+                EditableServerProtocol.ADVANCED_ONLY -> {
+                    throw IllegalArgumentException(resources.getString(R.string.server_error_advanced_only))
+                }
             }
         }
     }
@@ -168,18 +214,38 @@ private fun ServerSettingsScreen(
             }
     }
 
-    fun syncAdvancedToBasic() {
-        runCatching {
-            SimpleServerFields.fromVlessProfile(ProfileConfigCodec.extractVlessProfile(configText))
+    fun syncAdvancedToBasic(): Boolean {
+        return runCatching {
+            when (detectEditableServerProtocol(configText)) {
+                EditableServerProtocol.VLESS -> {
+                    vlessFields = if (configText.isBlank()) {
+                        defaultSimpleServerFields()
+                    } else {
+                        SimpleServerFields.fromVlessProfile(ProfileConfigCodec.extractVlessProfile(configText))
+                    }
+                    simpleProtocol = EditableServerProtocol.VLESS
+                }
+                EditableServerProtocol.HYSTERIA2 -> {
+                    val profile = if (ProfileConfigCodec.detectKind(configText) == ConfigKind.HYSTERIA2_URI) {
+                        Hysteria2ConfigCodec.parseUri(configText)
+                    } else {
+                        Hysteria2ConfigCodec.parseProfileFromJson(configText)
+                    }
+                    hysteria2Fields = Hysteria2SimpleFields.fromProfile(profile)
+                    simpleProtocol = EditableServerProtocol.HYSTERIA2
+                }
+                EditableServerProtocol.ADVANCED_ONLY -> {
+                    throw IllegalArgumentException(resources.getString(R.string.server_error_advanced_only))
+                }
+            }
         }.onSuccess {
-            simpleFields = it
             parseMessage = null
         }.onFailure { error ->
             parseMessage = resources.getString(
                 R.string.server_error_parse_advanced_prefix,
                 error.message ?: error.javaClass.simpleName
             )
-        }
+        }.isSuccess
     }
 
     Scaffold(
@@ -271,10 +337,12 @@ private fun ServerSettingsScreen(
                             if (index == tabIndex) return@Tab
                             if (index == 1) {
                                 syncBasicToAdvanced()
+                                tabIndex = index
                             } else {
-                                syncAdvancedToBasic()
+                                if (syncAdvancedToBasic()) {
+                                    tabIndex = index
+                                }
                             }
-                            tabIndex = index
                         },
                         text = { Text(title) }
                     )
@@ -282,11 +350,22 @@ private fun ServerSettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            if (tabIndex == 0) {
-                SimpleEditor(
-                    fields = simpleFields,
-                    onFieldsChange = { simpleFields = it }
-                )
+            if (tabIndex == 0 && simpleProtocol != EditableServerProtocol.ADVANCED_ONLY) {
+                when (simpleProtocol) {
+                    EditableServerProtocol.VLESS -> {
+                        SimpleEditor(
+                            fields = vlessFields,
+                            onFieldsChange = { vlessFields = it }
+                        )
+                    }
+                    EditableServerProtocol.HYSTERIA2 -> {
+                        Hysteria2SimpleEditor(
+                            fields = hysteria2Fields,
+                            onFieldsChange = { hysteria2Fields = it }
+                        )
+                    }
+                    EditableServerProtocol.ADVANCED_ONLY -> Unit
+                }
             } else {
                 AdvancedEditor(
                     configText = configText,
@@ -439,6 +518,126 @@ private fun SimpleEditor(
         } else if (secLower == "tls") {
             TlsFields(fields, onFieldsChange)
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Hysteria2SimpleEditor(
+    fields: Hysteria2SimpleFields,
+    onFieldsChange: (Hysteria2SimpleFields) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        OutlinedTextField(
+            value = fields.host,
+            onValueChange = { onFieldsChange(fields.copy(host = it)) },
+            label = { Text(stringResource(R.string.server_label_host)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = fields.port,
+                onValueChange = { onFieldsChange(fields.copy(port = it)) },
+                label = { Text(stringResource(R.string.server_label_udp_port)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            DropdownField(
+                value = fields.allowInsecure,
+                onValueChange = { onFieldsChange(fields.copy(allowInsecure = it)) },
+                label = stringResource(R.string.server_label_allow_insecure),
+                options = allowInsecureOptions(),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        OutlinedTextField(
+            value = fields.auth,
+            onValueChange = { onFieldsChange(fields.copy(auth = it)) },
+            label = { Text(stringResource(R.string.server_label_hysteria2_auth)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.serverName,
+            onValueChange = { onFieldsChange(fields.copy(serverName = it)) },
+            label = { Text(stringResource(R.string.server_label_sni)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        DropdownField(
+            value = fields.alpn,
+            onValueChange = { onFieldsChange(fields.copy(alpn = it)) },
+            label = stringResource(R.string.server_label_alpn),
+            options = alpnOptions(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.pinnedPeerCertSha256,
+            onValueChange = { onFieldsChange(fields.copy(pinnedPeerCertSha256 = it)) },
+            label = { Text(stringResource(R.string.server_label_pinned_cert_sha256)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.salamanderPassword,
+            onValueChange = { onFieldsChange(fields.copy(salamanderPassword = it)) },
+            label = { Text(stringResource(R.string.server_label_salamander_password)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.congestion,
+            onValueChange = { onFieldsChange(fields.copy(congestion = it)) },
+            label = { Text(stringResource(R.string.server_label_hysteria2_congestion)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.udpHopInterval,
+            onValueChange = { onFieldsChange(fields.copy(udpHopInterval = it)) },
+            label = { Text(stringResource(R.string.server_label_udp_hop_interval)) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.uploadBandwidth,
+            onValueChange = { onFieldsChange(fields.copy(uploadBandwidth = it)) },
+            label = { Text(stringResource(R.string.server_label_upload_bandwidth)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.downloadBandwidth,
+            onValueChange = { onFieldsChange(fields.copy(downloadBandwidth = it)) },
+            label = { Text(stringResource(R.string.server_label_download_bandwidth)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.portHopPorts,
+            onValueChange = { onFieldsChange(fields.copy(portHopPorts = it)) },
+            label = { Text(stringResource(R.string.server_label_udp_hop_ports)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = fields.finalmaskJson,
+            onValueChange = { onFieldsChange(fields.copy(finalmaskJson = it)) },
+            label = { Text(stringResource(R.string.server_label_finalmask_json)) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 6,
+            textStyle = TextStyle(fontFamily = FontFamily.Monospace)
+        )
+        Text(
+            text = stringResource(R.string.server_hint_hysteria2_finalmask),
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 
@@ -692,6 +891,55 @@ private fun defaultSimpleServerFields(): SimpleServerFields {
         serverName = "",
         network = "tcp",
         xhttpExtraJson = "",
+        finalmaskJson = ""
+    )
+}
+
+private enum class EditableServerProtocol {
+    VLESS,
+    HYSTERIA2,
+    ADVANCED_ONLY
+}
+
+private fun detectEditableServerProtocol(config: String): EditableServerProtocol {
+    if (config.isBlank()) return EditableServerProtocol.VLESS
+    return runCatching {
+        when (ProfileConfigCodec.detectKind(config)) {
+            ConfigKind.VLESS_URI -> EditableServerProtocol.VLESS
+            ConfigKind.HYSTERIA2_URI -> EditableServerProtocol.HYSTERIA2
+            ConfigKind.JSON -> {
+                val root = JSONObject(config)
+                val outbounds = root.optJSONArray("outbounds")
+                val first = outbounds?.optJSONObject(0)
+                when {
+                    first?.optString("protocol").equals("vless", ignoreCase = true) -> {
+                        EditableServerProtocol.VLESS
+                    }
+                    first?.optString("protocol").equals("hysteria", ignoreCase = true) -> {
+                        EditableServerProtocol.HYSTERIA2
+                    }
+                    else -> EditableServerProtocol.ADVANCED_ONLY
+                }
+            }
+        }
+    }.getOrDefault(EditableServerProtocol.ADVANCED_ONLY)
+}
+
+private fun defaultHysteria2SimpleFields(): Hysteria2SimpleFields {
+    return Hysteria2SimpleFields(
+        auth = "",
+        host = "",
+        port = "443",
+        portHopPorts = "",
+        serverName = "",
+        alpn = "h3",
+        allowInsecure = "false",
+        pinnedPeerCertSha256 = "",
+        salamanderPassword = "",
+        congestion = "",
+        uploadBandwidth = "",
+        downloadBandwidth = "",
+        udpHopInterval = "",
         finalmaskJson = ""
     )
 }
