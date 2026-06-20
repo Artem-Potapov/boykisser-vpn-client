@@ -31,6 +31,7 @@ import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
+import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -221,32 +222,24 @@ class XrayVpnService : VpnService() {
                 .addDnsServer("2606:4700:4700::1111")
 
             val splitPrefs = SplitTunnelRepository.load(this@XrayVpnService)
-            when (splitPrefs.mode) {
-                SplitTunnelMode.ALLOW_ONLY -> {
-                    if (splitPrefs.packages.isEmpty()) {
-                        LogRepository.append("Split tunnel allow-only mode enabled with no selected apps")
-                    }
-                    splitPrefs.packages.forEach { pkg ->
-                        if (pkg == packageName) {
-                            LogRepository.append("Ignoring self package in allow-only split tunnel mode")
-                            return@forEach
-                        }
-                        try {
-                            builder.addAllowedApplication(pkg)
-                        } catch (_: PackageManager.NameNotFoundException) {
-                            LogRepository.append("Split tunnel skipped missing package: $pkg")
-                        }
-                    }
+            if (splitPrefs.mode == SplitTunnelMode.ALLOW_ONLY && splitPrefs.packages.isEmpty()) {
+                LogRepository.append("Split tunnel allow-only mode enabled with no selected apps")
+            }
+            // Whole-app tunneling: self is never excluded. Xray's own sockets bypass the
+            // tun via protect() (registered above), not via app exclusion.
+            val plan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
+            plan.allowedPackages.forEach { pkg ->
+                try {
+                    builder.addAllowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    LogRepository.append("Split tunnel skipped missing package: $pkg")
                 }
-                SplitTunnelMode.BLOCK_ALL_EXCEPT_SELECTED -> {
-                    val blockedPackages = splitPrefs.packages + packageName
-                    blockedPackages.forEach { pkg ->
-                        try {
-                            builder.addDisallowedApplication(pkg)
-                        } catch (_: PackageManager.NameNotFoundException) {
-                            LogRepository.append("Split tunnel skipped missing package: $pkg")
-                        }
-                    }
+            }
+            plan.disallowedPackages.forEach { pkg ->
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    LogRepository.append("Split tunnel skipped missing package: $pkg")
                 }
             }
 
