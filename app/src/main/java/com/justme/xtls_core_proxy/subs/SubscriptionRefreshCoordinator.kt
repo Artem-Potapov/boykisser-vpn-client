@@ -56,7 +56,12 @@ object SubscriptionRefreshCoordinator {
             is FetchResult.Success -> {
                 val outcome = SubscriptionBodyParser.parseBody(result.body)
                 val newProfiles = outcome.parsed.map { p ->
-                    Profile(name = p.displayName, config = p.config, subscriptionId = subId)
+                    Profile(
+                        name = p.displayName,
+                        config = p.config,
+                        subscriptionId = subId,
+                        sanitizedDns = p.sanitizedDns
+                    )
                 }
 
                 val activeId = activeProfileIdProvider()

@@ -155,4 +155,28 @@ class SubscriptionBodyParserTest {
         assertNotNull(outcome.parsed[0].displayName)
         assertFalse(outcome.parsed[0].displayName.isBlank())
     }
+
+    @Test
+    fun parseBody_flagsAndFixesDirtyDnsJsonEntry() {
+        val dirtyJson = """{"outbounds":[{"protocol":"vless","tag":"proxy"},""" +
+            """{"protocol":"freedom","tag":"direct"}],""" +
+            """"routing":{"rules":[{"type":"field","port":53,"outboundTag":"direct"}]}}"""
+
+        val outcome = SubscriptionBodyParser.parseBody(dirtyJson)
+
+        assertEquals(1, outcome.parsed.size)
+        val entry = outcome.parsed.first()
+        assertTrue(entry.sanitizedDns)
+        assertEquals(ConfigBuilder.DnsStatus.SECURE, ConfigBuilder.dnsDiagnosis(entry.config))
+    }
+
+    @Test
+    fun parseBody_doesNotFlagCleanUri() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@demo.example:443?security=none"
+
+        val outcome = SubscriptionBodyParser.parseBody(uri)
+
+        assertEquals(1, outcome.parsed.size)
+        assertFalse(outcome.parsed.first().sanitizedDns)
+    }
 }

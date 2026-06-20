@@ -7,7 +7,11 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
-data class ParsedConfig(val displayName: String, val config: String)
+data class ParsedConfig(
+    val displayName: String,
+    val config: String,
+    val sanitizedDns: Boolean = false
+)
 
 data class ParseOutcome(val parsed: List<ParsedConfig>, val parseErrorCount: Int)
 
@@ -29,15 +33,21 @@ object SubscriptionBodyParser {
 
         for ((index, raw) in lines.withIndex()) {
             val candidate = unwrapPerLineBase64(raw) ?: raw
-            val accepted = runCatching { ConfigBuilder.buildRuntimeConfig(candidate) }.isSuccess
-            if (!accepted) {
+            val result = runCatching {
+                val storage = ConfigBuilder.toProfileStorageConfig(candidate)
+                val dirty = ConfigBuilder.dnsDiagnosis(storage) == ConfigBuilder.DnsStatus.DIRTY
+                val finalConfig = ConfigBuilder.makeSecureDns(storage)
+                ConfigBuilder.buildRuntimeConfig(finalConfig) // validate; throws if unusable
+                finalConfig to dirty
+            }.getOrNull()
+            if (result == null) {
                 errors++
                 continue
             }
+            val (finalConfig, dirty) = result
             val baseName = deriveDisplayName(candidate, index)
             val unique = uniquify(baseName, nameCounts)
-            val storedConfig = ConfigBuilder.toProfileStorageConfig(candidate)
-            parsed += ParsedConfig(displayName = unique, config = storedConfig)
+            parsed += ParsedConfig(displayName = unique, config = finalConfig, sanitizedDns = dirty)
         }
         return ParseOutcome(parsed = parsed, parseErrorCount = errors)
     }
