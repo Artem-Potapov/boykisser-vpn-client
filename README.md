@@ -7,11 +7,12 @@ Android 13+ MVP VPN client that uses Xray-core `proxy/tun` directly.
 - Uses `VpnService` to create a TUN interface.
 - Passes TUN fd to Xray through `xray.tun.fd` / `XRAY_TUN_FD`.
 - Starts Xray-core with a `tun` inbound.
-- Accepts either:
-  - a `vless://` URI, or
+- Accepts:
+  - `vless://` URIs,
+  - `hysteria2://` / `hy2://` URIs, or
   - raw Xray JSON (normalized to a single `tun` inbound).
 - Does not run `tun2socks`.
-- Rejects local `socks` and `http` inbounds in MVP mode.
+- Sanitizes foreign inbounds (e.g. `socks`/`http`) into the canonical `tun` inbound rather than rejecting them.
 
 ## Project layout
 
@@ -85,7 +86,7 @@ Run on a real Android device (VPN/TUN behavior is not reliable in emulator-only 
 ## Runtime usage
 
 1. Launch app.
-2. Paste a `vless://` URI or Xray JSON.
+2. Paste a `vless://`, `hysteria2://`, `hy2://`, or Xray JSON config.
 3. Tap **Connect**.
 4. Grant notification permission (Android 13+) and VPN consent when prompted.
 5. Observe logs in the app.
@@ -93,7 +94,7 @@ Run on a real Android device (VPN/TUN behavior is not reliable in emulator-only 
 
 ## Validation checklist
 
-- Connects successfully with a known-good VLESS endpoint.
+- Connects successfully with a known-good VLESS or Hysteria2 endpoint.
 - App logs show TUN fd established and Xray started.
 - No localhost SOCKS/HTTP listener is configured in runtime config.
 - Traffic works when connected, stops when disconnected.
