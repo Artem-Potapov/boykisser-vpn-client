@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.ConfigKind
 import com.justme.xtls_core_proxy.config.ProfileConfigCodec
 import com.justme.xtls_core_proxy.config.VlessProfile
 import org.json.JSONObject
@@ -10,6 +11,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileConfigCodecTest {
+    @Test
+    fun detectKind_recognizesHysteria2Scheme() {
+        assertEquals(
+            ConfigKind.HYSTERIA2_URI,
+            ProfileConfigCodec.detectKind("hysteria2://secret@example.com:443/?sni=cdn.example.com")
+        )
+    }
+
+    @Test
+    fun detectKind_recognizesHy2AliasScheme() {
+        assertEquals(
+            ConfigKind.HYSTERIA2_URI,
+            ProfileConfigCodec.detectKind("hy2://secret@example.com:443/?sni=cdn.example.com")
+        )
+    }
+
+    @Test
+    fun detectKind_treatsPlainJsonAsJson() {
+        assertEquals(
+            ConfigKind.JSON,
+            ProfileConfigCodec.detectKind("""{"outbounds":[{"protocol":"freedom"}]}""")
+        )
+    }
+
     @Test
     fun vlessUri_roundTrip_preservesCoreFields() {
         val original = "vless://11111111-1111-1111-1111-111111111111@demo.example:443" +

@@ -215,7 +215,16 @@ object Hysteria2ConfigCodec {
         if (index == -1) {
             throw IllegalArgumentException("JSON config does not contain a Hysteria2 outbound")
         }
-        outbounds.put(index, buildHysteria2Outbound(updatedProfile))
+
+        val outbound = outbounds.optJSONObject(index)
+            ?: throw IllegalArgumentException("Invalid Hysteria2 outbound")
+        outbound.put("protocol", "hysteria")
+        outbound.put("settings", JSONObject().apply {
+            put("version", 2)
+            put("address", updatedProfile.host)
+            put("port", updatedProfile.port)
+        })
+        outbound.put("streamSettings", buildStreamSettings(updatedProfile))
         return root.toString()
     }
 

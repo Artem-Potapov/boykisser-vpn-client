@@ -243,6 +243,46 @@ class Hysteria2ConfigCodecTest {
         assertEquals("new-mask", udp.getJSONObject(1).getJSONObject("settings").getString("password"))
     }
 
+    @Test
+    fun mergeProfileIntoJson_preservesOutboundTagAndUnrelatedKeys() {
+        val source = """
+            {
+              "outbounds": [{
+                "tag": "custom-hy2",
+                "protocol": "hysteria",
+                "sendThrough": "192.0.2.10",
+                "domainStrategy": "UseIPv4",
+                "settings": { "version": 2, "address": "old.example.com", "port": 443 },
+                "streamSettings": {
+                  "network": "hysteria",
+                  "security": "tls",
+                  "tlsSettings": { "serverName": "old.example.com" },
+                  "hysteriaSettings": { "version": 2, "auth": "old" }
+                }
+              }]
+            }
+        """.trimIndent()
+
+        val merged = Hysteria2ConfigCodec.mergeProfileIntoJson(
+            source,
+            Hysteria2Profile(
+                auth = "new",
+                host = "new.example.com",
+                port = 8443,
+                serverName = "cdn.new.example.com",
+                alpn = "h3"
+            )
+        )
+
+        val outbound = JSONObject(merged).getJSONArray("outbounds").getJSONObject(0)
+        assertEquals("custom-hy2", outbound.getString("tag"))
+        assertEquals("192.0.2.10", outbound.getString("sendThrough"))
+        assertEquals("UseIPv4", outbound.getString("domainStrategy"))
+        assertEquals("new.example.com", outbound.getJSONObject("settings").getString("address"))
+        assertEquals(8443, outbound.getJSONObject("settings").getInt("port"))
+        assertEquals("new", outbound.getJSONObject("streamSettings").getJSONObject("hysteriaSettings").getString("auth"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun parseUri_rejectsMissingAuth() {
         Hysteria2ConfigCodec.parseUri("hysteria2://example.com:443/")
