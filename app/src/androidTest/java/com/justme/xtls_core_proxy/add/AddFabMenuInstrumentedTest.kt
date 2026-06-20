@@ -32,7 +32,7 @@ class AddFabMenuInstrumentedTest {
         ).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.add_menu_subscription))
             .assertIsDisplayed()
-        composeRule.onNodeWithText(activity.getString(R.string.add_menu_vless))
+        composeRule.onNodeWithText(activity.getString(R.string.add_menu_server_link))
             .assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.add_menu_json))
             .assertIsDisplayed()
@@ -51,14 +51,14 @@ class AddFabMenuInstrumentedTest {
     }
 
     @Test
-    fun tappingAddVlessOpensPasteDialog() {
+    fun tappingAddServerLinkOpensPasteDialog() {
         val activity = composeRule.activity
         val fabCd = activity.getString(R.string.main_cd_add_profile)
 
         composeRule.onNodeWithContentDescription(fabCd).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.add_menu_vless)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.add_menu_server_link)).performClick()
 
-        composeRule.onNodeWithText(activity.getString(R.string.add_dialog_vless_title))
+        composeRule.onNodeWithText(activity.getString(R.string.add_dialog_server_link_title))
             .assertIsDisplayed()
     }
 

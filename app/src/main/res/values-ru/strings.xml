@@ -239,7 +239,6 @@
     <string name="add_clipboard_hint_invalid">не распознано</string>
     <string name="add_menu_subscription">Добавить подписку</string>
     <string name="add_menu_server_link">Добавить ссылку на сервер</string>
-    <string name="add_menu_vless">Добавить сервер (ссылка VLESS)</string>
     <string name="add_menu_json">Добавить сервер (JSON)</string>
 
     <!-- Add-FAB paste dialogs -->
@@ -247,8 +246,6 @@
     <string name="add_dialog_subscription_hint">Вставьте URL подписки (http:// или https://).</string>
     <string name="add_dialog_server_link_title">Добавить ссылку на сервер</string>
     <string name="add_dialog_server_link_hint">Вставьте ссылку vless://, hysteria2:// или hy2://.</string>
-    <string name="add_dialog_vless_title">Добавить сервер VLESS</string>
-    <string name="add_dialog_vless_hint">Вставьте ссылку vless://.</string>
     <string name="add_dialog_json_title">Добавить сервер (JSON)</string>
     <string name="add_dialog_json_hint">Вставьте полную конфигурацию Xray в формате JSON.</string>
     <string name="add_dialog_input_placeholder">Вставьте сюда</string>

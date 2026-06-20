@@ -111,7 +111,9 @@ object Hysteria2ConfigCodec {
     }
 
     fun parseUri(uri: String): Hysteria2Profile {
-        val parsed = URI(uri.trim())
+        // Strip the fragment before URI parsing: real share-link fragments carry unencoded
+        // spaces/emoji that java.net.URI rejects, and the fragment is display-name-only here.
+        val parsed = URI(uri.trim().substringBefore('#'))
         require(
             parsed.scheme.equals("hysteria2", ignoreCase = true) ||
                 parsed.scheme.equals("hy2", ignoreCase = true)
@@ -126,6 +128,10 @@ object Hysteria2ConfigCodec {
         require(obfs.isBlank() || obfs.equals("salamander", ignoreCase = true)) {
             "Unsupported Hysteria2 obfs: $obfs"
         }
+        val salamanderPassword = params["obfs-password"]?.trim()?.ifBlank { null }
+        require(!obfs.equals("salamander", ignoreCase = true) || salamanderPassword != null) {
+            "Salamander obfs requires a non-empty obfs-password"
+        }
 
         return Hysteria2Profile(
             auth = authority.auth,
@@ -136,7 +142,7 @@ object Hysteria2ConfigCodec {
             alpn = params["alpn"]?.trim().orEmpty().ifBlank { "h3" },
             allowInsecure = params["insecure"] == "1",
             pinnedPeerCertSha256 = params["pinSHA256"].orEmpty(),
-            salamanderPassword = params["obfs-password"]?.trim()?.ifBlank { null }
+            salamanderPassword = salamanderPassword
         )
     }
 
@@ -224,7 +230,10 @@ object Hysteria2ConfigCodec {
             put("address", updatedProfile.host)
             put("port", updatedProfile.port)
         })
-        outbound.put("streamSettings", buildStreamSettings(updatedProfile))
+        // Patch the existing streamSettings in place so sockopt (makeSecureDns' ForceIP) and any
+        // unknown stream-settings keys survive the edit, mirroring the VLESS merge.
+        val existingStreamSettings = outbound.optJSONObject("streamSettings") ?: JSONObject()
+        outbound.put("streamSettings", buildStreamSettings(updatedProfile, existingStreamSettings))
         return root.toString()
     }
 
@@ -327,11 +336,13 @@ object Hysteria2ConfigCodec {
         return outbound
     }
 
-    private fun buildStreamSettings(profile: Hysteria2Profile): JSONObject {
-        val ss = JSONObject()
-        ss.put("network", "hysteria")
-        ss.put("security", "tls")
-        ss.put("tlsSettings", JSONObject().apply {
+    private fun buildStreamSettings(
+        profile: Hysteria2Profile,
+        base: JSONObject = JSONObject()
+    ): JSONObject {
+        base.put("network", "hysteria")
+        base.put("security", "tls")
+        base.put("tlsSettings", JSONObject().apply {
             put("serverName", profile.serverName)
             if (profile.alpn.isNotBlank()) {
                 put("alpn", alpnToJsonArray(profile.alpn))
@@ -343,16 +354,18 @@ object Hysteria2ConfigCodec {
                 put("pinnedPeerCertSha256", profile.pinnedPeerCertSha256)
             }
         })
-        ss.put("hysteriaSettings", JSONObject().apply {
+        base.put("hysteriaSettings", JSONObject().apply {
             put("version", 2)
             put("auth", profile.auth)
         })
 
         val finalmask = buildFinalmask(profile)
         if (finalmask != null) {
-            ss.put("finalmask", finalmask)
+            base.put("finalmask", finalmask)
+        } else {
+            base.remove("finalmask")
         }
-        return ss
+        return base
     }
 
     private fun buildFinalmask(profile: Hysteria2Profile): JSONObject? {

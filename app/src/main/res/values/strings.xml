@@ -238,7 +238,6 @@
     <string name="add_clipboard_hint_invalid">unrecognized</string>
     <string name="add_menu_subscription">Add subscription</string>
     <string name="add_menu_server_link">Add server link</string>
-    <string name="add_menu_vless">Add server (VLESS link)</string>
     <string name="add_menu_json">Add server (JSON)</string>
 
     <!-- Add-FAB paste dialogs -->
@@ -246,8 +245,6 @@
     <string name="add_dialog_subscription_hint">Paste a subscription URL (http:// or https://).</string>
     <string name="add_dialog_server_link_title">Add server link</string>
     <string name="add_dialog_server_link_hint">Paste a vless://, hysteria2://, or hy2:// link.</string>
-    <string name="add_dialog_vless_title">Add VLESS server</string>
-    <string name="add_dialog_vless_hint">Paste a vless:// link.</string>
     <string name="add_dialog_json_title">Add server (JSON)</string>
     <string name="add_dialog_json_hint">Paste a complete Xray JSON config.</string>
     <string name="add_dialog_input_placeholder">Paste here</string>
