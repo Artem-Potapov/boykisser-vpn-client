@@ -8,8 +8,43 @@ import org.junit.Test
 
 class ConfigBuilderTest {
     @Test
-    fun toProfileStorageConfig_keepsJsonInput() {
+    fun toProfileStorageConfig_injectsTunInboundForJson() {
         val input = """{"outbounds":[{"protocol":"freedom","tag":"direct"}]}"""
+        val stored = ConfigBuilder.toProfileStorageConfig(input)
+        val root = JSONObject(stored)
+
+        assertEquals(1, root.getJSONArray("inbounds").length())
+        assertEquals("tun", root.getJSONArray("inbounds").getJSONObject(0).getString("protocol"))
+        assertEquals("freedom", root.getJSONArray("outbounds").getJSONObject(0).getString("protocol"))
+    }
+
+    @Test
+    fun toProfileStorageConfig_sanitizesForeignInboundsToTun() {
+        // A real imported config (e.g. a Hysteria2 panel export) ships local socks / dokodemo
+        // inbounds. Storage must canonicalize to the single tun inbound, not persist them.
+        val json = """
+            {
+              "inbounds": [
+                {"protocol": "socks", "tag": "socks", "listen": "127.0.0.1", "port": 10808},
+                {"protocol": "dokodemo-door", "tag": "metrics_in"}
+              ],
+              "outbounds": [
+                {"protocol": "hysteria", "tag": "proxy",
+                 "settings": {"version": 2, "address": "e.com", "port": 443},
+                 "streamSettings": {"network": "hysteria", "hysteriaSettings": {"version": 2, "auth": "x"}}}
+              ]
+            }
+        """.trimIndent()
+        val inbounds = JSONObject(ConfigBuilder.toProfileStorageConfig(json)).getJSONArray("inbounds")
+
+        assertEquals(1, inbounds.length())
+        assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
+    }
+
+    @Test
+    fun toProfileStorageConfig_keepsNonJsonInputUnchanged() {
+        // Non-JSON, non-share-link input falls through untouched; it is rejected later at runtime.
+        val input = "not a json config"
         assertEquals(input, ConfigBuilder.toProfileStorageConfig(input))
     }
 

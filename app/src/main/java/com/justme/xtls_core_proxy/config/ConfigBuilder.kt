@@ -55,7 +55,11 @@ object ConfigBuilder {
         return when {
             trimmed.startsWith("vless://", ignoreCase = true) -> fromVlessUri(trimmed)
             Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> fromHysteria2Uri(trimmed)
-            else -> trimmed
+            // Canonicalize imported JSON to the single tun inbound at storage time, matching the
+            // generated vless:// / hysteria2:// paths and the runtime backstop (fromJson). Foreign
+            // inbounds (socks/http/dokodemo) are inert without tun2socks and only confuse the stored
+            // config. Fall back to raw for non-JSON input, which is rejected later at runtime.
+            else -> runCatching { replaceJsonInboundsWithTun(trimmed) }.getOrDefault(trimmed)
         }
     }
 
