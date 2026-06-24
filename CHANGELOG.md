@@ -3,8 +3,21 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
-> **Note - `1.0.4` (the `1.0.4DEV` / `1.0.4Release`) was never published** — its
-> changes are folded into **2.0.0PRE** `1.0.2R` is the last released version.
+## [2.0.1R] - 2026-06-25
+
+Tag: `2.0.1Release`. Minor release.
+
+### Fixed
+When connecting to a domain as the address, ForceIP option told XRAY the address must be
+resolved first, but because of the new DNS-proofing the only option is the XRAY's DNS,
+which.. required an active tunnel.
+Now the domain is 'surgically extracted' and is being bootstrapped (the only thing that
+doesn't go through the XRAY's DNS) via DoH. 
+
+## [2.0.0R] - 2026-06-21
+
+No bugs found, exactly the same as 2.0.0R, except for the tag.
+Tag: `2.0.0-Release`.
 
 ## [2.0.0PRE] — 2026-06-20
 
