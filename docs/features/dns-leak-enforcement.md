@@ -36,7 +36,12 @@ that's merely missing DoH is fixed silently, with no nag).
 `makeSecureDns` rewrites any config to:
 
 ```jsonc
-"dns": { "servers": ["https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"], "queryStrategy": "UseIP" }
+"dns": { "servers": [
+  // 1b. hostname-addressed proxy ONLY: bootstrap its name over direct-dialed DoH (see below)
+  { "address": "https+local://1.1.1.1/dns-query", "domains": ["full:<proxy-host>"] },
+  { "address": "https+local://1.0.0.1/dns-query", "domains": ["full:<proxy-host>"] },
+  "https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"  // everything else → through the proxy
+], "queryStrategy": "UseIP" }
 "outbounds": [
   { "tag": "proxy", "protocol": "vless" | "hysteria", ...,
     "streamSettings": { ..., "sockopt": { "domainStrategy": "ForceIP" } } },  // server-name bootstrap → DoH
@@ -64,7 +69,8 @@ Three invariants, each closing one leak:
    (`transport/internet/dialer.go:251`), the dialer resolves a domain via Xray's DNS module **only
    when `sockopt.DomainStrategy.HasStrategy()` is true** — with the default `AsIs`, the server
    hostname goes to the OS/LAN resolver. `ForceIP` is *merged* into any existing `sockopt`, not
-   clobbered. Servers pinned by raw IP are unaffected (nothing to resolve).
+   clobbered. Servers pinned by raw IP are unaffected (nothing to resolve); hostname-addressed servers
+   need the **server-name bootstrap** below or they deadlock.
 
 `ForceIP` (not `UseIP`) on the bootstrap is deliberate: `UseIP` falls back to `AsIs` (OS resolver)
 when DoH fails, reintroducing the LAN leak; `ForceIP` fails the connection instead — consistent with
@@ -85,6 +91,36 @@ hosts-map path. We avoid that entirely.
 if `1.1.1.1` is unreachable. It is the **same operator**, so it covers an IP/route outage, *not*
 Cloudflare-wide blocking — true cross-operator failover would reintroduce the hostname/hosts-map
 machinery and was judged not worth it.
+
+## Server-name bootstrap for hostname-addressed proxies (step 1b)
+
+DoH-by-IP solves the *resolver's* bootstrap, but `ForceIP` (invariant 3) creates a **second** one it
+does not: the **proxy server's own hostname** must be resolved, and `ForceIP` routes that lookup into
+this same DNS module. The module's unscoped DoH query (`https://1.1.1.1`) is **dispatched through
+routing**, where — matching neither port-53 nor `geoip:private` — it falls to the **default outbound,
+which is the proxy itself**. So a hostname-addressed server **deadlocks**: the proxy can't connect
+until its hostname resolves, and the hostname can't resolve until the proxy connects. Observable
+symptom (the bug this fixed): **every IP-addressed server connects; every hostname-addressed one
+silently times out** — across VLESS *and* Hysteria2 (both end in `makeSecureDns`).
+
+The fix: when the proxy address is a hostname, `makeSecureDns` **prepends** two resolver entries
+scoped with `domains: ["full:<that-host>"]` to the `https+local://` form of Cloudflare's IPs. The
+`+local` scheme makes Xray dial the DoH endpoint **directly via its system dialer** — which
+[2A](failclosed-startup.md)'s global protector carves out of the tun — **instead of dispatching it
+through routing**, so the bootstrap query never re-enters the proxy. Because the entries are
+`full:`-scoped, **only** the proxy hostname resolves locally; every other name has no matching
+`domains` and falls through to the unscoped `https://` resolvers — i.e. still resolved **through the
+proxy**, preserving exit-consistent DNS for user traffic. IP-literal servers get **no** bootstrap
+entry (nothing to resolve), so their behaviour is unchanged.
+
+- **Trade-off:** a hostname server's *initial* bootstrap now depends on **direct** reachability of
+  `1.1.1.1`/`1.0.0.1`. A network that blocks Cloudflare DNS outright keeps that one server down — but
+  it stays fail-closed (encrypted DoH, no plaintext leak) and IP-addressed servers are unaffected.
+- **Host detection:** `isIpLiteral` (IPv4 dotted-quad, or any `:` ⇒ IPv6 literal); address extraction
+  covers `settings.address` (Hysteria2), `settings.vnext[0].address` (VLESS/VMess), and
+  `settings.servers[0].address` (Trojan/Shadowsocks).
+- **Idempotent:** the plaintext-strip filter drops prior `https+local` entries (they match no
+  `SECURE_DNS_PREFIXES`) and step 1b re-derives them, so re-running never duplicates.
 
 ## Sources and data flow
 
@@ -107,7 +143,7 @@ nag/badge without improving safety. **Do not widen `dnsDiagnosis` to mirror `mak
 
 | File | Change |
 |---|---|
-| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | The heart: `enum DnsStatus`, `dnsDiagnosis`, `makeSecureDns`, `replaceJsonInboundsWithTun`, `const CLOUDFLARE_DOH` + `CLOUDFLARE_DOH_SECONDARY`; `buildXrayJson` ends with `makeSecureDns`; `fromJson` does sanitize-inbounds → normalize → assert. Top-level `DirtyDnsException`. |
+| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | The heart: `enum DnsStatus`, `dnsDiagnosis`, `makeSecureDns`, `replaceJsonInboundsWithTun`, `const CLOUDFLARE_DOH` + `CLOUDFLARE_DOH_SECONDARY` + `CLOUDFLARE_DOH_LOCAL(_SECONDARY)` (the `https+local` bootstrap), helpers `firstProxyOutbound`/`proxyServerAddress`/`localBootstrapServer`/`isIpLiteral`; `buildXrayJson` ends with `makeSecureDns`; `fromJson` does sanitize-inbounds → normalize → assert. Top-level `DirtyDnsException`. |
 | [`db/Profile.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/Profile.kt) | `sanitizedDns: Boolean = false`. |
 | [`db/AppDatabase.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/AppDatabase.kt) | Version **2 → 3** + additive `MIGRATION_2_3` (`ALTER TABLE profiles ADD COLUMN sanitizedDns INTEGER NOT NULL DEFAULT 0`). |
 | [`subs/SubscriptionBodyParser.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParser.kt) | `ParsedConfig.sanitizedDns`; per-entry diagnose → normalize → flag. **Whole-JSON body support** (see below). |
@@ -165,7 +201,9 @@ confusing, non-canonical stored config; canonicalizing at storage keeps the two 
   — `dnsDiagnosis` ABSENT/SECURE/DIRTY (incl. port string-range `"53-54"`); `makeSecureDns` is SECURE,
   DoH-only (plaintext stripped), preserves an existing DoH resolver, injects **both** Cloudflare
   servers when none survive, `dns-out` present, port-53→`dns-out` first, idempotent, ForceIP on proxy;
-  `buildRuntimeConfig` integration incl. dirty-JSON → normalized-SECURE (not throwing).
+  **server-name bootstrap** (scoped `https+local` `full:<host>` prepended for hostname VLESS/Hysteria2
+  servers, none for IP-literal servers, idempotent); `buildRuntimeConfig` integration incl. dirty-JSON
+  → normalized-SECURE (not throwing).
 - **[`ConfigBuilderTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderTest.kt)** —
   inbound sanitization (socks/http → single tun inbound; `replaceJsonInboundsWithTun` coverage).
 - **[`SubscriptionBodyParserTest`](../../app/src/test/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParserTest.kt)**

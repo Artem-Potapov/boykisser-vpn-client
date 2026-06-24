@@ -81,6 +81,12 @@ object ConfigBuilder {
 
     const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
     const val CLOUDFLARE_DOH_SECONDARY = "https://1.0.0.1/dns-query"
+    // IP-literal `https+local://` form of the Cloudflare resolvers. `+local` dials the DoH endpoint
+    // directly via Xray's system dialer (which the 2A protector carves out of the tun) instead of
+    // dispatching it through the routing table — so it never loops back through the proxy. Used only
+    // to bootstrap a hostname-addressed proxy server's own name (see makeSecureDns step 1b).
+    const val CLOUDFLARE_DOH_LOCAL = "https+local://1.1.1.1/dns-query"
+    const val CLOUDFLARE_DOH_LOCAL_SECONDARY = "https+local://1.0.0.1/dns-query"
     private const val DNS_OUT_TAG = "dns-out"
     private val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
     private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
@@ -124,6 +130,12 @@ object ConfigBuilder {
 
     fun makeSecureDns(config: String): String {
         val root = JSONObject(config)
+        val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also { root.put("outbounds", it) }
+        val proxyOutbound = firstProxyOutbound(outbounds)
+        // The proxy server's own address, if it's a hostname that ForceIP must resolve (step 3).
+        val proxyHostname = proxyOutbound
+            ?.let { proxyServerAddress(it) }
+            ?.takeIf { it.isNotBlank() && !isIpLiteral(it) }
 
         // 1. DoH-only resolver: keep secure entries, strip plaintext, inject Cloudflare if none.
         val dns = root.optJSONObject("dns") ?: JSONObject()
@@ -140,24 +152,37 @@ object ConfigBuilder {
             secure.put(CLOUDFLARE_DOH)
             secure.put(CLOUDFLARE_DOH_SECONDARY)
         }
-        dns.put("servers", secure)
+        // 1b. Server-name bootstrap. When the proxy is addressed by a hostname, ForceIP (step 3)
+        // resolves it through this DNS module — but the unscoped DoH query above is dispatched
+        // through routing, where it falls to the default outbound (the proxy itself). That is a
+        // deadlock: the proxy can't connect until its hostname resolves, and the hostname can't
+        // resolve until the proxy connects. Break it with a `https+local` resolver scoped to ONLY
+        // that hostname (`full:`): `+local` dials the DoH endpoint directly via the system dialer
+        // (2A's protector carves it out of the tun) instead of through routing, so it never re-enters
+        // the proxy. Every *other* DNS query still has no matching `domains` here and falls through to
+        // the unscoped resolvers above — i.e. through the proxy. IP-literal servers need no resolution,
+        // so they get no bootstrap (proxyHostname is null). These prepend so they match first.
+        val servers = JSONArray()
+        if (proxyHostname != null) {
+            servers.put(localBootstrapServer(CLOUDFLARE_DOH_LOCAL, proxyHostname))
+            servers.put(localBootstrapServer(CLOUDFLARE_DOH_LOCAL_SECONDARY, proxyHostname))
+        }
+        for (i in 0 until secure.length()) servers.put(secure.opt(i))
+        dns.put("servers", servers)
         if (!dns.has("queryStrategy")) dns.put("queryStrategy", "UseIP")
         root.put("dns", dns)
 
         // 2. Ensure the dns-out outbound exists.
-        val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also { root.put("outbounds", it) }
         if (!hasOutboundTag(outbounds, DNS_OUT_TAG)) {
             outbounds.put(JSONObject().put("tag", DNS_OUT_TAG).put("protocol", "dns"))
         }
 
         // 3. ForceIP on the proxy outbound (first non-direct/block/dns), merged into sockopt.
-        for (i in 0 until outbounds.length()) {
-            val ob = outbounds.optJSONObject(i) ?: continue
-            if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
-            val ss = ob.optJSONObject("streamSettings") ?: JSONObject().also { ob.put("streamSettings", it) }
+        if (proxyOutbound != null) {
+            val ss = proxyOutbound.optJSONObject("streamSettings")
+                ?: JSONObject().also { proxyOutbound.put("streamSettings", it) }
             val sockopt = ss.optJSONObject("sockopt") ?: JSONObject().also { ss.put("sockopt", it) }
             sockopt.put("domainStrategy", "ForceIP")
-            break
         }
 
         // 4. port-53 -> dns-out, first; drop any pre-existing port-53 rules; preserve the rest.
@@ -180,6 +205,42 @@ object ConfigBuilder {
         is String -> entry
         is JSONObject -> entry.optString("address").ifBlank { null }
         else -> null
+    }
+
+    /** First outbound that isn't a `freedom`/`blackhole`/`dns` helper — the actual proxy. */
+    private fun firstProxyOutbound(outbounds: JSONArray): JSONObject? {
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.optJSONObject(i) ?: continue
+            if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
+            return ob
+        }
+        return null
+    }
+
+    /**
+     * The proxy server's address across the outbound shapes this app produces and the common panel
+     * ones: Hysteria2 (`settings.address`), VLESS/VMess (`settings.vnext[0].address`), and
+     * Trojan/Shadowsocks (`settings.servers[0].address`).
+     */
+    private fun proxyServerAddress(outbound: JSONObject): String? {
+        val settings = outbound.optJSONObject("settings") ?: return null
+        settings.optString("address").ifBlank { null }?.let { return it }
+        settings.optJSONArray("vnext")?.optJSONObject(0)?.optString("address")?.ifBlank { null }?.let { return it }
+        settings.optJSONArray("servers")?.optJSONObject(0)?.optString("address")?.ifBlank { null }?.let { return it }
+        return null
+    }
+
+    private fun localBootstrapServer(address: String, host: String): JSONObject =
+        JSONObject()
+            .put("address", address)
+            .put("domains", JSONArray().put("full:${host.lowercase()}"))
+
+    /** True for an IPv4/IPv6 literal (needs no DNS resolution), false for a hostname. */
+    private fun isIpLiteral(host: String): Boolean {
+        if (host.contains(":")) return true // IPv6 literal (hostnames never contain ':')
+        val parts = host.split(".")
+        if (parts.size != 4) return false
+        return parts.all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }
     }
 
     private fun outboundTagProtocolMap(root: JSONObject): Map<String, String> {

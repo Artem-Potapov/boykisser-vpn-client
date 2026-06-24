@@ -147,6 +147,73 @@ class ConfigBuilderDnsTest {
         assertEquals(1, port53)
     }
 
+    // --- server-name bootstrap (hostname-addressed proxy) ---
+
+    private val vlessHostnameProxy = """
+        {"outbounds":[{"protocol":"vless","tag":"proxy",
+          "settings":{"vnext":[{"address":"demo.example","port":443,"users":[{"id":"x"}]}]}},
+          {"protocol":"freedom","tag":"direct"}]}
+    """.trimIndent()
+
+    @Test
+    fun makeSecureDns_addsScopedLocalBootstrap_forHostnameVlessServer() {
+        val servers = JSONObject(ConfigBuilder.makeSecureDns(vlessHostnameProxy))
+            .getJSONObject("dns").getJSONArray("servers")
+        assertEquals(4, servers.length())
+        // First two: local-DoH bootstrap scoped to ONLY the proxy hostname.
+        val first = servers.getJSONObject(0)
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH_LOCAL, first.getString("address"))
+        assertEquals("full:demo.example", first.getJSONArray("domains").getString(0))
+        val second = servers.getJSONObject(1)
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH_LOCAL_SECONDARY, second.getString("address"))
+        assertEquals("full:demo.example", second.getJSONArray("domains").getString(0))
+        // Unscoped through-proxy resolvers stay for every other DNS query.
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH, servers.getString(2))
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH_SECONDARY, servers.getString(3))
+    }
+
+    @Test
+    fun makeSecureDns_addsScopedLocalBootstrap_forHostnameHysteria2Server() {
+        val cfg = """
+            {"outbounds":[{"protocol":"hysteria","tag":"proxy",
+              "settings":{"version":2,"address":"handler.somenewsteps.space","port":443},
+              "streamSettings":{"network":"hysteria","hysteriaSettings":{"version":2,"auth":"secret"}}},
+              {"protocol":"freedom","tag":"direct"}]}
+        """.trimIndent()
+        val first = JSONObject(ConfigBuilder.makeSecureDns(cfg))
+            .getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH_LOCAL, first.getString("address"))
+        assertEquals("full:handler.somenewsteps.space", first.getJSONArray("domains").getString(0))
+    }
+
+    @Test
+    fun makeSecureDns_noLocalBootstrap_forIpLiteralServer() {
+        val cfg = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"193.233.115.202","port":443,"users":[{"id":"x"}]}]}},
+              {"protocol":"freedom","tag":"direct"}]}
+        """.trimIndent()
+        val servers = JSONObject(ConfigBuilder.makeSecureDns(cfg))
+            .getJSONObject("dns").getJSONArray("servers")
+        assertEquals(2, servers.length())
+        assertEquals(ConfigBuilder.CLOUDFLARE_DOH, servers.getString(0))
+        for (i in 0 until servers.length()) {
+            assertFalse(servers.opt(i).toString().contains("https+local"))
+        }
+    }
+
+    @Test
+    fun makeSecureDns_scopedBootstrap_isIdempotent() {
+        val once = ConfigBuilder.makeSecureDns(vlessHostnameProxy)
+        val twice = ConfigBuilder.makeSecureDns(once)
+        val s1 = JSONObject(once).getJSONObject("dns").getJSONArray("servers")
+        val s2 = JSONObject(twice).getJSONObject("dns").getJSONArray("servers")
+        assertEquals(s1.length(), s2.length())
+        var localCount = 0
+        for (i in 0 until s2.length()) if (s2.opt(i).toString().contains("https+local")) localCount++
+        assertEquals(2, localCount)
+    }
+
     // --- buildRuntimeConfig integration ---
 
     @Test
