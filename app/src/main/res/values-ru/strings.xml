@@ -72,6 +72,11 @@
     <string name="main_action_edit">Изменить</string>
     <string name="main_action_delete">Удалить</string>
     <string name="main_subscription_profile_count">(%1$d)</string>
+    <string name="main_cd_ping_test_group">Пинг-тест этой группы</string>
+    <string name="ping_action_test">Пинг-тест</string>
+    <string name="ping_state_testing">Проверка…</string>
+    <string name="ping_result_ms">%1$d мс</string>
+    <string name="ping_result_unavailable">Н/Д</string>
 
     <!-- App picker -->
     <string name="apps_cd_back">Назад</string>
@@ -165,7 +170,7 @@
     <string name="server_allow_insecure_no">Нет</string>
     <string name="server_allow_insecure_yes">Да</string>
     <string name="server_label_hysteria2_auth">Auth / пароль Hysteria2</string>
-    <string name="server_label_pinned_cert_sha256">SHA-256 сертификата</string>
+    <string name="server_label_pinned_cert_sha256">Доверенный SHA-256 сертификата</string>
     <string name="server_label_salamander_password">Пароль Salamander</string>
     <string name="server_label_hysteria2_congestion">Congestion</string>
     <string name="server_label_upload_bandwidth">Скорость отправки</string>

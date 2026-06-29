@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +67,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,7 +91,7 @@ import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
-import com.justme.xtls_core_proxy.state.SubGroup
+import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
@@ -446,6 +448,7 @@ private fun MainScreen(
     val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
+    val pingStates by viewModel.pingStates.collectAsState()
     var promoGate by rememberSaveable { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) {
         if (promoGate == null) promoGate = PromoGate.resolve(mainContext, LocalDate.now())
@@ -454,7 +457,7 @@ private fun MainScreen(
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
     var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
-    val expanded = remember { mutableStateMapOf<Long, Boolean>() }
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
 
     Scaffold(
         topBar = {
@@ -554,28 +557,48 @@ private fun MainScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (view.manual.isNotEmpty()) {
+                        val isExpanded = expanded["manual"] ?: true
                         item(key = "h-manual") {
-                            SectionHeader(stringResource(R.string.main_section_my_profiles))
-                        }
-                        items(view.manual, key = { "p-${it.id}" }) { profile ->
-                            ProfileRow(
-                                profile = profile,
-                                isActive = isActive(profile, activeId, state),
-                                isConnecting = isActive(profile, activeId, state) &&
-                                    state == VpnConnectionState.CONNECTING,
-                                canConnect = canConnect(state),
-                                onConnect = { onConnect(profile.id) },
-                                onLongPress = { bottomSheetProfile = profile }
+                            GroupHeader(
+                                title = stringResource(R.string.main_section_my_profiles),
+                                count = view.manual.size,
+                                subtitle = null,
+                                errorPill = null,
+                                isExpanded = isExpanded,
+                                isTesting = view.manual.any { pingStates[it.id] is PingState.Testing },
+                                onToggle = { expanded["manual"] = !isExpanded },
+                                onPingTest = { viewModel.pingTestGroup(view.manual) },
+                                onRefresh = null
                             )
+                        }
+                        if (isExpanded) {
+                            items(view.manual, key = { "p-${it.id}" }) { profile ->
+                                ProfileRow(
+                                    profile = profile,
+                                    pingState = pingStates[profile.id] ?: PingState.Idle,
+                                    isActive = isActive(profile, activeId, state),
+                                    isConnecting = isActive(profile, activeId, state) &&
+                                        state == VpnConnectionState.CONNECTING,
+                                    canConnect = canConnect(state),
+                                    onConnect = { onConnect(profile.id) },
+                                    onLongPress = { bottomSheetProfile = profile }
+                                )
+                            }
                         }
                     }
                     view.groups.forEach { group ->
-                        val isExpanded = expanded[group.subscription.id] ?: true
+                        val key = "sub-${group.subscription.id}"
+                        val isExpanded = expanded[key] ?: true
                         item(key = "h-${group.subscription.id}") {
-                            SubscriptionGroupHeader(
-                                group = group,
+                            GroupHeader(
+                                title = group.subscription.name,
+                                count = group.profiles.size,
+                                subtitle = SubscriptionFormatting.lastSeenSummary(mainContext, group.subscription),
+                                errorPill = group.subscription.lastError,
                                 isExpanded = isExpanded,
-                                onToggle = { expanded[group.subscription.id] = !isExpanded },
+                                isTesting = group.profiles.any { pingStates[it.id] is PingState.Testing },
+                                onToggle = { expanded[key] = !isExpanded },
+                                onPingTest = { viewModel.pingTestGroup(group.profiles) },
                                 onRefresh = { viewModel.refreshSubscription(mainContext, group.subscription.id) }
                             )
                         }
@@ -583,6 +606,7 @@ private fun MainScreen(
                             items(group.profiles, key = { "p-${it.id}" }) { profile ->
                                 ProfileRow(
                                     profile = profile,
+                                    pingState = pingStates[profile.id] ?: PingState.Idle,
                                     isActive = isActive(profile, activeId, state),
                                     isConnecting = isActive(profile, activeId, state) &&
                                         state == VpnConnectionState.CONNECTING,
@@ -634,6 +658,15 @@ private fun MainScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
+                TextButton(
+                    onClick = {
+                        viewModel.pingTestProfile(profile)
+                        bottomSheetProfile = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.ping_action_test))
+                }
                 TextButton(
                     onClick = {
                         bottomSheetProfile = null
@@ -695,25 +728,19 @@ private fun BoykisserBanner(onAdd: () -> Unit, onDismiss: () -> Unit) {
     }
 }
 
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-    )
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SubscriptionGroupHeader(
-    group: SubGroup,
+private fun GroupHeader(
+    title: String,
+    count: Int,
+    subtitle: String?,
+    errorPill: String?,
     isExpanded: Boolean,
+    isTesting: Boolean,
     onToggle: () -> Unit,
-    onRefresh: () -> Unit
+    onPingTest: () -> Unit,
+    onRefresh: (() -> Unit)?
 ) {
-    val context = LocalContext.current
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -736,7 +763,7 @@ private fun SubscriptionGroupHeader(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = group.subscription.name,
+                        text = title,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -744,28 +771,42 @@ private fun SubscriptionGroupHeader(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.main_subscription_profile_count, group.profiles.size),
+                        text = stringResource(R.string.main_subscription_profile_count, count),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (group.subscription.lastError != null) {
+                    if (errorPill != null) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        ErrorPill(group.subscription.lastError)
+                        ErrorPill(errorPill)
                     }
                 }
-                Text(
-                    text = SubscriptionFormatting.lastSeenSummary(context, group.subscription),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-            IconButton(onClick = onRefresh) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.main_cd_refresh_subscription)
-                )
+            IconButton(onClick = onPingTest, enabled = !isTesting) {
+                if (isTesting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_speedometer),
+                        contentDescription = stringResource(R.string.main_cd_ping_test_group)
+                    )
+                }
+            }
+            if (onRefresh != null) {
+                IconButton(onClick = onRefresh) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.main_cd_refresh_subscription)
+                    )
+                }
             }
         }
     }
@@ -792,6 +833,7 @@ private fun ErrorPill(message: String) {
 @Composable
 private fun ProfileRow(
     profile: Profile,
+    pingState: PingState,
     isActive: Boolean,
     isConnecting: Boolean,
     canConnect: Boolean,
@@ -840,6 +882,7 @@ private fun ProfileRow(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                PingResultLine(pingState)
             }
 
             Button(
@@ -855,6 +898,32 @@ private fun ProfileRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PingResultLine(state: PingState) {
+    when (state) {
+        is PingState.Idle -> {}
+        is PingState.Testing -> Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp)
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = stringResource(R.string.ping_state_testing),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        is PingState.Success -> Text(
+            text = stringResource(R.string.ping_result_ms, state.latencyMs.toInt()),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        is PingState.Unavailable -> Text(
+            text = stringResource(R.string.ping_result_unavailable),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 
