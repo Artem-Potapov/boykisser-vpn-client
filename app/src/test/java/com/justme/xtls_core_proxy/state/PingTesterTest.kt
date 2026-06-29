@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.state
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -9,6 +10,7 @@ import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class PingTesterTest {
 
     @Test
@@ -103,5 +105,28 @@ class PingTesterTest {
         )
         assertEquals(PingState.Success(5L), states[7L])
         assertEquals(2, attempts)
+    }
+
+    @Test
+    fun testAll_capIsGlobalAcrossConcurrentCalls() = runTest {
+        val tester = PingTester(maxConcurrency = 2)
+        val active = AtomicInteger(0)
+        val maxSeen = AtomicInteger(0)
+        val release = CompletableDeferred<Unit>()
+        val probe: suspend (Long) -> PingState = {
+            val now = active.incrementAndGet()
+            maxSeen.updateAndGet { max(it, now) }
+            release.await()
+            active.decrementAndGet()
+            PingState.Success(1L)
+        }
+
+        val job1 = launch { tester.testAll(listOf(1L, 2L, 3L), { _, _ -> }, probe) }
+        val job2 = launch { tester.testAll(listOf(4L, 5L, 6L), { _, _ -> }, probe) }
+        runCurrent()
+        // Global cap: at most 2 probes active across BOTH calls (a per-call semaphore would reach 4).
+        assertEquals(2, maxSeen.get())
+        release.complete(Unit)
+        job1.join(); job2.join()
     }
 }
