@@ -71,6 +71,11 @@
     <string name="main_action_edit">Edit</string>
     <string name="main_action_delete">Delete</string>
     <string name="main_subscription_profile_count">(%1$d)</string>
+    <string name="main_cd_ping_test_group">Ping test this group</string>
+    <string name="ping_action_test">Ping test</string>
+    <string name="ping_state_testing">Testing…</string>
+    <string name="ping_result_ms">%1$d ms</string>
+    <string name="ping_result_unavailable">N/A</string>
 
     <!-- App picker -->
     <string name="apps_title_default">Select apps</string>
