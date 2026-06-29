@@ -63,6 +63,19 @@ object ConfigBuilder {
         }
     }
 
+    /**
+     * Dialer-only config for a latency probe: the canonical runtime config with the tun
+     * inbound removed (a probe has no VpnService fd; it dials via core.Dial). Reuses
+     * [buildRuntimeConfig] so the probe traverses the same outbounds + routing + secure-DNS
+     * (DoH) + ForceIP path the real tunnel would, including resolving the server hostname
+     * over DoH.
+     */
+    fun toPingTestConfig(stored: String): String {
+        val root = JSONObject(buildRuntimeConfig(stored))
+        root.remove("inbounds")
+        return root.toString()
+    }
+
     fun replaceJsonInboundsWithTun(config: String): String {
         val root = JSONObject(config)
         root.put("inbounds", JSONArray().put(tunInboundJson()))
