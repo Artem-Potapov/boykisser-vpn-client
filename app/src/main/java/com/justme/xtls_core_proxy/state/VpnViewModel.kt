@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.justme.xtls_core_proxy.BuildConfig
 import com.justme.xtls_core_proxy.R
+import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
@@ -16,6 +17,7 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.subs.SubscriptionRefreshCoordinator
 import com.justme.xtls_core_proxy.vpn.XrayVpnService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,7 +26,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SubGroup(val subscription: Subscription, val profiles: List<Profile>)
 data class ProfilesView(val manual: List<Profile>, val groups: List<SubGroup>) {
@@ -68,6 +72,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _dnsWarning = MutableStateFlow<DnsWarning?>(null)
     val dnsWarning: StateFlow<DnsWarning?> = _dnsWarning.asStateFlow()
+
+    private val pingTester = PingTester()
+    private val _pingStates = MutableStateFlow<Map<Long, PingState>>(emptyMap())
+    val pingStates: StateFlow<Map<Long, PingState>> = _pingStates.asStateFlow()
 
     val logs = LogRepository.logs
     val connectionState = LogRepository.connectionState
@@ -267,6 +275,31 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         // foreground state between gating and dispatch.
         appContext.startForegroundService(stopIntent)
         ActiveProfileRepository.setActiveProfileId(context, null)
+    }
+
+    fun pingTestGroup(profiles: List<Profile>) {
+        if (profiles.isEmpty()) return
+        val byId = profiles.associateBy { it.id }
+        viewModelScope.launch {
+            pingTester.testAll(
+                ids = byId.keys.toList(),
+                onUpdate = { id, state -> _pingStates.update { it + (id to state) } },
+                probe = { id -> probeProfile(byId.getValue(id)) }
+            )
+        }
+    }
+
+    fun pingTestProfile(profile: Profile) = pingTestGroup(listOf(profile))
+
+    private suspend fun probeProfile(profile: Profile): PingState {
+        val config = runCatching { ConfigBuilder.toPingTestConfig(profile.config) }.getOrElse {
+            LogRepository.append("ping: config build failed for ${profile.name}: ${it.message}")
+            return PingState.Unavailable
+        }
+        val result = withContext(Dispatchers.IO) {
+            XrayBridge.measureLatency(config, PingTester.PING_TEST_TARGET, PingTester.PING_TIMEOUT_MS)
+        }
+        return PingState.fromResult(result)
     }
 
 }
