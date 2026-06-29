@@ -7,6 +7,7 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import org.json.JSONObject
 
 object XrayBridge {
     private val classNames = listOf(
@@ -40,6 +41,33 @@ object XrayBridge {
                 throw IllegalStateException(response)
             }
         }
+    }
+
+    /**
+     * Runs a one-shot latency probe in a throwaway xray-core instance (NOT the running
+     * tunnel): dials [targetUrl] through the config's outbound and times a clean HTTP 204.
+     * Returns the latency in ms on success, or a failure carrying the Go-side reason.
+     * Reflection-only, mirroring [startXray]. Reason is logged for diagnostics.
+     */
+    fun measureLatency(configJson: String, targetUrl: String, timeoutMs: Long): Result<Long> {
+        return runCatching {
+            val clazz = bridgeClass()
+            val method = findMethod(clazz, listOf("MeasureLatency", "measureLatency"), 3)
+            val timeoutType = method.parameterTypes[2]
+            val timeoutArg: Any =
+                if (timeoutType == Int::class.javaPrimitiveType || timeoutType == Int::class.javaObjectType) {
+                    timeoutMs.toInt()
+                } else {
+                    timeoutMs
+                }
+            val response = method.invoke(null, configJson, targetUrl, timeoutArg) as? String ?: ""
+            val obj = JSONObject(response)
+            if (obj.has("latencyMs")) {
+                obj.getLong("latencyMs")
+            } else {
+                throw IllegalStateException(obj.optString("error", "unknown ping error"))
+            }
+        }.onFailure { LogRepository.append("measureLatency failed: ${it.message}") }
     }
 
     /**
