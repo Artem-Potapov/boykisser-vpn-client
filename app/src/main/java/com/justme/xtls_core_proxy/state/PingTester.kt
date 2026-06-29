@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.state
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -14,12 +15,14 @@ import kotlinx.coroutines.sync.withPermit
  * Ids whose probe is already in flight are de-duplicated, so a single-server retest that
  * overlaps a running group test can't double-dial the same server.
  *
- * [probe] must return a terminal [PingState] and must not throw.
+ * If [probe] throws, that id resolves to [PingState.Unavailable] (a thrown [CancellationException]
+ * propagates as normal).
  */
 class PingTester(private val maxConcurrency: Int = DEFAULT_PING_CONCURRENCY) {
 
     private val gate = Mutex()
     private val inFlight = mutableSetOf<Long>()
+    private val semaphore = Semaphore(maxConcurrency)
 
     suspend fun testAll(
         ids: List<Long>,
@@ -30,12 +33,15 @@ class PingTester(private val maxConcurrency: Int = DEFAULT_PING_CONCURRENCY) {
         if (fresh.isEmpty()) return
         fresh.forEach { onUpdate(it, PingState.Testing) }
 
-        val semaphore = Semaphore(maxConcurrency)
         coroutineScope {
             fresh.forEach { id ->
                 launch {
                     val state = try {
                         semaphore.withPermit { probe(id) }
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (t: Throwable) {
+                        PingState.Unavailable
                     } finally {
                         gate.withLock { inFlight.remove(id) }
                     }
