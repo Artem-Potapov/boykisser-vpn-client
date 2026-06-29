@@ -40,13 +40,13 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── settings/       Per-server + settings hub screens
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
-│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel
+│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester
 │       │   │   ├── subs/           Subscription fetch/parse/refresh
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme
 │       │   │   └── vpn/            XrayVpnService — VpnService + xray-core lifecycle; fail-closed startup → docs/features
 │       │   └── res/
-│       │       ├── drawable/, mipmap-*/
+│       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon)
 │       │       ├── values/         strings.xml (source of truth), colors, themes
 │       │       ├── values-ru/      Russian strings.xml
 │       │       └── xml/            backup_rules, data_extraction_rules, locales_config
@@ -62,6 +62,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── name-theft-warning.md
+│   │   ├── ping-test.md             Per-server / per-group handshake-latency probe → docs/features/
 │   │   ├── qs-tile-vpn-toggle.md
 │   │   └── sideloading-warning.md
 │   ├── qa/                         QA scenarios
@@ -316,8 +317,9 @@ those domains are dormant.
 ## Extensibility Hooks
 - Runtime config extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
-  (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders) and the per-protocol codecs
-  `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection) and
+  (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
+  `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound) and the
+  per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection) and
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge).
 - VPN lifecycle extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt`
@@ -328,8 +330,11 @@ those domains are dormant.
   - Kotlin reflection candidates in
     `app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt` (`classNames` list).
   - Go lifecycle surface in `xray-go/xray_bridge.go` (`StartXray`, `StopXray`, `RegisterProtector` —
-    the `protect()` dial controller; the `Protector` reverse-binding interface is keep-ruled via
+    the `protect()` dial controller; `MeasureLatency` — throwaway-instance latency probe, never
+    touches `mu`/`instance`; the `Protector` reverse-binding interface is keep-ruled via
     `-keep class xraybridge.**`).
+  - Kotlin reflection surface in `bridge/XrayBridge.kt`: `startXray`, `stopXray`, `registerProtector`,
+    `measureLatency` (3-param: configJson, targetUrl, timeoutMs).
 - Environment variables and script knobs:
 
 | Variable | Where used | Purpose |
