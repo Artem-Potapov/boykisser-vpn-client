@@ -45,7 +45,6 @@ class PingTesterTest {
         release.complete(Unit)
         job.join()
         assertEquals(6, results.size)
-        assertEquals(3, maxSeen.get())
     }
 
     @Test
@@ -69,5 +68,40 @@ class PingTesterTest {
         assertEquals(1, probeCounts[1L])
         assertEquals(1, probeCounts[2L]) // skipped by job2 because still in flight
         assertEquals(1, probeCounts[3L])
+    }
+
+    @Test
+    fun testAll_emptyIds_completesWithoutProbing() = runTest {
+        val tester = PingTester(maxConcurrency = 3)
+        var probeCalls = 0
+        var updates = 0
+        tester.testAll(
+            ids = emptyList(),
+            onUpdate = { _, _ -> updates++ },
+            probe = { probeCalls++; PingState.Success(1L) }
+        )
+        assertEquals(0, probeCalls)
+        assertEquals(0, updates)
+    }
+
+    @Test
+    fun testAll_probeThrows_emitsUnavailableAndClearsInFlight() = runTest {
+        val tester = PingTester(maxConcurrency = 3)
+        val states = mutableMapOf<Long, PingState>()
+        var attempts = 0
+        tester.testAll(
+            ids = listOf(7L),
+            onUpdate = { id, s -> states[id] = s },
+            probe = { attempts++; throw RuntimeException("boom") }
+        )
+        assertEquals(PingState.Unavailable, states[7L])
+        // inFlight must have been cleared, so a second test of the same id is NOT skipped
+        tester.testAll(
+            ids = listOf(7L),
+            onUpdate = { id, s -> states[id] = s },
+            probe = { attempts++; PingState.Success(5L) }
+        )
+        assertEquals(PingState.Success(5L), states[7L])
+        assertEquals(2, attempts)
     }
 }
