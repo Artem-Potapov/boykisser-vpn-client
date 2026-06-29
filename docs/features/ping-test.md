@@ -43,8 +43,10 @@ dialed by xray-core's default dialer — including the throwaway probe instance.
 
 - **Tunnel up:** the probe's sockets are automatically carved out of the tun by the already-registered
   `protect()` callback and egress directly to the proxy server. No new protection wiring is needed.
-- **No tunnel:** no tun and no protector registered, so the probe dials the proxy directly. Also
-  correct — the same path the real tunnel's connect call would take on first start.
+- **No tunnel:** `currentProtector` is `nil` (either never set this process, or cleared after the
+  VpnService went away). The once-installed dial controller is still present but becomes a no-op when
+  `currentProtector` is `nil`, so the probe's sockets dial the proxy directly — there is no tun to
+  bypass. Also correct — the same path the real tunnel's connect call would take on first start.
 
 This interaction is a **must-verify-on-device point**: run a group test while connected to confirm
 probes return results without disturbing the live tunnel (see Testing below).
@@ -60,9 +62,10 @@ VpnViewModel.pingTestGroup(profiles)  /  pingTestProfile(profile)
         │
 PingTester  (bounded parallel, Semaphore(DEFAULT_PING_CONCURRENCY))
   ├─ de-duplicates ids already in flight
-  └─ for each id: runs injected probe; streams result back via onUpdate immediately
+  └─ for each id: calls injected probe: suspend (Long) -> PingState; streams result back via onUpdate immediately
+     (PingTester never calls ConfigBuilder directly — the probe lambda is probeProfile in VpnViewModel)
         │
-ConfigBuilder.toPingTestConfig(storedConfig): String
+ConfigBuilder.toPingTestConfig(storedConfig): String  ← called by probeProfile in VpnViewModel
   └─ calls buildRuntimeConfig (DoH, ForceIP, outbounds, routing all preserved)
      then removes the "inbounds" array  ← no tun inbound; probe uses core.Dial
         │
@@ -103,7 +106,7 @@ All tunables live in `PingTester.Companion`:
 | Constant | Value | Meaning |
 |---|---|---|
 | `DEFAULT_PING_CONCURRENCY` | `3` | Max dials in flight at once across a group test. |
-| `PING_TIMEOUT_MS` | `10_000L` ms | Per-probe deadline applied inside Go (dial + request). |
+| `PING_TIMEOUT_MS` | `10_000L` | Per-probe timeout, 10 s; deadline applied inside Go (dial + request). |
 | `PING_TEST_TARGET` | `"http://cp.cloudflare.com/generate_204"` | The HTTP 204 endpoint; must remain `http://` — see constraint above. |
 
 ## Components
@@ -125,6 +128,7 @@ All tunables live in `PingTester.Companion`:
 | `toPingTestConfig` throws (bad stored config) | Caught in `probeProfile`; `PingState.Unavailable` + `LogRepository` message. |
 | Go returns `{"error":"..."}` (dial fail, write/read fail, non-204, timeout) | `XrayBridge.measureLatency` wraps as `Result.failure`; `PingState.Unavailable`. |
 | `MeasureLatency` called with empty config | Returns `{"error":"empty config"}` immediately. |
+| `url.Parse` fails or hostname is empty (malformed `PING_TEST_TARGET`) | Returns `{"error":"bad target url: ..."}` immediately → `N/A`. Unreachable with the current constant but guards against future `PING_TEST_TARGET` changes. |
 | REALITY wrong key — camouflage-fallback HTML page | HTTP status is 200 (or similar), not 204 → `{"error":"unexpected status N"}` → `N/A`. This is the key correctness guarantee. |
 | Profile already `Testing` when a re-test arrives | `PingTester` de-duplicates in-flight ids; the duplicate is silently skipped. |
 
