@@ -65,15 +65,47 @@ object ConfigBuilder {
 
     /**
      * Dialer-only config for a latency probe: the canonical runtime config with the tun
-     * inbound removed (a probe has no VpnService fd; it dials via core.Dial). Reuses
-     * [buildRuntimeConfig] so the probe traverses the same outbounds + routing + secure-DNS
-     * (DoH) + ForceIP path the real tunnel would, including resolving the server hostname
-     * over DoH.
+     * inbound removed (a probe has no VpnService fd; it dials via core.Dial) and geo-referencing
+     * routing rules stripped. The probe runs in a throwaway core instance with no geo asset
+     * directory, so rules that reference `geoip:` or `geosite:` fail to build (geoip.dat /
+     * geosite.dat not found). Those rules govern user-traffic exceptions (LAN bypass, geo splits)
+     * that are irrelevant to a single probe to a public target through the proxy; the proxy is the
+     * default (first) outbound, so the probe still routes through it. The port-53 -> dns-out rule
+     * and the DoH dns block have no geo dependency and are preserved — secure-DNS posture is intact.
      */
     fun toPingTestConfig(stored: String): String {
         val root = JSONObject(buildRuntimeConfig(stored))
         root.remove("inbounds")
+        stripGeoRoutingRules(root)
         return root.toString()
+    }
+
+    /**
+     * Removes routing rules referencing geo databases (geoip:/geosite:). The latency probe runs in a
+     * throwaway core instance with no geo asset dir, so such rules fail to build (geoip.dat not found).
+     * They govern user-traffic exceptions (LAN bypass, geo splits), irrelevant to a single probe to a
+     * public target through the proxy (the default outbound). The port-53 -> dns-out rule and the DoH
+     * dns block have no geo dependency and are preserved, so the probe keeps the secure-DNS posture.
+     */
+    private fun stripGeoRoutingRules(root: JSONObject) {
+        val routing = root.optJSONObject("routing") ?: return
+        val rules = routing.optJSONArray("rules") ?: return
+        val kept = JSONArray()
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i)
+            if (rule != null && !ruleReferencesGeo(rule)) kept.put(rule)
+        }
+        routing.put("rules", kept)
+    }
+
+    private fun ruleReferencesGeo(rule: JSONObject): Boolean {
+        rule.optJSONArray("ip")?.let { ip ->
+            for (i in 0 until ip.length()) if (ip.optString(i).startsWith("geoip:")) return true
+        }
+        rule.optJSONArray("domain")?.let { domain ->
+            for (i in 0 until domain.length()) if (domain.optString(i).startsWith("geosite:")) return true
+        }
+        return false
     }
 
     fun replaceJsonInboundsWithTun(config: String): String {
