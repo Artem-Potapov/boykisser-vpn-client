@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
@@ -52,10 +53,10 @@ class PingTesterTest {
     @Test
     fun testAll_skipsIdsAlreadyInFlight() = runTest {
         val tester = PingTester(maxConcurrency = 3)
-        val probeCounts = HashMap<Long, Int>()
+        val probeCounts = ConcurrentHashMap<Long, Int>()
         val release = CompletableDeferred<Unit>()
         val probe: suspend (Long) -> PingState = { id ->
-            probeCounts[id] = (probeCounts[id] ?: 0) + 1
+            probeCounts.merge(id, 1, Int::plus)
             release.await()
             PingState.Success(1L)
         }

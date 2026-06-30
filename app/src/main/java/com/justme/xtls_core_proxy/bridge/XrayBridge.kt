@@ -67,7 +67,13 @@ object XrayBridge {
             } else {
                 throw IllegalStateException(obj.optString("error", "unknown ping error"))
             }
-        }.onFailure { LogRepository.append("measureLatency failed: ${it.message}") }
+        }.onFailure {
+            // it.message is sufficient: gomobile's MeasureLatency returns a String (no error return),
+            // so it cannot throw across JNI. A Go-side failure arrives as the IllegalStateException
+            // thrown above inside runCatching (carrying the Go "error" reason); reflection/parse
+            // failures carry their own message.
+            LogRepository.append("measureLatency failed: ${it.message}")
+        }
     }
 
     /**
