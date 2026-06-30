@@ -55,5 +55,12 @@ class PingTester(private val maxConcurrency: Int = DEFAULT_PING_CONCURRENCY) {
         const val DEFAULT_PING_CONCURRENCY: Int = 3
         const val PING_TIMEOUT_MS: Long = 10_000L
         const val PING_TEST_TARGET: String = "http://cp.cloudflare.com/generate_204"
+        /**
+         * Wall-clock backstop for one probe, applied on the Kotlin side ABOVE the Go-side
+         * PING_TIMEOUT_MS deadline. Go bounds the dial+request; this guards the unbounded
+         * instance-setup path (core.New/Start) so a wedged probe can't hang a row on Testing
+         * forever. Must be > PING_TIMEOUT_MS so a normal slow-but-completing probe isn't cut off.
+         */
+        const val PING_BACKSTOP_MS: Long = PING_TIMEOUT_MS + 5_000L
     }
 }

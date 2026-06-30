@@ -107,6 +107,7 @@ All tunables live in `PingTester.Companion`:
 |---|---|---|
 | `DEFAULT_PING_CONCURRENCY` | `3` | Max dials in flight at once across a group test. |
 | `PING_TIMEOUT_MS` | `10_000L` | Per-probe timeout, 10 s; deadline applied inside Go (dial + request). |
+| `PING_BACKSTOP_MS` | `PING_TIMEOUT_MS + 5_000L` (15 s) | Kotlin-side wall-clock backstop per probe; abandons a wedged probe so its row resolves to N/A. |
 | `PING_TEST_TARGET` | `"http://cp.cloudflare.com/generate_204"` | The HTTP 204 endpoint; must remain `http://` — see constraint above. |
 
 ## Components

@@ -19,6 +19,7 @@ import com.justme.xtls_core_proxy.subs.SubscriptionRefreshCoordinator
 import com.justme.xtls_core_proxy.vpn.XrayVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,7 +29,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class SubGroup(val subscription: Subscription, val profiles: List<Profile>)
 data class ProfilesView(val manual: List<Profile>, val groups: List<SubGroup>) {
@@ -100,6 +101,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             LogRepository.connectionState
                 .filter { it == VpnConnectionState.CONNECTING }
                 .collect { _error.value = null }
+        }
+        // Prune ephemeral ping results when the profile set changes (e.g. a subscription refresh
+        // replaces rows with new ids) so stale id -> PingState entries don't accumulate for ids
+        // that no longer exist. The UI only reads ids present in `view`, so this is housekeeping.
+        viewModelScope.launch {
+            profiles.collect { current ->
+                val ids = current.mapTo(HashSet()) { it.id }
+                _pingStates.update { states -> states.filterKeys { it in ids } }
+            }
         }
     }
 
@@ -284,6 +294,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             pingTester.testAll(
                 ids = byId.keys.toList(),
                 onUpdate = { id, state -> _pingStates.update { it + (id to state) } },
+                // byId.getValue is safe: PingTester only invokes probe with ids from the list we
+                // passed (byId.keys). Even a contract violation is caught by testAll (Throwable ->
+                // Unavailable), so a missing key cannot leave a row stuck on Testing.
                 probe = { id -> probeProfile(byId.getValue(id)) }
             )
         }
@@ -296,8 +309,19 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             LogRepository.append("ping: config build failed for ${profile.name}: ${it.message}")
             return PingState.Unavailable
         }
-        val result = withContext(Dispatchers.IO) {
+        // Run the blocking JNI probe as a viewModelScope child (NOT a child of this call), so the
+        // backstop stops WAITING on it without blocking on the uninterruptible native call:
+        // await() is the suspension point withTimeoutOrNull can cancel. Go already bounds the dial
+        // at PING_TIMEOUT_MS; PING_BACKSTOP_MS guards the unbounded setup path (core.New/Start) so a
+        // row can't hang on Testing forever. On backstop the probe is orphaned (finishes on its own,
+        // result discarded) rather than cancelled, since the native call ignores cancellation.
+        val probe = viewModelScope.async(Dispatchers.IO) {
             XrayBridge.measureLatency(config, PingTester.PING_TEST_TARGET, PingTester.PING_TIMEOUT_MS)
+        }
+        val result = withTimeoutOrNull(PingTester.PING_BACKSTOP_MS) { probe.await() }
+        if (result == null) {
+            LogRepository.append("ping: probe exceeded ${PingTester.PING_BACKSTOP_MS}ms backstop for ${profile.name}")
+            return PingState.Unavailable
         }
         return PingState.fromResult(result)
     }
