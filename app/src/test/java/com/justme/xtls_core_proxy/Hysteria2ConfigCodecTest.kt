@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.URLEncoder
 
 class Hysteria2ConfigCodecTest {
     @Test
@@ -349,6 +350,48 @@ class Hysteria2ConfigCodecTest {
         assertEquals("example.com", profile.host)
         assertEquals(443, profile.port)
         assertEquals("cdn.example.com", profile.serverName)
+    }
+
+    @Test
+    fun parseUri_mapsFmFinalmaskUdpHopIntoGeneratedConfig() {
+        // The provider ships the whole streamSettings.finalmask as a URL-encoded JSON blob in the
+        // `fm` query parameter (udpHop port-hopping, QUIC params, …). parseUri must map it so the
+        // generated config carries udpHop and the QUIC controls, not just the obfs-derived
+        // salamander entry. This is the "UDP Hop ports are missing" bug.
+        val fm = """{"quicParams":{"congestion":"bbr","udpHop":{"interval":30,"ports":"20000-30000"}}}"""
+        val uri = "hysteria2://secret@example.com:443?alpn=h3" +
+            "&fm=" + URLEncoder.encode(fm, "UTF-8") +
+            "&obfs=salamander&obfs-password=mask#Demo"
+
+        val json = Hysteria2ConfigCodec.toXrayJson(Hysteria2ConfigCodec.parseUri(uri))
+
+        val quicParams = JSONObject(json)
+            .getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings")
+            .getJSONObject("finalmask")
+            .getJSONObject("quicParams")
+        assertEquals("bbr", quicParams.getString("congestion"))
+        assertEquals("20000-30000", quicParams.getJSONObject("udpHop").getString("ports"))
+        assertEquals(30, quicParams.getJSONObject("udpHop").getInt("interval"))
+    }
+
+    @Test
+    fun parseUri_acceptsRawUnencodedJsonInFmParam() {
+        // Real share links (and the human-readable / decoded form users paste) carry the fm JSON
+        // with raw '{', '"', etc. java.net.URI rejects those as illegal query characters, which
+        // surfaces as "unrecognized format" on add. The codec must parse the link manually rather
+        // than reject it, and still map the fm finalmask.
+        val uri = "hysteria2://secret@example.com:443?alpn=h3" +
+            """&fm={"quicParams":{"udpHop":{"interval":30,"ports":"20000-30000"}}}""" +
+            "&obfs=salamander&obfs-password=mask#Demo Server"
+
+        val profile = Hysteria2ConfigCodec.parseUri(uri)
+
+        assertEquals("secret", profile.auth)
+        assertEquals("example.com", profile.host)
+        val udpHop = JSONObject(requireNotNull(profile.finalmaskJson))
+            .getJSONObject("quicParams").getJSONObject("udpHop")
+        assertEquals("20000-30000", udpHop.getString("ports"))
     }
 
     @Test(expected = IllegalArgumentException::class)

@@ -4,7 +4,6 @@ package com.justme.xtls_core_proxy.config
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
@@ -111,19 +110,34 @@ object Hysteria2ConfigCodec {
     }
 
     fun parseUri(uri: String): Hysteria2Profile {
-        // Strip the fragment before URI parsing: real share-link fragments carry unencoded
-        // spaces/emoji that java.net.URI rejects, and the fragment is display-name-only here.
-        val parsed = URI(uri.trim().substringBefore('#'))
+        // Parse the link manually rather than via java.net.URI. The authority already needed
+        // manual parsing (URI rejects multi-port authorities like host:123,5000-6000), and the
+        // query can legitimately carry a raw JSON blob in `fm=` (the provider's whole
+        // streamSettings.finalmask); raw '{', '"', etc. make java.net.URI throw before the query
+        // is ever read, which surfaced as "unrecognized format" on add. The #fragment is
+        // display-name-only and is stripped first (it carries unencoded spaces/emoji).
+        val withoutFragment = uri.trim().substringBefore('#')
+        val schemeSeparator = withoutFragment.indexOf("://")
+        require(schemeSeparator > 0) { "Missing scheme in Hysteria2 link" }
+        val scheme = withoutFragment.substring(0, schemeSeparator)
         require(
-            parsed.scheme.equals("hysteria2", ignoreCase = true) ||
-                parsed.scheme.equals("hy2", ignoreCase = true)
-        ) { "Unsupported URI scheme: ${parsed.scheme}" }
+            scheme.equals("hysteria2", ignoreCase = true) ||
+                scheme.equals("hy2", ignoreCase = true)
+        ) { "Unsupported URI scheme: $scheme" }
 
-        val rawAuthority = parsed.rawAuthority?.trim().orEmpty()
+        val afterScheme = withoutFragment.substring(schemeSeparator + 3)
+        // Authority ends at the first '/' (optional path) or '?' (query), mirroring URI semantics.
+        val pathStart = afterScheme.indexOf('/')
+        val queryStart = afterScheme.indexOf('?')
+        val authorityEnd = listOf(pathStart, queryStart)
+            .filter { it >= 0 }
+            .minOrNull() ?: afterScheme.length
+        val rawAuthority = afterScheme.substring(0, authorityEnd).trim()
         require(rawAuthority.isNotEmpty()) { "Missing authority in Hysteria2 link" }
+        val rawQuery = if (queryStart >= 0) afterScheme.substring(queryStart + 1) else null
 
         val authority = parseAuthority(rawAuthority)
-        val params = parseQuery(parsed.rawQuery)
+        val params = parseQuery(rawQuery)
         val obfs = params["obfs"].orEmpty()
         require(obfs.isBlank() || obfs.equals("salamander", ignoreCase = true)) {
             "Unsupported Hysteria2 obfs: $obfs"
@@ -142,8 +156,24 @@ object Hysteria2ConfigCodec {
             alpn = params["alpn"]?.trim().orEmpty().ifBlank { "h3" },
             allowInsecure = params["insecure"] == "1",
             pinnedPeerCertSha256 = params["pinSHA256"].orEmpty(),
-            salamanderPassword = salamanderPassword
+            salamanderPassword = salamanderPassword,
+            finalmaskJson = parseFinalmaskParam(params["fm"])
         )
+    }
+
+    /**
+     * The `fm` query parameter carries the provider's whole `streamSettings.finalmask` object
+     * (udpHop port-hopping, QUIC params, salamander, …). It is kept verbatim only if it is a valid
+     * JSON object; a malformed value is dropped best-effort rather than rejecting the whole link,
+     * matching the import-friendly posture of the codec. [buildStreamSettings]/[buildFinalmask]
+     * later merge the structured share-link fields (salamander from obfs, etc.) over it.
+     */
+    private fun parseFinalmaskParam(rawFm: String?): String? {
+        val trimmed = rawFm?.trim()?.ifBlank { null } ?: return null
+        return runCatching {
+            JSONObject(trimmed)
+            trimmed
+        }.getOrNull()
     }
 
     fun toXrayJson(profile: Hysteria2Profile): String {
