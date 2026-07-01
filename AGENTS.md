@@ -1,4 +1,4 @@
-﻿# Project Overview
+# Project Overview
 XTLS Core Proxy is an MVP Android VPN client (minSdk 29 / Android 10+, targets API 36) that runs Xray-core in tun-only mode without
 `tun2socks`, using an Android `VpnService` TUN interface passed into Xray through a gomobile-built
 Go bridge (`app/libs/xray.aar`). The app accepts `vless://` URIs, `hysteria2://` / `hy2://` URIs, or raw
@@ -60,11 +60,11 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
 │   │   ├── hysteria2-support.md      Hysteria2 share links, codec, toShareLink, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
-│   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── name-theft-warning.md
 │   │   ├── ping-test.md             Per-server / per-group handshake-latency probe → docs/features/
+│   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── qs-tile-vpn-toggle.md
 │   │   └── sideloading-warning.md
 │   ├── qa/                         QA scenarios
