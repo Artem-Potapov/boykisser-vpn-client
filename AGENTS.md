@@ -1,4 +1,4 @@
-# Project Overview
+﻿# Project Overview
 XTLS Core Proxy is an MVP Android VPN client (minSdk 29 / Android 10+, targets API 36) that runs Xray-core in tun-only mode without
 `tun2socks`, using an Android `VpnService` TUN interface passed into Xray through a gomobile-built
 Go bridge (`app/libs/xray.aar`). The app accepts `vless://` URIs, `hysteria2://` / `hy2://` URIs, or raw
@@ -26,11 +26,12 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   ├── assets/             Committed geoip/geosite .dat files
 │       │   ├── java/com/justme/xtls_core_proxy/
 │       │   │   ├── MainActivity.kt
+│       │   │   ├── ProfileActionsDialog.kt  Long-press island menu (BasicAlertDialog) → docs/features/profile-actions-menu.md
 │       │   │   ├── XtlsApplication.kt
 │       │   │   ├── add/            Paste/clipboard/subscription routing into Add UI
 │       │   │   ├── apps/           Installed-app picker (kill-switch / split-tunnel)
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
-│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization → docs/features), ProfileConfigCodec, Hysteria2ConfigCodec, JsonFormatter
+│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization → docs/features), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
@@ -58,7 +59,8 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── boykisser-vpn.md
 │   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
-│   │   ├── hysteria2-support.md      Hysteria2 share links, codec, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
+│   │   ├── hysteria2-support.md      Hysteria2 share links, codec, toShareLink, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
+│   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── name-theft-warning.md
@@ -319,8 +321,9 @@ those domains are dormant.
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
   (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
   `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound) and the
-  per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection) and
-  `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge).
+  per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
+  `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
+  `config/ProfileShareLink.kt` (`fromStoredConfig` — reconstructs a shareable link from any stored JSON config by dispatching to the per-protocol codec; returns `null` for configs with no vless/hysteria outbound).
 - VPN lifecycle extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt`
   for TUN setup, DNS/routes, and foreground notification behavior. `onStartCommand` routing is a pure
