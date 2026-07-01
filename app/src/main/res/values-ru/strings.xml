@@ -74,6 +74,10 @@
     <string name="main_subscription_profile_count">(%1$d)</string>
     <string name="main_cd_ping_test_group">Пинг-тест этой группы</string>
     <string name="ping_action_test">Пинг-тест</string>
+    <string name="main_action_copy_link">Скопировать ссылку</string>
+    <string name="main_action_copy_json">Скопировать конфиг</string>
+    <string name="main_copy_link_toast">Ссылка скопирована</string>
+    <string name="main_copy_json_toast">Конфиг скопирован</string>
     <string name="ping_state_testing">Проверка…</string>
     <string name="ping_result_ms">%1$d мс</string>
     <string name="ping_result_unavailable">Н/Д</string>

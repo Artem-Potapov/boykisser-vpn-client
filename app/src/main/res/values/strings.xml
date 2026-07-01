@@ -73,6 +73,10 @@
     <string name="main_subscription_profile_count">(%1$d)</string>
     <string name="main_cd_ping_test_group">Ping test this group</string>
     <string name="ping_action_test">Ping test</string>
+    <string name="main_action_copy_link">Copy link</string>
+    <string name="main_action_copy_json">Copy config</string>
+    <string name="main_copy_link_toast">Link copied</string>
+    <string name="main_copy_json_toast">Config copied</string>
     <string name="ping_state_testing">Testing…</string>
     <string name="ping_result_ms">%1$d ms</string>
     <string name="ping_result_unavailable">N/A</string>
