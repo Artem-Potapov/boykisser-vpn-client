@@ -2,11 +2,16 @@ package com.justme.xtls_core_proxy
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.widget.Toast
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
@@ -45,14 +50,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -81,6 +84,8 @@ import com.justme.xtls_core_proxy.add.PasteAddDialog
 import com.justme.xtls_core_proxy.add.PasteKind
 import com.justme.xtls_core_proxy.add.readClipboardText
 import com.justme.xtls_core_proxy.add.subscriptionNameFromUrl
+import com.justme.xtls_core_proxy.config.JsonFormatter
+import com.justme.xtls_core_proxy.config.ProfileShareLink
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.log.LogRepository
@@ -456,7 +461,7 @@ private fun MainScreen(
     val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
-    var bottomSheetProfile by remember { mutableStateOf<Profile?>(null) }
+    var menuProfile by remember { mutableStateOf<Profile?>(null) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
 
     Scaffold(
@@ -581,7 +586,7 @@ private fun MainScreen(
                                         state == VpnConnectionState.CONNECTING,
                                     canConnect = canConnect(state),
                                     onConnect = { onConnect(profile.id) },
-                                    onLongPress = { bottomSheetProfile = profile }
+                                    onLongPress = { menuProfile = profile }
                                 )
                             }
                         }
@@ -612,7 +617,7 @@ private fun MainScreen(
                                         state == VpnConnectionState.CONNECTING,
                                     canConnect = canConnect(state),
                                     onConnect = { onConnect(profile.id) },
-                                    onLongPress = { bottomSheetProfile = profile }
+                                    onLongPress = { menuProfile = profile }
                                 )
                             }
                         }
@@ -646,51 +651,56 @@ private fun MainScreen(
         }
     }
 
-    if (bottomSheetProfile != null) {
-        val profile = bottomSheetProfile!!
-        ModalBottomSheet(
-            onDismissRequest = { bottomSheetProfile = null },
-            sheetState = rememberModalBottomSheetState()
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
-                Text(
-                    text = profile.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-                TextButton(
-                    onClick = {
-                        viewModel.pingTestProfile(profile)
-                        bottomSheetProfile = null
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.ping_action_test))
-                }
-                TextButton(
-                    onClick = {
-                        bottomSheetProfile = null
-                        onEditProfile(profile)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.main_action_edit))
-                }
-                TextButton(
-                    onClick = {
-                        viewModel.deleteProfile(profile)
-                        bottomSheetProfile = null
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        stringResource(R.string.main_action_delete),
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+    if (menuProfile != null) {
+        val profile = menuProfile!!
+        val shareLink = remember(profile.id, profile.config) {
+            ProfileShareLink.fromStoredConfig(profile.config)
         }
+        val linkCopiedMsg = stringResource(R.string.main_copy_link_toast)
+        val jsonCopiedMsg = stringResource(R.string.main_copy_json_toast)
+        ProfileActionsDialog(
+            profile = profile,
+            isConnectedProfile = isActive(profile, activeId, state),
+            canConnect = canConnect(state),
+            shareLink = shareLink,
+            onConnect = {
+                menuProfile = null
+                onConnect(profile.id)
+            },
+            onDisconnect = {
+                menuProfile = null
+                onDisconnect()
+            },
+            onPingTest = {
+                viewModel.pingTestProfile(profile)
+                menuProfile = null
+            },
+            onEdit = {
+                menuProfile = null
+                onEditProfile(profile)
+            },
+            onCopyLink = {
+                shareLink?.let {
+                    copyToClipboardMarkedSensitive(mainContext, "share link", it)
+                    Toast.makeText(mainContext, linkCopiedMsg, Toast.LENGTH_SHORT).show()
+                }
+                menuProfile = null
+            },
+            onCopyJson = {
+                copyToClipboardMarkedSensitive(
+                    mainContext,
+                    "config",
+                    JsonFormatter.formatJsonIfValid(profile.config)
+                )
+                Toast.makeText(mainContext, jsonCopiedMsg, Toast.LENGTH_SHORT).show()
+                menuProfile = null
+            },
+            onDelete = {
+                viewModel.deleteProfile(profile)
+                menuProfile = null
+            },
+            onDismiss = { menuProfile = null }
+        )
     }
 }
 
@@ -951,4 +961,21 @@ private fun canConnect(state: VpnConnectionState): Boolean {
     return state != VpnConnectionState.CONNECTED &&
         state != VpnConnectionState.CONNECTING &&
         state != VpnConnectionState.PAUSED
+}
+
+/**
+ * Copy [text] to the clipboard, flagging the clip sensitive on API 33+ so the system hides the
+ * paste preview. Profile links / JSON carry UUIDs and REALITY keys, matching LogRepository's
+ * redaction posture. No-op if the ClipboardManager is unavailable.
+ */
+private fun copyToClipboardMarkedSensitive(context: Context, label: String, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        ?: return
+    val clip = ClipData.newPlainText(label, text)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
+    clipboard.setPrimaryClip(clip)
 }
