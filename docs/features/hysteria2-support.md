@@ -91,15 +91,22 @@ hy2://     [auth@]host[:port-or-port-list]/?[key=value]&...#fragment
 | `pinSHA256` | `tlsSettings.pinnedPeerCertSha256` |
 | `obfs=salamander` | `streamSettings.finalmask.udp[].type` |
 | `obfs-password` | `streamSettings.finalmask.udp[].settings.password` |
+| `fm` (JSON object) | `streamSettings.finalmask` — the **whole** object (`quicParams`, `udpHop`, `udp`, …) kept verbatim; the structured fields above (e.g. salamander from `obfs`) are merged over it |
 | fragment | display name only — never runtime JSON |
 
-The authority is parsed **manually**, not via `URI.host`/`URI.port`: Java's server-based authority
-parser returns `null` for a standard multi-port authority like `example.com:123,5000-6000`. Bracketed
-IPv6 (`[addr]:port`) is supported. The `#fragment` is stripped before URI parsing (it is display-name
-only), so links with unencoded spaces/emoji in the name still parse. Validation failures (missing auth,
-missing host, invalid port, invalid port-hop token, unsupported obfs, or `obfs=salamander` without an
-`obfs-password`) throw `IllegalArgumentException` and surface as the existing
-invalid/unsupported import UX.
+The **whole link is parsed manually** — `java.net.URI` is not used at all. Two parts of a real
+Hysteria2 link break `java.net.URI`: (1) a multi-port authority like `example.com:123,5000-6000`
+makes the server-based authority parser return `null`, and (2) the `fm` query value carries a raw
+JSON object whose `{`, `}`, `"` characters are illegal in a URI query, so `URI()` throws before the
+query can even be read — which previously surfaced as an "unrecognized format" rejection on add.
+`parseUri` instead splits scheme / authority / query by hand: the `#fragment` is stripped first (it
+is display-name only, and carries unencoded spaces/emoji), the authority ends at the first `/` or `?`
+(bracketed IPv6 `[addr]:port` supported), and the query is split on `&` with each value
+percent-decoded. The `fm` value is then validated as a JSON object and, if valid, kept verbatim as
+the profile's FinalMask (malformed `fm` is dropped best-effort rather than rejecting the link).
+Validation failures (missing auth, missing host, invalid port, invalid port-hop token, unsupported
+obfs, or `obfs=salamander` without an `obfs-password`) throw `IllegalArgumentException` and surface as
+the existing invalid/unsupported import UX.
 
 ## FinalMask and Salamander
 
@@ -170,7 +177,7 @@ JVM unit tests (all pure, run under `:app:testDebugUnitTest`):
 
 | Test | Covers |
 |---|---|
-| [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | URI parsing (`hysteria2://`/`hy2://`, multi-port), validation failures (missing auth, unsupported obfs, invalid port), URI→Xray JSON shape, `pinSHA256` mapping, Salamander + FinalMask write paths, extract/merge preserving unknown FinalMask keys, simple-fields round-trip. |
+| [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | URI parsing (`hysteria2://`/`hy2://`, multi-port), validation failures (missing auth, unsupported obfs, invalid port), URI→Xray JSON shape, `pinSHA256` mapping, `fm` query → FinalMask mapping (incl. `udpHop`), raw-unencoded-JSON `fm` acceptance, Salamander + FinalMask write paths, extract/merge preserving unknown FinalMask keys, simple-fields round-trip. |
 | [`settings/EditableServerProtocolTest`](../../app/src/test/java/com/justme/xtls_core_proxy/settings/EditableServerProtocolTest.kt) | `detectEditableServerProtocol`: proxy-not-first VLESS/Hysteria2 JSON, malformed/non-v2 Hysteria2 → `ADVANCED_ONLY`, URI + blank + unknown-protocol guards. |
 | [`ConfigBuilderTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderTest.kt) / [`ConfigBuilderDnsTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderDnsTest.kt) | `toProfileStorageConfig`/`buildRuntimeConfig` accept Hysteria2 links; tun inbound + secure DNS + `ForceIP` applied to the Hysteria2 outbound. |
 | [`add/ClipboardAddRouterTest`](../../app/src/test/java/com/justme/xtls_core_proxy/add/ClipboardAddRouterTest.kt) | Clipboard classifies valid Hysteria2 links as `ClipboardKind.Hysteria2`; missing-auth / bad-obfs → `Invalid`. |
