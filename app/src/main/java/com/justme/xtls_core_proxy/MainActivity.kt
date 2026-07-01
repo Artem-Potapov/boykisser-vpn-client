@@ -682,7 +682,11 @@ private fun MainScreen(
             onCopyLink = {
                 shareLink?.let {
                     copyToClipboardMarkedSensitive(mainContext, "share link", it)
-                    Toast.makeText(mainContext, linkCopiedMsg, Toast.LENGTH_SHORT).show()
+                    // API 33+ shows the system's own clipboard-copy confirmation — skip our toast
+                    // there to avoid a double confirmation.
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                        Toast.makeText(mainContext, linkCopiedMsg, Toast.LENGTH_SHORT).show()
+                    }
                 }
                 menuProfile = null
             },
@@ -692,7 +696,11 @@ private fun MainScreen(
                     "config",
                     JsonFormatter.formatJsonIfValid(profile.config)
                 )
-                Toast.makeText(mainContext, jsonCopiedMsg, Toast.LENGTH_SHORT).show()
+                // API 33+ shows the system's own clipboard-copy confirmation — skip our toast
+                // there to avoid a double confirmation.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    Toast.makeText(mainContext, jsonCopiedMsg, Toast.LENGTH_SHORT).show()
+                }
                 menuProfile = null
             },
             onDelete = {

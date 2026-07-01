@@ -434,6 +434,21 @@ class Hysteria2ConfigCodecTest {
     }
 
     @Test
+    fun toShareLink_roundTripsBracketedIpv6Host() {
+        // IPv6 literals are stored unbracketed (parseAuthority strips the brackets) but must be
+        // re-bracketed in the emitted authority. With no sni, serverName == host, so sni is
+        // suppressed — the exact case where naive re-bracketing would break idempotency. Guard it.
+        val original = Hysteria2ConfigCodec.parseUri(
+            "hy2://tok@[2001:db8::1]:443/?obfs=salamander&obfs-password=pw"
+        )
+        val link = Hysteria2ConfigCodec.toShareLink(original)
+        assertTrue(link.contains("[2001:db8::1]:443"))
+        val reparsed = Hysteria2ConfigCodec.parseUri(link)
+        assertEquals(original, reparsed)
+        assertEquals("2001:db8::1", reparsed.host)
+    }
+
+    @Test
     fun mergeProfileIntoJson_preservesSockoptAndUnknownStreamSettingsKeys() {
         // makeSecureDns stamps sockopt.domainStrategy=ForceIP onto the stored config; a simple-editor
         // save must not discard it (nor unknown streamSettings keys) when merging the edited profile.
