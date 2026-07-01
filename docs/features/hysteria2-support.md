@@ -38,6 +38,46 @@ service, bridge API, and Room schema are unchanged — Hysteria2 profiles are st
 same opaque `Profile.config` string as converted VLESS links and pasted configs, so **no DB migration**
 is needed.
 
+### Codec surface (`Hysteria2ConfigCodec`)
+
+| Method | Direction | Notes |
+|---|---|---|
+| `parseUri(uri)` | `hy2://` / `hysteria2://` → `Hysteria2Profile` | Manual parse — `java.net.URI` not used (multi-port authority and raw-JSON `fm` value both break it). |
+| `toXrayJson(profile)` | `Hysteria2Profile` → Xray JSON string | Builds full config; `makeSecureDns` applied by caller (`ConfigBuilder`). |
+| `parseProfileFromJson(json)` | Xray JSON string → `Hysteria2Profile` | Scans all outbounds for the first `protocol:"hysteria"` + `version:2` entry. |
+| `mergeProfileIntoJson(json, profile)` | Xray JSON string + `Hysteria2Profile` → Xray JSON string | Patches in place; preserves unknown `streamSettings` keys (e.g. `sockopt` from `makeSecureDns`). |
+| `toShareLink(profile)` | `Hysteria2Profile` → `hy2://` link | Inverse of `parseUri` over URI-expressible fields (see below). |
+| `validatePortHopPorts(value)` | `String` → `Unit` (throws on invalid) | Validates comma / range port expressions. |
+
+#### `toShareLink` — share link reconstruction
+
+`toShareLink` is the inverse of `parseUri` over the subset of `Hysteria2Profile` fields that the
+`hy2://` URI grammar can express:
+
+| Emitted | Dropped (no URI representation) |
+|---|---|
+| auth, host, single port **or** full port-hop expression | `congestion` |
+| `sni` (omitted when equal to host) | `uploadBandwidth` (`brutalUp`) |
+| `alpn` (omitted when `"h3"`, the default) | `downloadBandwidth` (`brutalDown`) |
+| `insecure=1` (omitted when false) | `udpHopInterval` |
+| `pinSHA256` (omitted when blank) | |
+| `obfs=salamander` + `obfs-password` (when salamander set) | |
+| `fm=<verbatim finalmask JSON>` (when finalmask non-null) | |
+
+The `fm` query parameter carries the **whole** `streamSettings.finalmask` object verbatim, so QUIC
+params embedded in a provider-supplied finalmask survive round-tripping even though the individual
+`quicParams.*` structured fields have no URI keys. Fields with no URI form are silently omitted —
+**"Copy config (JSON)" is the lossless path**. This is intentional, not a bug to fix.
+
+`toShareLink` always emits a `hy2://` scheme (never `hysteria2://`). IPv6 host literals are
+bracketed. The port expression is the full port-hop string when `portHopPorts` is set, or the
+single port otherwise — both round-trip through `parseUri` correctly.
+
+`toShareLink` is called by
+[`ProfileShareLink.fromStoredConfig`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ProfileShareLink.kt)
+to reconstruct a shareable link from a stored JSON config (see
+[`docs/features/profile-actions-menu.md`](profile-actions-menu.md)).
+
 ```
 share link / JSON ─► detect kind ─► VLESS codec ┐
                                   ├─ Hysteria2 codec ┼─► makeSecureDns (shared) ─► XrayVpnService ─► bridge ─► Xray
@@ -177,7 +217,8 @@ JVM unit tests (all pure, run under `:app:testDebugUnitTest`):
 
 | Test | Covers |
 |---|---|
-| [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | URI parsing (`hysteria2://`/`hy2://`, multi-port), validation failures (missing auth, unsupported obfs, invalid port), URI→Xray JSON shape, `pinSHA256` mapping, `fm` query → FinalMask mapping (incl. `udpHop`), raw-unencoded-JSON `fm` acceptance, Salamander + FinalMask write paths, extract/merge preserving unknown FinalMask keys, simple-fields round-trip. |
+| [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | URI parsing (`hysteria2://`/`hy2://`, multi-port), validation failures (missing auth, unsupported obfs, invalid port), URI→Xray JSON shape, `pinSHA256` mapping, `fm` query → FinalMask mapping (incl. `udpHop`), raw-unencoded-JSON `fm` acceptance, Salamander + FinalMask write paths, extract/merge preserving unknown FinalMask keys, simple-fields round-trip. `toShareLink` round-trips: common fields (sni, alpn, insecure, salamander), port-hopping + salamander, finalmask blob carried verbatim via `fm`. |
+| [`ProfileShareLinkTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ProfileShareLinkTest.kt) | `ProfileShareLink.fromStoredConfig`: Hysteria2 JSON → `hy2://`, VLESS JSON → `vless://`, freedom-only → `null`, malformed JSON → `null`. |
 | [`settings/EditableServerProtocolTest`](../../app/src/test/java/com/justme/xtls_core_proxy/settings/EditableServerProtocolTest.kt) | `detectEditableServerProtocol`: proxy-not-first VLESS/Hysteria2 JSON, malformed/non-v2 Hysteria2 → `ADVANCED_ONLY`, URI + blank + unknown-protocol guards. |
 | [`ConfigBuilderTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderTest.kt) / [`ConfigBuilderDnsTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderDnsTest.kt) | `toProfileStorageConfig`/`buildRuntimeConfig` accept Hysteria2 links; tun inbound + secure DNS + `ForceIP` applied to the Hysteria2 outbound. |
 | [`add/ClipboardAddRouterTest`](../../app/src/test/java/com/justme/xtls_core_proxy/add/ClipboardAddRouterTest.kt) | Clipboard classifies valid Hysteria2 links as `ClipboardKind.Hysteria2`; missing-auth / bad-obfs → `Invalid`. |
