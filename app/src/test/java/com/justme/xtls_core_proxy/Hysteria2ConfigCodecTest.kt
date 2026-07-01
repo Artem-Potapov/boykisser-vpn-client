@@ -402,6 +402,38 @@ class Hysteria2ConfigCodecTest {
     }
 
     @Test
+    fun toShareLink_roundTripsCommonFields() {
+        val original = Hysteria2ConfigCodec.parseUri(
+            "hy2://secret@example.com:443/?sni=cdn.example.com&alpn=h3&insecure=1" +
+                "&obfs=salamander&obfs-password=pw#My Server"
+        )
+        val reparsed = Hysteria2ConfigCodec.parseUri(Hysteria2ConfigCodec.toShareLink(original))
+        assertEquals(original, reparsed)
+    }
+
+    @Test
+    fun toShareLink_roundTripsPortHoppingAndSalamander() {
+        val original = Hysteria2ConfigCodec.parseUri(
+            "hy2://tok@vpn.example.net:443,5000-6000/?sni=a.b&obfs=salamander&obfs-password=pw"
+        )
+        val reparsed = Hysteria2ConfigCodec.parseUri(Hysteria2ConfigCodec.toShareLink(original))
+        assertEquals(original, reparsed)
+        assertEquals("443,5000-6000", reparsed.portHopPorts)
+        assertEquals(443, reparsed.port)
+    }
+
+    @Test
+    fun toShareLink_carriesFinalmaskBlobVerbatim() {
+        val fm = """{"quicParams":{"congestion":"bbr"}}"""
+        val original = Hysteria2ConfigCodec.parseUri(
+            "hy2://tok@h.example:443/?fm=" + java.net.URLEncoder.encode(fm, "UTF-8")
+        )
+        val link = Hysteria2ConfigCodec.toShareLink(original)
+        assertTrue(link.contains("fm="))
+        assertEquals(original.finalmaskJson, Hysteria2ConfigCodec.parseUri(link).finalmaskJson)
+    }
+
+    @Test
     fun mergeProfileIntoJson_preservesSockoptAndUnknownStreamSettingsKeys() {
         // makeSecureDns stamps sockopt.domainStrategy=ForceIP onto the stored config; a simple-editor
         // save must not discard it (nor unknown streamSettings keys) when merging the edited profile.

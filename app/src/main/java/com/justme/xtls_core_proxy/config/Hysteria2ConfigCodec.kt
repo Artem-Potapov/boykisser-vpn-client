@@ -5,6 +5,7 @@ package com.justme.xtls_core_proxy.config
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 data class Hysteria2Profile(
@@ -159,6 +160,63 @@ object Hysteria2ConfigCodec {
             salamanderPassword = salamanderPassword,
             finalmaskJson = parseFinalmaskParam(params["fm"])
         )
+    }
+
+    /**
+     * Reconstruct a hy2:// share link — the inverse of [parseUri] over the fields the Hysteria2
+     * URI grammar can express (auth, host, port / port-hopping, sni, alpn, insecure, pinSHA256,
+     * salamander obfs, and the raw finalmask blob). Fields with no URI representation are simply
+     * not emitted; "Copy config (JSON)" is the lossless path. Not every stored config round-trips
+     * byte-for-byte through a share link — that is intentional, not a bug to "fix".
+     */
+    fun toShareLink(profile: Hysteria2Profile): String {
+        // IPv6 literals must be bracketed for parseAuthority; host is NOT url-encoded (parseAuthority
+        // does not decode it). auth IS encoded (parseAuthority decodes it back).
+        val hostAuthority = if (profile.host.contains(":") && !profile.host.startsWith("[")) {
+            "[${profile.host}]"
+        } else {
+            profile.host
+        }
+        // parsePortExpression accepts the whole port-hop expression and derives the first port from
+        // it, so emitting portHopPorts (when present) round-trips both port and portHopPorts.
+        val portExpression = profile.portHopPorts?.takeIf { it.isNotBlank() }
+            ?: profile.port.toString()
+
+        val params = linkedMapOf<String, String>()
+        if (profile.serverName.isNotBlank() && profile.serverName != profile.host) {
+            params["sni"] = profile.serverName
+        }
+        if (profile.alpn.isNotBlank() && profile.alpn != "h3") {
+            params["alpn"] = profile.alpn
+        }
+        if (profile.allowInsecure) {
+            params["insecure"] = "1"
+        }
+        if (profile.pinnedPeerCertSha256.isNotBlank()) {
+            params["pinSHA256"] = profile.pinnedPeerCertSha256
+        }
+        val salamander = profile.salamanderPassword?.trim()?.ifBlank { null }
+        if (salamander != null) {
+            params["obfs"] = "salamander"
+            params["obfs-password"] = salamander
+        }
+        profile.finalmaskJson?.trim()?.ifBlank { null }?.let { params["fm"] = it }
+
+        val query = params.entries.joinToString("&") { (k, v) -> "${encode(k)}=${encode(v)}" }
+
+        return buildString {
+            append("hy2://")
+            append(encode(profile.auth))
+            append("@")
+            append(hostAuthority)
+            append(":")
+            append(portExpression)
+            append("/")
+            if (query.isNotEmpty()) {
+                append("?")
+                append(query)
+            }
+        }
     }
 
     /**
@@ -531,5 +589,9 @@ object Hysteria2ConfigCodec {
 
     private fun decode(value: String): String {
         return URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    }
+
+    private fun encode(value: String): String {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8.name())
     }
 }
