@@ -52,13 +52,17 @@ non-destructive rows from Delete.
 | 2 | Ping test | `ic_speedometer` (drawable, reused from ping-test group header) | always shown | always |
 | 3 | Edit | `Icons.Filled.Edit` | always shown | always |
 | 4 | Copy link | `ic_link` (drawable) | `shareLink != null` only | always |
-| 5 | Copy config (JSON) | `ic_content_copy` (drawable) | always shown | always |
+| 5 | Copy config | `ic_content_copy` (drawable) | always shown | always |
 | — | *(divider)* | | | |
 | 6 | Delete | `Icons.Filled.Delete` | always shown | always |
 
 Connect/Disconnect occupies the same row slot — exactly one variant is shown, never both. The Connect
-row is greyed out (alpha 0.38) and non-clickable when `canConnect` is false (the VPN is already
-active for another profile, or a connection is in progress).
+row is greyed out (alpha 0.38) and non-clickable when `canConnect` is false — i.e. when
+`VpnConnectionState` is `CONNECTED`, `CONNECTING`, or `PAUSED` (another profile may be active, a
+connection is in progress, or the tunnel is paused).
+
+Every action callback in `MainScreen` sets `menuProfile = null` after running, so the dialog always
+dismisses once an action is chosen (including Copy link / Copy config).
 
 Delete uses `MaterialTheme.colorScheme.error` for both the icon tint and label color.
 
@@ -87,24 +91,36 @@ no share-link grammar.
 ### Accepted lossiness
 
 **Share links are lossy by design.** Not every field in a stored Hysteria2 Xray config has a URI
-grammar equivalent. Fields dropped from a `hy2://` link include `congestion`, `uploadBandwidth`
-(`brutalUp`), `downloadBandwidth` (`brutalDown`), and `udpHopInterval`. The `finalmask` blob IS
-carried verbatim as the `fm` query parameter, so QUIC params embedded in the provider-supplied
-finalmask survive round-tripping. For VLESS, any extension fields beyond what the standard `vless://`
-grammar covers may similarly be omitted.
+grammar equivalent. [`toShareLink`](../../app/src/main/java/com/justme/xtls_core_proxy/config/Hysteria2ConfigCodec.kt)
+does not emit standalone query params for `congestion`, `uploadBandwidth` (`brutalUp`),
+`downloadBandwidth` (`brutalDown`), or `udpHopInterval` — those structured fields are omitted from
+the URI surface. They may still survive inside the `fm` query parameter when the stored config's
+`streamSettings.finalmask` object already carries them (the blob is passed through verbatim). For
+VLESS, any extension fields beyond what the standard `vless://` grammar covers may similarly be
+omitted.
 
-**"Copy config (JSON)" is the lossless path.** Agents and maintainers should not treat share-link
+**"Copy config" is the lossless path.** Agents and maintainers should not treat share-link
 reconstruction as a bug to fix by expanding the URI grammar; the lossiness is intentional.
 See [`Hysteria2ConfigCodec.toShareLink`](../../app/src/main/java/com/justme/xtls_core_proxy/config/Hysteria2ConfigCodec.kt)
 and its doc comment for the definitive list of what is and is not expressed in the link.
 
-## Clipboard sensitivity
+## Copy config
 
-Both "Copy link" and "Copy config (JSON)" go through `copyToClipboardMarkedSensitive` (private
-top-level function in `MainActivity.kt`). On API 33+ (Android 13, `Build.VERSION_CODES.TIRAMISU`)
-this sets `ClipDescription.EXTRA_IS_SENSITIVE = true` on the `ClipData`, which suppresses the
-system paste preview. On older APIs the clip is written normally. If `ClipboardManager` is unavailable
-the call is a no-op.
+"Copy config" always copies `profile.config` through
+[`JsonFormatter.formatJsonIfValid`](../../app/src/main/java/com/justme/xtls_core_proxy/config/JsonFormatter.kt):
+valid JSON is pretty-printed; invalid/non-JSON text is copied as-is.
+
+## Clipboard sensitivity and toasts
+
+Both "Copy link" and "Copy config" go through `copyToClipboardMarkedSensitive` (private top-level
+function in `MainActivity.kt`). On API 33+ (Android 13, `Build.VERSION_CODES.TIRAMISU`) this sets
+`ClipDescription.EXTRA_IS_SENSITIVE = true` on the `ClipData`, which suppresses the system paste
+preview. On older APIs the clip is written normally. If `ClipboardManager` is unavailable the call
+is a no-op.
+
+On API 33+ the app's own "Link copied" / "Config copied" toasts are also skipped — Android shows its
+own clipboard-copy confirmation, and showing both would double-confirm. Below API 33 a
+`Toast.LENGTH_SHORT` is shown after each successful copy.
 
 This matches `LogRepository`'s redaction posture: stored configs contain UUIDs, REALITY public keys,
 and `shortId` values that should not be surfaced in system UI.

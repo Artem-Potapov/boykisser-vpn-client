@@ -47,7 +47,13 @@ Strings live in [`app/src/main/res/values/strings.xml`](../../app/src/main/res/v
 
 The foreground service [`XrayVpnService`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) uses a private `localizedString(@StringRes id, vararg args)` helper that routes every notification-bound `getString` through `SupportedLanguage.localize(this)`. Service contexts don't auto-refresh their `Configuration` on locale change on API <33, so this wrap is the only way notification text reflects a mid-session language switch.
 
-Subscription refresh ([`SubscriptionRefreshCoordinator`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionRefreshCoordinator.kt)) calls `SupportedLanguage.localize(context)` once at refresh start and uses that context for every `getString` inside the IO coroutine. Callers ([`VpnViewModel.refreshSubscription`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) takers) must pass an Activity context, not `getApplication()` — see [`MainActivity.kt:178,332`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) and [`SubscriptionsActivity.kt:106`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionsActivity.kt).
+[`VpnNotifications`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) (kill-on-foreground exposure channel + heads-up alert) uses the same pattern via a private `localized(context, …)` helper.
+
+The QS tile [`XrayVpnTileService`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/XrayVpnTileService.kt) calls `SupportedLanguage.localize(applicationContext)` when updating tile labels and the "no profiles" toast — tile/service contexts don't get Activity-style `attachBaseContext` wrapping.
+
+[`VpnViewModel`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) mirrors `LogRepository.errorEvents` into its `error` `StateFlow` using `SupportedLanguage.localize(getApplication()).getString(resId)` so error toasts pick up the per-app locale at observation time.
+
+Subscription refresh ([`SubscriptionRefreshCoordinator`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionRefreshCoordinator.kt)) calls `SupportedLanguage.localize(context)` once at refresh start and uses that context for every `getString` inside the IO coroutine. [`VpnViewModel.refreshSubscription`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) and [`refreshAllStaleSubscriptions`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) normalize the caller's `Context` to `applicationContext` before handing it off — `localize()` reads app-wide locale state (`LocaleManager` / `AppCompatDelegate`), so Application context is correct and Activity context is not required. UI call sites still pass an Activity/`Compose` context for convenience — see [`MainActivity.kt:607`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) (`mainContext`) and [`SubscriptionsActivity.kt:116`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionsActivity.kt) (`this`).
 
 ## The AppCompatDelegate trap
 
@@ -80,6 +86,10 @@ This is why we have an `Application` subclass for what is otherwise a one-and-do
 
 No code changes elsewhere; the engine is locale-agnostic.
 
+## Play App Bundle locale split
+
+[`app/build.gradle.kts`](../../app/build.gradle.kts) sets `bundle { language { enableSplit = false } }`. Play's default language split ships only the device locale's `values-*` resources in the base APK and defers the rest as on-demand splits. This app's in-app picker calls `LocaleManager.setApplicationLocales` / `AppCompatDelegate.setApplicationLocales` at runtime, so the chosen locale's strings must already be present — disabling the language split keeps every supported locale in the base module. Required for the picker to work on App Bundle installs without a Play Core language-download flow.
+
 ## Known limitations
 
 **Notification channel name caching.** `NotificationChannel.name` and `description` are localized at channel-creation time and the system caches the value forever (until the channel is recreated with a new ID). A user who installs the app in English then switches to Russian will see the channel still listed in English in *Settings → Apps → Notifications*. Channels created fresh after the switch (i.e., on first launch after install in the new locale) are in the new language. Documented in the `localizedString` helper's KDoc; unfixable without rotating channel IDs, which would orphan user notification settings.
@@ -99,7 +109,7 @@ No code changes elsewhere; the engine is locale-agnostic.
 
 Both tests *must* call `SupportedLanguage.apply`, not `AppCompatDelegate.setApplicationLocales` directly — the latter is the trap described above and would let the tests pass while production is broken. The previous iteration of this test made exactly that mistake and was caught in review.
 
-**Lint:** `:app:lintDebug` enforces `MissingTranslation` (every English key has a Russian counterpart) and `HardcodedText` (no user-visible literal in Kotlin source). Both must stay green.
+**Lint:** `:app:lintDebug` (CI gate) runs Android Gradle Plugin lint with default severities — there is no project-level `lint { }` block in [`app/build.gradle.kts`](../../app/build.gradle.kts). Out of the box, `MissingTranslation` is an **error** (every English key must have a Russian counterpart in `values-ru/`) and `HardcodedText` is a **warning** (no user-visible literal in Kotlin source). Project convention: fix `MissingTranslation` by adding the missing `values-ru/` entry; keep both checks green on `lintDebug`.
 
 ## Future work
 

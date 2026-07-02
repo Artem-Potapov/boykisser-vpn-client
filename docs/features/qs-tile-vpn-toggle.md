@@ -29,7 +29,7 @@ A tile that worked only on already-permitted users would be useless on first lau
    │
    └── else (DISCONNECTED, ERROR)
            ├── IO: ActiveProfileRepository.pickOrPersistActive(ctx)
-           │      └── null → toast "Please add a configuration", stop
+           │      └── null → toast "Please add a configuration in the app first", stop
            │
            └── Main + unlockAndRun:
                   ├── VpnService.prepare(ctx) != null  ─┐
@@ -41,7 +41,7 @@ A tile that worked only on already-permitted users would be useless on first lau
 
 The tile **observes** state but does not own it. `LogRepository.connectionState` is the canonical source, written by `XrayVpnService`; the tile collects it on `onStartListening` and re-renders. Tap intent is decided from `connectionState.value` at click time, not from any tile-private state.
 
-**Tile text.** `updateTile` writes the localized connection state ("Disconnected" / "Connecting" / "Paused" / "Error") into the tile's `label` and leaves `subtitle` null. The manifest `android:label="@string/tile_label"` ("VPN") is used only by the QS *tile picker* (the system UI for adding/removing tiles); the panel never shows it once the tile is on screen. The stacked "VPN" + state rendering an earlier version produced was redundant — a user with the app installed already knows what the tile is for.
+**Tile text.** `updateTile` resolves strings through `SupportedLanguage.localize(applicationContext)` and writes the localized connection state ("Disconnected" / "Connecting" / "Paused" / "Error") into the tile's `label`. It always sets `subtitle = null` (and calls `updateTile()`), which also clears any subtitle cached from older builds that wrote state into the subtitle field. The manifest `android:label="@string/tile_label"` ("VPN") is used only by the QS *tile picker* (the system UI for adding/removing tiles); the panel never shows it once the tile is on screen. The stacked "VPN" + state rendering an earlier version produced was redundant — a user with the app installed already knows what the tile is for. The no-profile toast uses the same `SupportedLanguage.localize` path.
 
 When state is **CONNECTED** the label is the active profile's `name` field instead of the literal "Connected" — gives the user immediate confirmation of *which* profile is up. The lookup is a single `ProfileDao.getById` on `Dispatchers.IO` inside the `updateTile` suspend function, so the collector path serializes the resolution against the next state transition without blocking the main thread. Falls back to the generic `main_state_connected` string if (a) no active profile id is set, (b) the profile row has been deleted between connect and the tile re-render, or (c) the profile's name is blank.
 
@@ -51,17 +51,23 @@ The tile lives in [`app/src/main/java/com/justme/xtls_core_proxy/tile/`](../../a
 
 | File | Responsibility |
 |---|---|
-| [`tile/XrayVpnTileService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/XrayVpnTileService.kt) | The `TileService` subclass. Observes `LogRepository.connectionState` on `onStartListening`, renders the localized state (or the active profile's name when CONNECTED) into `qsTile.label`, decides start/stop at click time via the pure `decideTileClick` function (see `tile/TileClickDecision.kt`), dispatches directly to `XrayVpnService` for the steady-state path, hands off to `MainActivity` when first-time permissions are still missing. |
+| [`tile/XrayVpnTileService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/XrayVpnTileService.kt) | The `TileService` subclass. Observes `LogRepository.connectionState` on `onStartListening`, renders localized state (via `SupportedLanguage.localize`) or the active profile's name when CONNECTED into `qsTile.label` (always `subtitle = null`), decides start/stop at click time via the pure `decideTileClick` function (see `tile/TileClickDecision.kt`), dispatches to `XrayVpnService` via `startForegroundService` for both start and stop, hands off to `MainActivity` when first-time permissions are still missing. |
 | [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt) | Sealed `TileClickDecision` (`Stop`, `NoProfileToast`, `Start(id)`, `HandoffToMainActivity(id)`) plus the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` extracted from `XrayVpnTileService` so the click pipeline is unit-testable without the QS framework. |
 | [`state/ActiveProfileRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ActiveProfileRepository.kt) | Shared owner of the `vpn_prefs.active_profile_id` SharedPreferences key. Exposes `activeProfileIdFlow: StateFlow<Long?>` observed by `VpnViewModel` throughout its lifetime, plus `pickOrPersistActive(ctx)` which honors a valid stored id or falls back to `ProfileDao.getFirst()` when none is stored. Tile and VM share the same persistence and the same observable surface. |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | Owns `connectionState: StateFlow<VpnConnectionState>` (the tile collects this on `onStartListening`) and `errorEvents: SharedFlow<Int>` (replay=1, DROP_OLDEST; the VM collects this in `init`). `XrayVpnService` pairs every `setConnectionState(ERROR)` call with `emitError(@StringRes resId)`, so tile-initiated failures propagate to the in-app error Text in addition to the existing error notification channel. |
 | [`db/ProfileDao.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/ProfileDao.kt) | Source of `getFirst()` — `SELECT * FROM profiles ORDER BY id ASC LIMIT 1`. Used by `pickOrPersistActive` to pick a default when nothing is stored; covers manual and subscription-imported profiles alike. Also provides `getById(id)`, called by the tile when CONNECTED to resolve the active profile's name for the label. |
 | [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) — `maybeAutoConnectFromTile` | Consumes `EXTRA_TILE_AUTOCONNECT` + `EXTRA_TILE_PROFILE_ID`, single-shot strips both extras, runs the same permission dance the in-app Connect button does, then calls `viewModel.connect(...)`. Gated by `savedInstanceState == null` in `onCreate` so rotation / process-death recovery doesn't re-trigger. |
-| [`res/drawable/ic_vpn_tile.xml`](../../app/src/main/res/drawable/ic_vpn_tile.xml) | 24dp vector padlock with `@android:color/white` fill. The QS framework state-tints it (active/inactive); using an explicit white fill is the standard pattern that lets the framework do that tinting. |
+| [`res/drawable/ic_vpn_tile.xml`](../../app/src/main/res/drawable/ic_vpn_tile.xml) | 24dp vector cat mascot, intentionally full-bleed (~96% of the 24×24 viewport). Paths use solid `#FFFFFFFF` fills (no opaque background rect). The QS framework state-tints it (active/inactive); explicit white fills are the standard pattern that lets the framework do that tinting. See [Tile icon and One UI scaling](#tile-icon-and-one-ui-scaling) below. |
 | [`res/values/strings.xml`](../../app/src/main/res/values/strings.xml) / [`values-ru/strings.xml`](../../app/src/main/res/values-ru/strings.xml) | `tile_label` ("VPN" in both locales), `tile_toast_no_profiles`, `vpn_permission_revoked_error`. |
 | [`AndroidManifest.xml`](../../app/src/main/AndroidManifest.xml) | `<service android:name=".tile.XrayVpnTileService"` with `android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"` and `<action android:name="android.service.quicksettings.action.QS_TILE"/>`. `MainActivity` has `android:launchMode="singleTop"` (deterministic handoff) plus a second `<intent-filter>` for `android.service.quicksettings.action.QS_TILE_PREFERENCES` + `category.DEFAULT` that overrides the OS default long-press → app-info behavior. |
 
 `XrayVpnService` itself ([`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt)) is shared with the in-app start path — the tile and `VpnViewModel.connect` both dispatch the same `ACTION_START` + `EXTRA_PROFILE_ID` intent. There is no tile-specific service code path.
+
+## Tile icon and One UI scaling
+
+The tile icon is intentionally drawn near full-bleed. One UI's "Available buttons" tile picker scales icons by its own rules that (a) differ from how the live/active tile sizes them and (b) drift across One UI versions. The picker and the live tile can never be made to render the cat at the same size — and this affects every app's tile, not just ours. Tuning the drawable's internal padding or scale does **not** close the picker-vs-live gap; it only trades "oversized in live" for "too small in live."
+
+**Do not** reintroduce a smaller scale or extra padding to make the picker look right. Keep the icon full-bleed and judge it on the **live** QS panel only. White fills plus framework state-tint is the correct pattern (`#FFFFFFFF` fills, transparent background).
 
 ## Click handling: the IO / unlock split
 
@@ -89,7 +95,7 @@ Why `unlockAndRun` wraps only the Main-thread tail, not the whole click handler:
 - `pickOrPersistActive` does not need an unlocked device — Room reads `xraytun.db` directly, no UI involvement.
 - Pulling the DB read out of the unlock callback minimizes the time spent waiting on the user to unlock and reduces the window in which the IO completion could race with the device re-locking.
 
-The stop path needs no IO at all (profile id isn't required to stop), so it goes directly through `runOrDeferUnlock { sendStopIntent() }`.
+The stop path needs no IO at all (profile id isn't required to stop), so it goes directly through `runOrDeferUnlock { sendStopIntent() }`. `sendStopIntent` uses `startForegroundService` (not plain `startService`) because `XrayVpnService` is a foreground service and API 31+ background-start restrictions can deny `startService` if the tile's transient foreground grant has already elapsed by the time the stop dispatch runs.
 
 ## Concurrency model
 
@@ -115,7 +121,7 @@ When `VpnService.prepare(ctx)` returns non-null (consent never granted, or revok
 …and dispatches via `startActivityAndCollapse`. The API split:
 
 - **API 34+ (`UPSIDE_DOWN_CAKE`)** — uses the `PendingIntent` overload, which is the modern non-deprecated path.
-- **API 30–33** — uses the deprecated `Intent` overload. Two annotations are required because they suppress different things: `@Suppress("DEPRECATION")` silences the Kotlin compiler's deprecation warning on the call, and `@SuppressLint("StartActivityAndCollapseDeprecated")` silences the Android lint check (which fires as an *error*, not a warning, since newer lint baselines). `minSdk = 30`, so the floor is fixed; both overloads must be supported for the lifetime of those API levels.
+- **API 29–33** — uses the deprecated `Intent` overload. Two annotations are required because they suppress different things: `@Suppress("DEPRECATION")` silences the Kotlin compiler's deprecation warning on the call, and `@SuppressLint("StartActivityAndCollapseDeprecated")` silences the Android lint check (which fires as an *error*, not a warning, since newer lint baselines). `minSdk = 29`, so the floor is fixed; both overloads must be supported for the lifetime of those API levels.
 
 `MainActivity` is `android:launchMode="singleTop"`, so:
 
@@ -144,7 +150,7 @@ This is the single piece of profile-resolution lore that lives in the repository
 
 ## TOCTOU on `VpnService.prepare`
 
-The tile pre-flights `VpnService.prepare(ctx)` on the main thread before dispatching `ACTION_START`. The user can revoke VPN consent in the gap between that check and the service running. Without a defensive re-check, `Builder.establish()` would throw `SecurityException` and the user would see ERROR state in the tile subtitle with no explanation.
+The tile pre-flights `VpnService.prepare(ctx)` on the main thread before dispatching `ACTION_START`. The user can revoke VPN consent in the gap between that check and the service running. Without a defensive re-check, `Builder.establish()` would throw `SecurityException` and the user would see ERROR state in the tile **label** with no explanation.
 
 [`XrayVpnService.startVpn`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) re-checks `VpnService.prepare(this)` after `startForeground` (to satisfy the FGS contract before stopping) and, if non-null, posts an error notification via the existing `vpn_error_channel` using `vpn_permission_revoked_error` *and* calls `LogRepository.emitError(R.string.vpn_permission_revoked_error)` so the in-app surface sees the same reason. The notification's `contentIntent` opens `MainActivity` so the user can re-grant consent.
 
@@ -186,7 +192,7 @@ When the QS panel is pulled down from the lock screen, `TileService.isLocked` re
 
 **`STATE_ACTIVE` during `CONNECTING`.** Quick Settings only has `STATE_ACTIVE` / `STATE_INACTIVE` / `STATE_UNAVAILABLE`. The current mapping marks `CONNECTING` as `STATE_ACTIVE` (consistent with the toggle semantics — a tap during CONNECTING means "stop"). A double-tap during the 1–3 s connect window will therefore fire `ACTION_STOP`. Considered acceptable because the alternative (`STATE_UNAVAILABLE`) makes the tile look broken to users in low-bandwidth conditions where CONNECTING is long-lived.
 
-**Tile pre-flight permission check is racy with revocation.** Mitigated by the defensive `VpnService.prepare(this)` re-check at the top of `XrayVpnService.startVpn`, which posts an error notification on failure. Still, the user sees a brief CONNECTING state before the error notification fires; no way to avoid this without making the tile slow.
+**Tile pre-flight permission check is racy with revocation.** Mitigated by the defensive `VpnService.prepare(this)` re-check at the top of `XrayVpnService.startVpn` (after `startForeground`, before `setConnectionState(CONNECTING)`), which posts an error notification on failure. When permission was revoked in the gap, the tile can jump **DISCONNECTED → ERROR** without ever showing CONNECTING — the defensive check runs before CONNECTING is published. A brief CONNECTING flash is still possible on other failure paths (e.g. profile lookup / tunnel bring-up) that occur after CONNECTING is set.
 
 **No reboot recovery for the active-profile selection.** Matches the rest of the app — there is no `BOOT_COMPLETED` handler that pre-warms `ActiveProfileRepository`. First tile tap after a reboot re-reads SharedPreferences as usual; no behavior change is needed.
 
