@@ -2,8 +2,27 @@
 
 Maintainer reference for the Boykisser onboarding / conversion screen — internally the "nag screen" —
 that walks an un-subscribed user through obtaining a VPN key. Reached from the home banner CTA and the
-"VPN by Boykisser (Recommended)" row on the subscriptions screen; both surfaces only render while
-`!PromotedSubscription.hasValidSubscription(...)` (see [`boykisser-vpn.md`](boykisser-vpn.md)).
+"VPN by Boykisser (Recommended)" row on the subscriptions screen when those surfaces are visible
+(see [Entry / visibility](#entry--visibility)).
+
+## Entry / visibility
+
+The nag screen has **no independent gate** — `BoykisserInfoActivity` does not call `PromoGate` or
+check subscriptions itself. It is `android:exported="false"` with no intent-filters, so it is
+reachable only when the user taps a promo surface that is already showing:
+
+```kotlin
+showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
+```
+
+(`promoGate` is resolved once per screen via `LaunchedEffect { PromoGate.resolve(...) }` in both
+`MainActivity` and `SubscriptionsActivity`; the home banner additionally requires
+`!bannerDismissed`.)
+
+The remote `PromoGate` probe semantics (418 / 409 / 451, date fallback, disarm lease) are documented
+in [`boykisser-vpn.md`](boykisser-vpn.md#remote-gate-subspromogatekt) — the nag screen inherits
+whatever those call sites decide. Deep-link / App Link entry (`BoykisserLinkActivity`) remains
+dormant per manifest; it does not open the nag screen.
 
 ## Why this exists
 
@@ -36,15 +55,17 @@ Four steps, alternating horizontal alignment to mimic a hand-drawn roadmap. Each
 [`RoadmapStep`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/BoykisserInfoActivity.kt) — a
 36 dp magenta circle (`StepCircle`) with a bold white digit, plus a content column.
 
-| Step | Side | Content |
+| Step | Alignment | Content |
 |---|---|---|
-| 1 | Start (0.18) | `boykisser_step1_intro` — "you need a VPN key" framing. |
-| 2 | Start (0.18) | Label + full-width magenta button that opens `BoykisserInfoActivity.BOT_URL` (`https://t.me/boykisser_vpn_bot`). |
-| 3 | End (0.82) | Intro line + `BotMessageMock` (Telegram-styled dark Surface with the canonical bot reply) + hint to tap the link in Telegram to copy. |
-| 4 | Center (0.50) | Label + `PasteAndSubmit` (`OutlinedTextField` + "Let's go!" button). |
+| 1 | Start (`TopStart`) | `boykisser_step1_intro` — "you need a VPN key" framing. |
+| 2 | Start (`TopStart`) | Label + full-width magenta button that opens `BoykisserInfoActivity.BOT_URL` (`https://t.me/boykisser_vpn_bot?start=FromApp`). |
+| 3 | End (`TopEnd`) | Intro line + `BotMessageMock` (Telegram-styled dark Surface with the canonical bot reply) + hint to tap the link in Telegram to copy. |
+| 4 | Center (`TopCenter`) | Label + `PasteAndSubmit` (`OutlinedTextField` + "Let's go!" button). |
 
-`HorizontalSide.{Start,Center,End}` are fractions of the parent width (`0.18 / 0.50 / 0.82`), used
-by both the step's `Box.align` and the arrow endpoints — same source so they cannot drift.
+`HorizontalSide.{Start,Center,End}` is a shared semantic label. **Steps** map it to row alignment
+inside `RoadmapStep` (`TopStart` / `TopCenter` / `TopEnd`). **Arrows** map the same enum to
+`xFraction` values (`0.18 / 0.50 / 0.82`) for bezier endpoint x-positions only — the fractions do
+not position the step rows.
 
 ### Step 4 grouping
 
@@ -73,7 +94,8 @@ rebuild that landed in `1173373`.
 ## Arrows (`ArrowConnector`)
 
 Cubic bezier from step *N*'s bottom to step *N+1*'s top, drawn on a 40 dp tall `Canvas`. Endpoint
-x-fractions come from `HorizontalSide`. Two tangent rules:
+x-fractions come from `HorizontalSide.xFraction` (not from the step row's `TopStart`/`TopCenter`/
+`TopEnd` alignment). Two tangent rules:
 
 - **Start tangent** (cp1 at `(xFrom, midY)`): purely vertical. The arrow tails *out* of the previous
   step going straight down, matching the hand-drawn sketch.
@@ -104,7 +126,10 @@ the measurement lands before the user can perceive anything. Fix landed in `f759
 ## Submit path
 
 [`PasteAndSubmit`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/BoykisserInfoActivity.kt)
-owns the text state. Submit (button tap *or* IME `Done`) runs `BoykisserCallback.validate(text)`:
+owns the text state. The "Let's go!" button is `enabled = text.isNotBlank()`; IME `Done` still
+invokes the same submit lambda (so an empty field can be submitted from the keyboard — validation
+then fails and shows the error line). Submit (button tap *or* IME `Done`) runs
+`BoykisserCallback.validate(text)`:
 
 - `null` → set `showError = true`, render the
   `boykisser_error_invalid_domain` line via `OutlinedTextField`'s `supportingText`.
@@ -147,10 +172,11 @@ mock of what the (Russian-speaking) Telegram bot actually sends. Translating it 
 ## Known limitations
 
 - **No tests for the Compose layout.** Logic that matters under test (deep-link validation, promo
-  visibility) lives in `BoykisserCallback` / `PromotedSubscription` and is covered by their unit
-  tests. The roadmap is visual scaffolding around a paste field.
-- **`BOT_URL` is hard-coded.** Changing the bot handle requires a code change, not a config push.
-  Acceptable — it's the same lifetime as the approved-domain list in `PromotedSubscription`.
+  visibility) lives in `BoykisserCallback` / `PromoGate` / `PromotedSubscription` and is covered
+  by their unit tests. The roadmap is visual scaffolding around a paste field.
+- **`BOT_URL` is hard-coded** (includes `?start=FromApp` for bot attribution). Changing the bot
+  handle or start parameter requires a code change, not a config push. Acceptable — it's the same
+  lifetime as the approved-domain list in `PromotedSubscription`.
 - **No "I already have a key" shortcut.** A user who already holds a key can paste it directly into
   the home-screen FAB → "Paste subscription URL" without ever opening the nag screen. The nag
   screen is for users who don't yet have one; adding a skip button would just be a worse path to
