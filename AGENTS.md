@@ -14,6 +14,8 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 
 ```
 .
+├── .github/
+│   └── workflows/build.yml     CI — AAR build + assembleDebug + unit tests + lintDebug (see Testing Strategy)
 ├── app/
 │   ├── build.gradle.kts            App module build config
 │   ├── proguard-rules.pro
@@ -23,7 +25,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   └── src/
 │       ├── main/
 │       │   ├── AndroidManifest.xml
-│       │   ├── assets/             Committed geoip/geosite .dat files
+│       │   ├── assets/             Tracked: WHERE_TO_GET_GEOFILES.md, boykisser-assetlinks.json. The geoip*/geosite* .dat files are gitignored — obtain locally (see the .md)
 │       │   ├── java/com/justme/xtls_core_proxy/
 │       │   │   ├── MainActivity.kt
 │       │   │   ├── ProfileActionsDialog.kt  Long-press island menu (BasicAlertDialog) → docs/features/profile-actions-menu.md
@@ -42,10 +44,10 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester
-│       │   │   ├── subs/           Subscription fetch/parse/refresh
+│       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme
-│       │   │   └── vpn/            XrayVpnService — VpnService + xray-core lifecycle; fail-closed startup → docs/features
+│       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features), StartCommandDecision, VpnNotifications
 │       │   └── res/
 │       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon)
 │       │       ├── values/         strings.xml (source of truth), colors, themes
@@ -67,6 +69,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── qs-tile-vpn-toggle.md
 │   │   └── sideloading-warning.md
+│   ├── play-policy-declarations.md Play Console policy declaration answers
 │   ├── qa/                         QA scenarios
 │   └── superpowers/                Working artifacts (plans/specs); specs not committed
 ├── gradle/
@@ -77,7 +80,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   ├── build-xray-aar.ps1          Windows PowerShell gomobile build
 │   └── generate-agent-bundles.sh
 ├── xray-go/
-│   ├── go.mod, go.sum
+│   ├── go.mod (tracked), go.sum (gitignored)
 │   └── xray_bridge.go              Go entry points: StartXray, StopXray, RegisterProtector (protect() dial controller)
 ├── build.gradle.kts                Root Gradle config
 ├── settings.gradle.kts
@@ -85,10 +88,17 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 ├── local.properties                SDK path (gitignored)
 ├── gradlew, gradlew.bat
 ├── AGENTS.md, CLAUDE.md, README.md
-├── InspectionRuns                  IDE linter results - ignore unless user specifically asked for review
+├── LICENSE                         GNU AGPL v3
+├── InspectionRuns                  IDE linter results (untracked, machine-local) - ignore unless user specifically asked for review
 ├── .gradle/, .kotlin/              Pre-generated Gradle / Kotlin caches (gitignored)
 └── .idea/                          IDE state (gitignored; do not edit)
 ```
+
+Known `docs/features/` gaps (no doc yet — verify these areas in code): promo gating
+(`subs/PromoGate`), general `subs/` subscription management, `add/` paste/clipboard routing,
+`settings/` hub + server editor, the `db/` Room layer, `geo/GeoAssetPreparer`, a dedicated
+split-tunnel doc (whole-app tunneling is covered by `failclosed-startup.md`), and
+`vpn/VpnNotifications`.
 
 ## Build & Development Commands
 1. Install Go mobile prerequisites (from repo `README.md`).
@@ -183,9 +193,10 @@ Why (optional):
 ```
 
 ## Release Builds & Minification
-- Release builds set `isMinifyEnabled = true` — R8 **shrinks and optimizes**. `-dontobfuscate` in
-  `app/proguard-rules.pro` keeps names, but **do not rely on it**: write keep rules as if obfuscation
-  were enabled, so they stay correct if it is ever removed.
+- Release builds set `isMinifyEnabled = true` **and** `isShrinkResources = true` — R8 **shrinks,
+  optimizes, and obfuscates**: the `-dontobfuscate` line in `app/proguard-rules.pro` is **commented
+  out** (deliberately, to hinder code injection), so release names ARE renamed. Write keep rules as
+  `-keep` (not merely no-obfuscate) — they must hold under obfuscation, because obfuscation is on.
 - **Keep-rule rule — if your change reaches code R8's static analysis cannot see, add a matching
   `-keep` in `app/proguard-rules.pro`.** That includes: reflection (`Class.forName`, `Method.invoke`,
   `getDeclaredMethod`), JNI / `native` methods, dynamic class loading, and anything across the gomobile
@@ -195,6 +206,11 @@ Why (optional):
 - Release signing reads `key.properties` (gitignored) into `signingConfigs("release")`. The keystore key
   must be **RSA or EC**; Android's APK Signature Scheme v2/v3 rejects **EdDSA/Ed25519**. The R8
   `mapping.txt` (`app/build/outputs/mapping/release/`) deobfuscates production stack traces.
+- `assembleRelease` emits per-ABI split APKs (arm64-v8a, armeabi-v7a) plus a universal fallback,
+  renamed to `boykisser-<abi>-<buildType>-<version>.apk`, and a `.sha256sum` file next to each
+  release APK (`sha256ReleaseApks` task). The AAB path (`bundleRelease`) splits per-ABI itself but
+  keeps every locale in the base APK (`language { enableSplit = false }` — required by the in-app
+  language picker).
 
 ## Architecture Notes
 ```mermaid
@@ -213,7 +229,7 @@ flowchart LR
     LOG --> UI
 ```
 
-The UI collects user input (VLESS URI or JSON), then `VpnViewModel` converts it into runtime JSON via
+The UI collects user input (a `vless://` or `hysteria2://`/`hy2://` share link, or raw Xray JSON), then `VpnViewModel` converts it into runtime JSON via
 `ConfigBuilder` and starts `XrayVpnService`. The service creates a TUN interface, passes its fd into
 `XrayBridge`, and starts/stops Xray-core through the Go mobile bridge. Connection state and sanitized
 logs flow through `LogRepository` back to the UI.
@@ -231,28 +247,41 @@ together — change them as a pair):
   [`docs/features/failclosed-startup.md`](docs/features/failclosed-startup.md).
 
 ## Dormant / Temporarily-Disabled Features
-These features are intentionally **switched off in the working tree**. Their code is **commented out
-at the call sites only** — every definition is kept in place as dead code. Do **not** "clean up" the
-resulting unused-symbol / unused-resource warnings by deleting the dead code, and do **not** re-enable
-them without maintainer approval. Restore by uncommenting.
+These feature **entry points** are intentionally switched off in the working tree. The disabling is
+**at the call sites only** (commented-out manifest filters / a `false` flag) — every definition is
+kept in place, some as dead code. Do **not** "clean up" the resulting unused-symbol /
+unused-resource warnings by deleting the dead code, and do **not** re-enable them without maintainer
+approval. Restore by uncommenting / flipping the flag.
 
-- **Promoted "Boykisser VPN" subscription — fully silenced.** The home banner (`MainActivity`,
-  `showPromo = false`), the Subscriptions "Recommended" row (`subs/SubscriptionsActivity`), the nag
-  screen (`subs/BoykisserInfoActivity`), and the inbound add path are all dormant. In
-  `AndroidManifest.xml` the two `subs/BoykisserLinkActivity` `<intent-filter>`s are commented out, so
-  the `bkvpn://add` **deep link** and the `https://boykiss3r.site/app/add` **App Link** no longer
-  resolve; the `MainActivity.maybeAddBoykisserSub(...)` calls are commented out too. `PromotedSubscription`,
-  `BoykisserCallback`, both Boykisser activities, and the `boykisser_*` strings remain intact. NOTE:
-  `BoykisserLinkActivity` is still declared `android:exported="true"` but now has no intent-filters, so
-  nothing can launch it implicitly. See `docs/features/boykisser-vpn.md` and `docs/features/boykisser-nag-screen.md`.
+- **Promoted "Boykisser VPN" subscription — deep links dormant; in-app promo LIVE but remote-gated.**
+  Only the manifest entry points are switched off: in `AndroidManifest.xml` the two
+  `subs/BoykisserLinkActivity` `<intent-filter>`s are commented out, so the `bkvpn://add` **deep
+  link** and the `https://boykiss3r.site/app/add` **App Link** no longer resolve
+  (`BoykisserLinkActivity` stays `android:exported="true"` but with no intent-filters nothing can
+  launch it implicitly). Everything else is active in code:
+  - The home banner (`MainActivity`) and the Subscriptions promo row (`subs/SubscriptionsActivity`)
+    both render when `PromoGate.resolve(...) == true && !PromotedSubscription.hasValidSubscription(...)`
+    — **not** a hard-coded `showPromo = false`.
+  - `subs/PromoGate` is a remote kill-switch (a deliberate behavioral clone of the name-theft gate —
+    the duplication is intentional, do not extract a shared helper): it probes `/dowepromote` on
+    `boykiss3r.site` then `somenewsteps.space` (HTTP 418 = show now, 409 = disarm, 451 = re-arm),
+    persists the disarm lease via `subs/PromoGateRepository` (`xray_prefs` / `promote_disarmed`),
+    and on an inconclusive probe falls back to a device-local date gate (shows on/after 2026-08-01).
+  - The nag screen (`subs/BoykisserInfoActivity`) is reachable from the banner and the promo row, and
+    the inbound add path is live: its paste-and-submit hands an approved URL to
+    `MainActivity.maybeAddBoykisserSub(...)`, which is called (not commented out) from `onCreate` and
+    `onNewIntent` and re-validates the approved-domain allowlist because the extra is forgeable.
+
+  `docs/features/boykisser-vpn.md` / `docs/features/boykisser-nag-screen.md` pre-date the PromoGate
+  re-enable — trust this section over them until they are refreshed.
 - **Sideload "Keep Android Open" launch popup — disabled.** Gated off behind
   `MainActivity.SIDELOAD_WARNING_LAUNCH_ENABLED = false`. The dialog, `SideloadWarningRepository`, the
   strings, and the on-demand Settings-hub entry all remain; flip the flag to restore the once-per-version
   launch prompt. See `docs/features/sideloading-warning.md`.
 
-Note: `boykiss3r.site` / `somenewsteps.space` are still **live** as the name-theft warning's status-probe
-hosts (`nametheft/NameTheftWarning.kt`) — that is a different, active path; only the promo *add* routes on
-those domains are dormant.
+Note: `boykiss3r.site` / `somenewsteps.space` are **live** for two active probe paths — the name-theft
+warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/dowepromote` probe
+(`subs/PromoGate.kt`). Only the promo *add* deep-link routes on those domains are dormant.
 
 ## Testing Strategy
 - Unit tests: JUnit4 tests under `app/src/test` (for example, `ConfigBuilderTest`) validate runtime
@@ -267,8 +296,12 @@ those domains are dormant.
 ./gradlew.bat :app:check
 ```
 
-- CI status: no repository CI workflow is present.
-> TODO: Add CI that runs `:app:lintDebug`, `:app:testDebugUnitTest`, and selected device tests.
+- CI: `.github/workflows/build.yml` runs on pushes to `main` and on pull requests. It builds
+  `xray.aar` from source (`scripts/build-xray-aar.bash` with `XRAY_CORE_REF: main`, NDK
+  28.2.13676358), then runs `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug`, and uploads
+  the AAR, debug APKs, and test/lint reports as artifacts. Device tests
+  (`connectedDebugAndroidTest`) are **not** in CI — run them locally.
+> TODO: Add selected device tests to CI.
 
 ## Security & Compliance
 - Never commit secrets or personal endpoints; treat pasted `vless://` links, UUIDs, and REALITY keys as
@@ -286,8 +319,8 @@ those domains are dormant.
   geo data assets, and `xray-go/go.sum`).
 - Dependency intake is dynamic in AAR scripts (`go get ...@main`, `go get ...@latest`).
 > TODO: Add automated dependency and vulnerability scanning policy for Gradle and Go modules.
-- License/compliance metadata is incomplete.
-> TODO: Add a project `LICENSE` and third-party notices for Xray-core and transitive dependencies.
+- The project ships a root `LICENSE` (GNU AGPL v3).
+> TODO: Add third-party notices for Xray-core and transitive dependencies.
 
 ## Agent Guardrails
 - Never edit or commit generated/local artifacts: `app/libs/*.aar`, geo data assets, `local.properties`,
@@ -320,9 +353,11 @@ those domains are dormant.
 - Runtime config extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
   (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
-  `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound) and the
+  `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound **and**
+  minus `geoip:`/`geosite:` routing rules, which fail to build in the probe's geo-asset-less
+  throwaway core instance) and the
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
-  `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
+  `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
   `config/ProfileShareLink.kt` (`fromStoredConfig` — reconstructs a shareable link from any stored JSON config by dispatching to the per-protocol codec; returns `null` for configs with no vless/hysteria outbound).
 - VPN lifecycle extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt`
@@ -344,9 +379,15 @@ those domains are dormant.
 | --- | --- | --- |
 | `OUTPUT` | `scripts/build-xray-aar.bash` | Override output AAR path (default `app/libs/xray.aar`). |
 | `ANDROID_API` | `scripts/build-xray-aar.bash` | Override gomobile Android API level (default `26`). |
+| `XRAY_CORE_REF` | both AAR scripts; CI sets `main` | Xray-core git ref for `go get` (default `main`). |
 | `xray.tun.fd` | `xray-go/xray_bridge.go` | Pass TUN file descriptor into Xray-core runtime. |
 | `XRAY_TUN_FD` | `xray-go/xray_bridge.go` | Alternate env key for TUN file descriptor. |
-| `GONOSUMDB` | build scripts | Bypass checksum DB for Xray-core module path quirk. |
+| `GONOSUMDB` | set internally by both AAR scripts | Bypass checksum DB for Xray-core module path quirk. |
+
+The PowerShell script takes **parameters, not env vars** (except the `XRAY_CORE_REF` fallback):
+`-Output`, `-AndroidApi`, `-XrayCoreRef` (empty → `XRAY_CORE_REF` env → `main`), plus ABI trims
+`-NoArmV7` / `-NoX86` / `-NoAMD64`. The bash script also accepts the same three values as
+positional arguments.
 
 > TODO: Add explicit feature flags if runtime behavior needs environment-based toggles.
 
