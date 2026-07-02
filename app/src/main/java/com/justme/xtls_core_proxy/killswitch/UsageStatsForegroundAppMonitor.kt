@@ -23,9 +23,11 @@ import kotlinx.coroutines.sync.withLock
  *
  * The screen-on/screen-off behavior described in the spec (suspending polling
  * while the device is off) is handled by the caller (XrayVpnService) wiring
- * a BroadcastReceiver to call stop()/start() at the appropriate moments —
- * this monitor itself is unaware of screen state, which keeps it
- * unit-testable without registering broadcast receivers.
+ * a BroadcastReceiver to call pausePolling()/resumePolling() at the
+ * appropriate moments — not stop()/start(): pause preserves the
+ * controlled-app state that stop() wipes. This monitor itself is unaware of
+ * screen state, which keeps it unit-testable without registering broadcast
+ * receivers.
  */
 class UsageStatsForegroundAppMonitor(
     private val source: UsageStatsEventSource,
