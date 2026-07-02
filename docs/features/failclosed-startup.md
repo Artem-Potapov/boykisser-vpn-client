@@ -61,7 +61,7 @@ mirroring the existing `TileClickDecision`):
 | `ACTION_START` + valid profile id | `StartProfile(id)` | `startVpn(id)` |
 | `ACTION_START` + sentinel id | `RefuseNoProfile` | error state + `stopSelf()` (pre-existing) |
 | `ACTION_STOP` | `Stop` | `stopVpn()` |
-| `ACTION_NOTIFICATION_DISMISSED` | `RepostNotification` | `if (running)` re-post ongoing notification `else stopSelf()` |
+| `ACTION_NOTIFICATION_DISMISSED` | `RepostNotification` | `if (running)` marshal `repostOngoingNotification()` onto `tunnelOpScope` (serializes behind in-flight kill/revive writers on the same notification id) `else stopSelf()`; when state is **PAUSED**, restores both the quiet FGS line and the separate exposed heads-up |
 | `null` / anything else | `StartActiveProfile` | resolve active profile, then start |
 
 `onStartCommand` returns **`START_REDELIVER_INTENT`**, so an OS kill / process crash re-delivers the
@@ -75,9 +75,9 @@ start doesn't fall through a catch-all `else` into a spurious auto-connect.
 |---|---|
 | [`xray-go/xray_bridge.go`](../../xray-go/xray_bridge.go) | `Protector` interface, `RegisterProtector` with `sync.Once` dial-controller install, error surfaced as a status string. |
 | [`bridge/XrayBridge.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt) | `registerProtector(vpnService): Result<Unit>` (reflection + dynamic `Proxy`); throws on non-blank status, logs `protect(fd)==false`. |
-| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | Register protector before `startXray` in the shared connect/revive path; use `SplitTunnelPlanner`; `onStartCommand` via `StartCommandDecision` returning `START_REDELIVER_INTENT`; `resolveActiveAndStart()` promotes to foreground **synchronously** before the async active-profile resolution. |
-| [`split/SplitTunnelPlanner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/split/SplitTunnelPlanner.kt) (new) | Pure `plan(mode, userPackages: Set<String>, selfPackage): SplitTunnelPlan`. |
-| [`vpn/StartCommandDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/StartCommandDecision.kt) (new) | Pure sealed decision + `decide(action: String?, profileId: Long)`. |
+| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | Register protector before `startXray` in the shared connect/revive path; use `SplitTunnelPlanner`; `onStartCommand` via `StartCommandDecision` returning `START_REDELIVER_INTENT`; `resolveActiveAndStart()` promotes to foreground **synchronously** before the async active-profile resolution; `buildNotification` sets `FOREGROUND_SERVICE_IMMEDIATE` (Android 12+ otherwise defers the FGS notification up to ~10 s — `specialUse` is not deferral-exempt). |
+| [`split/SplitTunnelPlanner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/split/SplitTunnelPlanner.kt) | Pure `plan(mode, userPackages: Set<String>, selfPackage): SplitTunnelPlan`. |
+| [`vpn/StartCommandDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/StartCommandDecision.kt) | Pure sealed decision + `decide(action: String?, profileId: Long)`. |
 
 **No R8 change** — the reverse-binding interface is covered by the existing `-keep class xraybridge.**`
 and the runtime `Proxy` needs no keep. **No new persisted state, no manifest change, no
@@ -110,7 +110,8 @@ intent-filter, which is all the always-on / boot mechanism needs.
 - **Kill-on-foreground × restart.** If the OS kills the service while it is *paused* by
   [kill-on-foreground](kill-on-foreground.md), redelivery reconnects the tun and the monitor re-pauses
   if the controlled app is still foreground — it self-heals via the normal `startVpn → bringUpTunnel`
-  success path.
+  success path. The in-process `reviveTunnel()` path uses the same `bringUpTunnel()` helper, so it
+  also re-registers the protector (not only a cold `startVpn` restart).
 
 ## Known limitations
 
@@ -131,8 +132,10 @@ intent-filter, which is all the always-on / boot mechanism needs.
   — pure JVM: block mode doesn't disallow self; allow mode always includes self (no duplicate); lists
   otherwise the user's selection.
 - **[`StartCommandDecisionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/vpn/StartCommandDecisionTest.kt)**
-  — pure JVM covering **every** case, incl. the `ACTION_NOTIFICATION_DISMISSED → RepostNotification`
-  branch that guards the dismissal-misrouting defect.
+  — pure JVM covering **each decision outcome** (one test per sealed branch), incl. the
+  `ACTION_NOTIFICATION_DISMISSED → RepostNotification` branch that guards the dismissal-misrouting
+  defect. The `else → StartActiveProfile` path is exercised for `null` action only; unknown action
+  strings share that branch but are not separately asserted.
 - **`protect()` mechanism** — no pure unit test is feasible (Go + gomobile + JNI; the `.aar` isn't
   unit-testable from Kotlin). **Justified TDD exception.** Verified by building the `.aar` + app, a
   `javap` inspection of the generated `Protector` interface, and the on-device proof below.

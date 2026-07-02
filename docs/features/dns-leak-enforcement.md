@@ -126,15 +126,16 @@ entry (nothing to resolve), so their behaviour is unchanged.
 
 | Source | Behavior |
 |---|---|
-| Generated `vless://` | Secure **by construction** — `buildXrayJson` delegates its final shape to `makeSecureDns`. |
-| Pasted / manual / clipboard | `addProfile` gates on `dnsDiagnosis`: **DIRTY** → warn-and-fix dialog (*Fix it* = `makeSecureDns` + insert `sanitizedDns=true`; *Don't add* = nothing inserted, toast); ABSENT/SECURE → `makeSecureDns` silently, insert `sanitizedDns=false`. All three `addProfile` call sites flow through this one gate. |
+| Generated `vless://` / `hysteria2://` | Secure **by construction** — VLESS `buildXrayJson` and Hysteria2 `Hysteria2ConfigCodec.toXrayJson` each end with `makeSecureDns`. |
+| Pasted / manual / clipboard | `addProfile` gates on `dnsDiagnosis`: **DIRTY** → warn-and-fix dialog (*Fix it* = `makeSecureDns` + insert `sanitizedDns=true`; *Don't add* = nothing inserted, decline toast); ABSENT/SECURE → `makeSecureDns` silently, insert `sanitizedDns=false`. All four `addProfile` call sites in `MainActivity` flow through this gate: `ServerSettingsActivity` result (manual add) and clipboard VLESS / Hysteria2 / JSON. |
 | Subscription | No user present → dirty entries are **auto-fixed** at parse and the resulting profile carries `sanitizedDns=true` (a "DNS fixed" badge), so a malicious subscription is visible. |
 | Connect (runtime) | `buildRuntimeConfig → fromJson` always normalizes (sanitize inbounds → `makeSecureDns` → assert), so **pre-2B stored profiles and any directly-inserted config are auto-secured on connect** — no data migration of stored configs needed. Belt-and-suspenders: `toProfileStorageConfig` already canonicalizes imported-JSON inbounds to tun at storage, so this is a backstop, not the only line of defense. |
 
 ## The `DnsStatus` classifier and its deliberate asymmetry
 
-`dnsDiagnosis` returns `DIRTY` **only** when a port-53 rule targets a `direct`/`freedom` outbound (the
-"actively leaking" signal). It does **not** flag a plaintext-but-merely-present `dns` block as DIRTY.
+`dnsDiagnosis` returns `DIRTY` **only** when a port-53 rule targets an outbound whose **protocol** is
+`freedom` (the "actively leaking" signal — often tagged `direct`, but detection is protocol-based, not
+tag-based). It does **not** flag a plaintext-but-merely-present `dns` block as DIRTY.
 This is intentional and documented in the code KDoc: `makeSecureDns` neutralizes *all* port-53 routing
 regardless, so the runtime is always safe; widening the classifier would only expand the user-facing
 nag/badge without improving safety. **Do not widen `dnsDiagnosis` to mirror `makeSecureDns`.**
@@ -143,13 +144,14 @@ nag/badge without improving safety. **Do not widen `dnsDiagnosis` to mirror `mak
 
 | File | Change |
 |---|---|
-| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | The heart: `enum DnsStatus`, `dnsDiagnosis`, `makeSecureDns`, `replaceJsonInboundsWithTun`, `const CLOUDFLARE_DOH` + `CLOUDFLARE_DOH_SECONDARY` + `CLOUDFLARE_DOH_LOCAL(_SECONDARY)` (the `https+local` bootstrap), helpers `firstProxyOutbound`/`proxyServerAddress`/`localBootstrapServer`/`isIpLiteral`; `buildXrayJson` ends with `makeSecureDns`; `fromJson` does sanitize-inbounds → normalize → assert. Top-level `DirtyDnsException`. |
+| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | The heart: `enum DnsStatus`, `dnsDiagnosis`, `makeSecureDns`, `replaceJsonInboundsWithTun`, `const CLOUDFLARE_DOH` + `CLOUDFLARE_DOH_SECONDARY` + `CLOUDFLARE_DOH_LOCAL(_SECONDARY)` (the `https+local` bootstrap), helpers `firstProxyOutbound` (skips outbounds whose protocol is `freedom`, `blackhole`, or `dns` — not tag-based)/`proxyServerAddress`/`localBootstrapServer`/`isIpLiteral`; VLESS `buildXrayJson` ends with `makeSecureDns`; `fromJson` does sanitize-inbounds → normalize → assert. Top-level `DirtyDnsException`. |
+| [`config/Hysteria2ConfigCodec.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/Hysteria2ConfigCodec.kt) | `toXrayJson` builds the Hysteria2 runtime shape and ends with `ConfigBuilder.makeSecureDns` (same canonical DNS posture as VLESS). |
 | [`db/Profile.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/Profile.kt) | `sanitizedDns: Boolean = false`. |
 | [`db/AppDatabase.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/AppDatabase.kt) | Version **2 → 3** + additive `MIGRATION_2_3` (`ALTER TABLE profiles ADD COLUMN sanitizedDns INTEGER NOT NULL DEFAULT 0`). |
 | [`subs/SubscriptionBodyParser.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParser.kt) | `ParsedConfig.sanitizedDns`; per-entry diagnose → normalize → flag. **Whole-JSON body support** (see below). |
 | [`subs/SubscriptionRefreshCoordinator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/subs/SubscriptionRefreshCoordinator.kt) | Propagates `sanitizedDns` into the built `Profile`. |
 | [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `dnsWarning: StateFlow<DnsWarning?>`, `confirmDnsFixAndAdd()`, `dismissDnsWarning()`; `addProfile` gates on DIRTY. |
-| [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) | Observes `dnsWarning` → AlertDialog; "DNS fixed" badge in `ProfileRow`. |
+| [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) | Observes `dnsWarning` → AlertDialog; "DNS fixed" badge in `ProfileRow`. Decline toast fires only on the *Don't add* button — back/outside dismiss calls `dismissDnsWarning()` without a toast. |
 | `res/values/strings.xml`, `res/values-ru/strings.xml` | Dialog + badge copy (en + ru; ru mandatory or lint-vital fails). |
 
 ### Bundled concern: inbound sanitization
@@ -182,7 +184,7 @@ confusing, non-canonical stored config; canonicalizing at storage keeps the two 
   port-53→freedom rule, that throw is **unreachable** in normal operation — it is a pure **regression
   tripwire** that fires only if `makeSecureDns` itself regresses. It does not break a user's connection
   over an upstream config quirk; it fixes the config and runs it.
-- **Pasted decline is fail-safe** — nothing inserted, no half-state.
+- **Pasted decline is fail-safe** — nothing inserted, no half-state. The decline toast is shown only when the user taps *Don't add*; dismissing the dialog via back or outside tap clears the warning silently.
 - **Migration is additive** (`sanitizedDns` defaults to `0`), so an upgrade cannot fail on existing
   data; existing profiles read back `sanitizedDns=false`.
 

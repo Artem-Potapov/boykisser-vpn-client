@@ -21,8 +21,10 @@ safety counterparts are [DNS-Leak Enforcement](dns-leak-enforcement.md) (2B) and
 - `hy2://` links (alias).
 - Plain and base64-wrapped subscription lists containing Hysteria2 links (mixed with VLESS links and
   JSON configs is fine).
-- Full Xray JSON configs containing a `protocol: "hysteria"` outbound with version `2`. The outbound
-  does **not** have to be first — the codec scans the `outbounds` array for the first matching one.
+- Full Xray JSON configs whose first matching Hysteria2 outbound has `protocol: "hysteria"`,
+  `settings.version: 2`, `streamSettings.hysteriaSettings.version: 2`, and a non-blank
+  `streamSettings.hysteriaSettings.auth`. The outbound does **not** have to be first — the codec
+  scans the `outbounds` array for the first entry that satisfies all of those checks.
 
 Unsupported in this release (explicit non-goals):
 
@@ -43,8 +45,8 @@ is needed.
 | Method | Direction | Notes |
 |---|---|---|
 | `parseUri(uri)` | `hy2://` / `hysteria2://` → `Hysteria2Profile` | Manual parse — `java.net.URI` not used (multi-port authority and raw-JSON `fm` value both break it). |
-| `toXrayJson(profile)` | `Hysteria2Profile` → Xray JSON string | Builds full config; `makeSecureDns` applied by caller (`ConfigBuilder`). |
-| `parseProfileFromJson(json)` | Xray JSON string → `Hysteria2Profile` | Scans all outbounds for the first `protocol:"hysteria"` + `version:2` entry. |
+| `toXrayJson(profile)` | `Hysteria2Profile` → Xray JSON string | Builds full config; calls `ConfigBuilder.makeSecureDns` internally before returning. |
+| `parseProfileFromJson(json)` | Xray JSON string → `Hysteria2Profile` | Scans all outbounds for the first Hysteria2 match (`protocol:"hysteria"`, both version fields `2`, non-blank auth). |
 | `mergeProfileIntoJson(json, profile)` | Xray JSON string + `Hysteria2Profile` → Xray JSON string | Patches in place; preserves unknown `streamSettings` keys (e.g. `sockopt` from `makeSecureDns`). |
 | `toShareLink(profile)` | `Hysteria2Profile` → `hy2://` link | Inverse of `parseUri` over URI-expressible fields (see below). |
 | `validatePortHopPorts(value)` | `String` → `Unit` (throws on invalid) | Validates comma / range port expressions. |
@@ -62,10 +64,11 @@ is needed.
 | `insecure=1` (omitted when false) | `udpHopInterval` |
 | `pinSHA256` (omitted when blank) | |
 | `obfs=salamander` + `obfs-password` (when salamander set) | |
-| `fm=<verbatim finalmask JSON>` (when finalmask non-null) | |
+| `fm=<URL-encoded finalmask JSON>` (when finalmask non-null) | |
 
-The `fm` query parameter carries the **whole** `streamSettings.finalmask` object verbatim, so QUIC
-params embedded in a provider-supplied finalmask survive round-tripping even though the individual
+The `fm` query parameter carries the **whole** `streamSettings.finalmask` object (URL-encoded on
+emit via `URLEncoder`, percent-decoded on import). QUIC params embedded in a provider-supplied
+finalmask survive round-tripping even though the individual
 `quicParams.*` structured fields have no URI keys. Fields with no URI form are silently omitted —
 **"Copy config (JSON)" is the lossless path**. This is intentional, not a bug to fix.
 
@@ -76,7 +79,9 @@ single port otherwise — both round-trip through `parseUri` correctly.
 `toShareLink` is called by
 [`ProfileShareLink.fromStoredConfig`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ProfileShareLink.kt)
 to reconstruct a shareable link from a stored JSON config (see
-[`docs/features/profile-actions-menu.md`](profile-actions-menu.md)).
+[`docs/features/profile-actions-menu.md`](profile-actions-menu.md)). That helper scans `outbounds`
+in order and stops at the **first** `vless` or `hysteria` entry — if both are present, **VLESS
+wins**.
 
 ```
 share link / JSON ─► detect kind ─► VLESS codec ┐
@@ -165,11 +170,17 @@ hatch. Structured fields map into `streamSettings.finalmask`:
 }
 ```
 
-The raw FinalMask JSON field represents the **whole** `streamSettings.finalmask` object. On extract,
-known keys populate the structured controls and the full object is kept in the raw field. On save, the
-build **starts from the raw object and merges** the structured fields over it, so unknown / newly-added
-FinalMask keys (e.g. `maxIdleTimeout`) are preserved, not discarded. This raw-passthrough is a
-deliberate hedge against upstream Xray FinalMask churn.
+The raw FinalMask JSON field represents the **whole** `streamSettings.finalmask` object. On extract
+from stored JSON (`parseProfileFromJson`), known keys populate the structured controls and the full
+object is kept in the raw field. On save, the build **starts from the raw object and merges** the
+structured fields over it, so unknown / newly-added FinalMask keys (e.g. `maxIdleTimeout`) are
+preserved, not discarded. This raw-passthrough is a deliberate hedge against upstream Xray FinalMask
+churn.
+
+**URI-open caveat:** when the simple editor is seeded from a `hy2://` / `hysteria2://` link,
+`parseUri` stores an `fm` blob only in the raw FinalMask field — it does **not** hydrate the
+structured QUIC controls (congestion, bandwidth, UDP-hop interval) from `fm` alone. Those controls
+populate after a JSON round-trip (open/save as stored JSON, or Advanced → Simple re-parse).
 
 ## Protocol-aware settings editor
 
@@ -178,9 +189,10 @@ simple editor (VLESS or Hysteria2), falling back to **Advanced JSON only** for u
 configs. Advanced JSON stays available for every profile.
 
 `detectEditableServerProtocol` **delegates to the same codec parse calls the editor uses to populate its
-fields** — `ProfileConfigCodec.extractVlessProfile`, then `Hysteria2ConfigCodec.parseUri` /
+fields** — `ProfileConfigCodec.extractVlessProfile` first, then `Hysteria2ConfigCodec.parseUri` /
 `parseProfileFromJson` — establishing the invariant: **a protocol is offered iff its form can actually
-be built.** It does *not* hand-inspect `outbounds[0]`. This matters because:
+be built.** It does *not* hand-inspect `outbounds[0]`. **VLESS is tried before Hysteria2** — a config
+with both proxy types resolves to the VLESS simple editor. This matters because:
 
 - VLESS / Hysteria2 JSON whose proxy outbound is **not first** (e.g. `direct`/`block` listed before it)
   is still editable, because the codecs scan all outbounds.
@@ -195,6 +207,12 @@ simple form.
 Hysteria2 simple editor fields: host, UDP port, auth/password, SNI, ALPN, allow-insecure, pinned cert
 SHA-256, Salamander password, congestion, upload bandwidth, download bandwidth, UDP hop ports, UDP hop
 interval, and the raw FinalMask JSON escape hatch.
+
+**Save dispatch:** Simple → stored JSON uses `Hysteria2ConfigCodec.mergeProfileIntoJson` when the
+profile was opened as stored JSON (patches the existing outbound in place, preserving `sockopt` and
+other unknown keys). A blank profile or one still opened from a `hy2://` / `hysteria2://` link uses
+`ConfigBuilder.templateJsonFromHysteria2Profile` (fresh template via `toXrayJson`, including
+`makeSecureDns`).
 
 ## DNS and `protect()`
 
@@ -222,7 +240,7 @@ JVM unit tests (all pure, run under `:app:testDebugUnitTest`):
 | [`settings/EditableServerProtocolTest`](../../app/src/test/java/com/justme/xtls_core_proxy/settings/EditableServerProtocolTest.kt) | `detectEditableServerProtocol`: proxy-not-first VLESS/Hysteria2 JSON, malformed/non-v2 Hysteria2 → `ADVANCED_ONLY`, URI + blank + unknown-protocol guards. |
 | [`ConfigBuilderTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderTest.kt) / [`ConfigBuilderDnsTest`](../../app/src/test/java/com/justme/xtls_core_proxy/ConfigBuilderDnsTest.kt) | `toProfileStorageConfig`/`buildRuntimeConfig` accept Hysteria2 links; tun inbound + secure DNS + `ForceIP` applied to the Hysteria2 outbound. |
 | [`add/ClipboardAddRouterTest`](../../app/src/test/java/com/justme/xtls_core_proxy/add/ClipboardAddRouterTest.kt) | Clipboard classifies valid Hysteria2 links as `ClipboardKind.Hysteria2`; missing-auth / bad-obfs → `Invalid`. |
-| [`subs/SubscriptionBodyParserTest`](../../app/src/test/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParserTest.kt) | Plain and base64 Hysteria2 link lists; display name from fragment, host/port, and JSON `settings.address:port`. |
+| [`subs/SubscriptionBodyParserTest`](../../app/src/test/java/com/justme/xtls_core_proxy/subs/SubscriptionBodyParserTest.kt) | Plain and base64 Hysteria2 link lists; display name from fragment, host/port, and JSON `outbounds[0]` only (`remarks`, tag, tls SNI, or address:port — does not scan all outbounds). |
 
 Manual device QA (release build, real Hysteria2 server):
 
