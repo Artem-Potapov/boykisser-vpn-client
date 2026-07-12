@@ -55,6 +55,35 @@ class ProfileConfigCodecTest {
     }
 
     @Test
+    fun toVlessUri_bareIpv6HostFromJson_bracketsAuthority() {
+        // Xray's native JSON form stores IPv6 addresses bare (no brackets); the rebuilt link
+        // must bracket them or the URI authority is ambiguous and unparseable.
+        val json = ConfigBuilder.fromVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@[2001:db8::1]:443?security=none"
+        ).replace("[2001:db8::1]", "2001:db8::1")
+        val profile = ProfileConfigCodec.parseVlessProfileFromJson(json)
+        assertEquals("2001:db8::1", profile.host)
+
+        val rebuilt = ProfileConfigCodec.toVlessUri(profile)
+        assertTrue(rebuilt, rebuilt.contains("@[2001:db8::1]:443"))
+
+        val reparsed = ProfileConfigCodec.parseVlessUri(rebuilt)
+        assertEquals(443, reparsed.port)
+    }
+
+    @Test
+    fun toVlessUri_bracketedIpv6Host_doesNotDoubleBracket() {
+        // java.net.URI keeps the brackets in .host, so a profile parsed from a link carries
+        // "[2001:db8::1]" — rebuilding must not wrap it again.
+        val parsed = ProfileConfigCodec.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@[2001:db8::1]:443?security=none"
+        )
+        val rebuilt = ProfileConfigCodec.toVlessUri(parsed)
+        assertTrue(rebuilt, rebuilt.contains("@[2001:db8::1]:443"))
+        assertFalse(rebuilt, rebuilt.contains("[["))
+    }
+
+    @Test
     fun vlessUri_roundTrip_preservesTransportAndAlpn() {
         val original = "vless://11111111-1111-1111-1111-111111111111@demo.example:443" +
             "?type=ws&security=tls&sni=cdn.example.com&path=%2Fws&host=cdn.example.com&alpn=h2%2Chttp%2F1.1&allowInsecure=1"

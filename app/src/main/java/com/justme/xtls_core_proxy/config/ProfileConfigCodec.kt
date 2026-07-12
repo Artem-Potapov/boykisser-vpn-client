@@ -243,11 +243,21 @@ object ProfileConfigCodec {
             "${encode(key)}=${encode(value)}"
         }
 
+        // IPv6 literals must be bracketed in the URI authority. host arrives bare when parsed
+        // from JSON (Xray's native form) but already bracketed when parsed from a vless:// link
+        // (java.net.URI keeps the brackets), so bracket only when missing — same idiom as
+        // Hysteria2ConfigCodec.toShareLink.
+        val hostAuthority = if (profile.host.contains(":") && !profile.host.startsWith("[")) {
+            "[${profile.host}]"
+        } else {
+            profile.host
+        }
+
         return buildString {
             append("vless://")
             append(profile.uuid)
             append("@")
-            append(profile.host)
+            append(hostAuthority)
             append(":")
             append(profile.port)
             if (query.isNotEmpty()) {
