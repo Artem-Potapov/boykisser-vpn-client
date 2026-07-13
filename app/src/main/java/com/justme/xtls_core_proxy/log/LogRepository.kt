@@ -21,7 +21,16 @@ enum class VpnConnectionState {
 }
 
 object LogRepository {
-    private const val MAX_LINES = 500
+    @Volatile
+    var maxLines: Int = 5000
+        private set
+
+    /** Update the cap and immediately trim the current buffer. Live (pure UI concern). */
+    fun setMaxLines(n: Int) {
+        val capped = n.coerceIn(100, 50_000)
+        maxLines = capped
+        _logs.update { it.takeLast(capped) }
+    }
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
@@ -65,7 +74,7 @@ object LogRepository {
         val timestamp = timeFormatter.format(Date())
         val sanitized = sanitize(line)
         _logs.update { prev ->
-            (prev + "[$timestamp] $sanitized").takeLast(MAX_LINES)
+            (prev + "[$timestamp] $sanitized").takeLast(maxLines)
         }
     }
 
