@@ -69,6 +69,11 @@
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
         <activity
+            android:name=".log.LogsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.XTLS_CORE_PROXY" />
+
+        <activity
             android:name=".i18n.LanguageSettingsActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />

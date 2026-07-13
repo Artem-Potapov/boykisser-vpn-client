@@ -313,4 +313,23 @@
     <string name="name_theft_body">12 июня 2026 года канал «ЧВК Фембойчик» (t.me/femboiVPN) выпустил продукт под названием «Boykisser VPN». Но мы выпустили Boykisser VPN ещё в ФЕВРАЛЕ 2026 — убедитесь сами: t.me/boykisservpn_news.\n\nЕсли вы видите это сообщение, значит владелец того поддельного VPN присвоил это приложение и выдаёт его за своё.\n\nЭто приложение сделано владельцем t.me/boykisservpn_news. Настоящий Boykisser VPN — здесь: t.me/boykisser_vpn_bot.</string>
     <string name="name_theft_dismiss">Закрыть</string>
     <string name="name_theft_dismiss_countdown">Закрыть (%1$d)</string>
+
+    <!-- Logs screen -->
+    <string name="logs_title">Логи</string>
+    <string name="logs_action_copy">Копировать всё</string>
+    <string name="logs_action_clear">Очистить</string>
+    <string name="logs_action_share">Поделиться текстом</string>
+    <string name="logs_action_export">Экспортировать в файл</string>
+    <string name="logs_action_more">Ещё</string>
+    <string name="logs_level_title">Уровень логов Xray</string>
+    <string name="logs_level_caption">Применяется со следующего подключения</string>
+    <string name="logs_buffer_title">Размер буфера логов</string>
+    <string name="logs_buffer_lines">%1$d строк</string>
+    <string name="logs_jump_latest">К последней строке</string>
+    <string name="logs_copied_toast">Логи скопированы</string>
+    <string name="logs_level_debug">Отладка</string>
+    <string name="logs_level_info">Инфо</string>
+    <string name="logs_level_warning">Предупреждения</string>
+    <string name="logs_level_error">Ошибки</string>
+    <string name="logs_dialog_cancel">Отмена</string>
 </resources>
