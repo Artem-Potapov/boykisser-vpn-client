@@ -19,6 +19,8 @@ import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.LogSettings
+import com.justme.xtls_core_proxy.config.XrayLogLevel
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
 import androidx.annotation.StringRes
@@ -28,6 +30,7 @@ import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
 import com.justme.xtls_core_proxy.killswitch.ForegroundAppMonitor
 import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
 import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
+import com.justme.xtls_core_proxy.log.LogPreferences
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
@@ -42,6 +45,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.io.File
 
 @SuppressLint("VpnServicePolicy")
 class XrayVpnService : VpnService() {
@@ -65,6 +69,11 @@ class XrayVpnService : VpnService() {
     private var running = false
 
     @Volatile private var currentProfileId: Long = -1L
+
+    // Captured ONCE per connection in startVpn(); reused by bringUpTunnel() on the initial
+    // connect AND every kill-switch revive, so a mid-session log-level change can't leak in.
+    @Volatile private var sessionLog: LogSettings = LogSettings(XrayLogLevel.WARNING, null)
+    @Volatile private var sessionLogFile: File? = null
 
     // Last controlled-app label that triggered the exposed state; used to rebuild the
     // exposed notification if the user swipes it away while paused.
@@ -197,6 +206,12 @@ class XrayVpnService : VpnService() {
 
                 currentProfileId = profileId
 
+                // Capture the log level for the whole session (survives kill-switch revives).
+                val logFile = File(filesDir, "logs/xray-core.log").apply { parentFile?.mkdirs() }
+                runCatching { logFile.writeText("") }   // truncate once per session
+                sessionLogFile = logFile
+                sessionLog = LogSettings(LogPreferences.getLogLevel(this@XrayVpnService), logFile.absolutePath)
+
                 bringUpTunnel(profile)
                     .onSuccess {
                         LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
@@ -227,7 +242,7 @@ class XrayVpnService : VpnService() {
 
     private fun bringUpTunnel(profile: Profile): Result<Unit> {
         return runCatching {
-            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config)
+            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, sessionLog)
 
             val geoAssetDir = GeoAssetPreparer.prepare(this)
                 .getOrElse { error ->
