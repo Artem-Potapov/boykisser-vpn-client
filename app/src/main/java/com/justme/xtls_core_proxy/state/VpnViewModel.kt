@@ -78,7 +78,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _pingStates = MutableStateFlow<Map<Long, PingState>>(emptyMap())
     val pingStates: StateFlow<Map<Long, PingState>> = _pingStates.asStateFlow()
 
-    val logs = LogRepository.logs
     val connectionState = LogRepository.connectionState
 
     private val defaultUserAgent = "XTLSCoreProxy/${BuildConfig.VERSION_NAME}"

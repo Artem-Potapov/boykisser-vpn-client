@@ -84,7 +84,6 @@
     <string name="main_button_disconnect">Отключить</string>
     <string name="main_empty_profiles">Профилей пока нет.\nНажмите +, чтобы добавить сервер, или значок облака, чтобы добавить подписку.</string>
     <string name="main_section_my_profiles">Мои профили</string>
-    <string name="main_logs_title">Журнал</string>
     <string name="main_cd_collapse">Свернуть</string>
     <string name="main_cd_expand">Развернуть</string>
     <string name="main_cd_refresh_subscription">Обновить подписку</string>

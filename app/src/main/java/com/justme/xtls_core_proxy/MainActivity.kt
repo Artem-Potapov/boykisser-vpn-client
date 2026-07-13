@@ -72,7 +72,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -450,7 +449,6 @@ private fun MainScreen(
     val view by viewModel.groupedProfiles.collectAsState()
     val activeId by viewModel.activeProfileId.collectAsState()
     val state by viewModel.connectionState.collectAsState()
-    val logs by viewModel.logs.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
     val pingStates by viewModel.pingStates.collectAsState()
@@ -621,30 +619,6 @@ private fun MainScreen(
                                 )
                             }
                         }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.main_logs_title),
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp),
-                tonalElevation = 1.dp
-            ) {
-                LazyColumn(modifier = Modifier.padding(8.dp)) {
-                    items(logs) { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace
-                        )
                     }
                 }
             }

@@ -83,7 +83,6 @@
     <string name="main_button_disconnect">Disconnect</string>
     <string name="main_empty_profiles">No profiles yet.\nTap + to add a server, or use the cloud icon to add a subscription.</string>
     <string name="main_section_my_profiles">My profiles</string>
-    <string name="main_logs_title">Logs</string>
     <string name="main_cd_collapse">Collapse</string>
     <string name="main_cd_expand">Expand</string>
     <string name="main_cd_refresh_subscription">Refresh subscription</string>
