@@ -332,4 +332,9 @@
     <string name="logs_level_warning">Warning</string>
     <string name="logs_level_error">Error</string>
     <string name="logs_dialog_cancel">Cancel</string>
+    <string name="about_title">About</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_purpose">A free VPN client to keep the Internet open.</string>
+    <string name="about_github">Source code (GitHub)</string>
+	<string name="about_license">Licensed under GNU AGPLv3. Uses Xray-core (MPL-2.0).</string>
 </resources>

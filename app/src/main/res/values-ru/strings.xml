@@ -332,4 +332,9 @@
     <string name="logs_level_warning">Предупреждения</string>
     <string name="logs_level_error">Ошибки</string>
     <string name="logs_dialog_cancel">Отмена</string>
+    <string name="about_title">О программе</string>
+    <string name="about_version">Версия %1$s</string>
+    <string name="about_purpose">Бесплатный VPN-клиент для свободного доступа в Интернет.</string>
+    <string name="about_github">Исходный код (GitHub)</string>
+	<string name="about_license">Лицензия GNU AGPLv3. Использует Xray-core (MPL-2.0).</string>
 </resources>
