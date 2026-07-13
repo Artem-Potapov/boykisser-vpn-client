@@ -33,20 +33,20 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── add/            Paste/clipboard/subscription routing into Add UI
 │       │   │   ├── apps/           Installed-app picker (kill-switch / split-tunnel)
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
-│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization → docs/features), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
+│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization + forced log posture → docs/features), LogSettings (XrayLogLevel + errorFilePath), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
-│       │   │   ├── log/            LogRepository — sanitized state/log surface
+│       │   │   ├── log/            LogRepository (sanitized state/log surface), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
-│       │   │   ├── settings/       Per-server + settings hub screens
+│       │   │   ├── settings/       Per-server + settings hub screens (SettingsHubActivity, AboutActivity → docs/features)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
-│       │   │   ├── ui/             Reusable Compose components + theme
+│       │   │   ├── ui/             Reusable Compose components + theme; SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
 │       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features), StartCommandDecision, VpnNotifications
 │       │   └── res/
 │       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon)
@@ -64,10 +64,12 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── hysteria2-support.md      Hysteria2 share links, codec, toShareLink, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
+│   │   ├── logs-screen.md           File+tail log pipeline, session-stable level, redaction boundary
 │   │   ├── name-theft-warning.md
 │   │   ├── ping-test.md             Per-server / per-group handshake-latency probe → docs/features/
 │   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── qs-tile-vpn-toggle.md
+│   │   ├── settings-hub.md          Sectioned hub, SettingsSectionHeader/SettingsRow, BuildConfig.DEBUG placeholders
 │   │   └── sideloading-warning.md
 │   ├── play-policy-declarations.md Play Console policy declaration answers
 │   ├── qa/                         QA scenarios
@@ -96,9 +98,9 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 
 Known `docs/features/` gaps (no doc yet — verify these areas in code): promo gating
 (`subs/PromoGate`), general `subs/` subscription management, `add/` paste/clipboard routing,
-`settings/` hub + server editor, the `db/` Room layer, `geo/GeoAssetPreparer`, a dedicated
-split-tunnel doc (whole-app tunneling is covered by `failclosed-startup.md`), and
-`vpn/VpnNotifications`.
+the per-server editor (`settings/` hub is now covered by `settings-hub.md`), the `db/` Room layer,
+`geo/GeoAssetPreparer`, a dedicated split-tunnel doc (whole-app tunneling is covered by
+`failclosed-startup.md`), and `vpn/VpnNotifications`.
 
 ## Build & Development Commands
 1. Install Go mobile prerequisites (from repo `README.md`).
@@ -235,7 +237,7 @@ The UI collects user input (a `vless://` or `hysteria2://`/`hy2://` share link, 
 logs flow through `LogRepository` back to the UI.
 
 Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
-together — change them as a pair):
+together — change them as a pair), plus a third normalization on the same chokepoint:
 
 - **`ConfigBuilder` normalizes *every* config to a secure-DNS shape before it runs** — DoH-only
   resolver, all port-53 routed into Xray's DNS module, and the proxy server's own hostname forced
@@ -245,6 +247,10 @@ together — change them as a pair):
   of the tun via `VpnService.protect()`, while the *whole app* is tunneled. `onStartCommand` is a
   total `StartCommandDecision` and returns `START_REDELIVER_INTENT` for crash/always-on recovery. See
   [`docs/features/failclosed-startup.md`](docs/features/failclosed-startup.md).
+- **`ConfigBuilder.buildRuntimeConfig` also forces the `log` object** on every config (level +
+  app-private error-file path via `LogSettings`), overwriting rather than merging so a pasted config
+  can't redirect Xray's own log writes elsewhere. See
+  [`docs/features/logs-screen.md`](docs/features/logs-screen.md).
 
 ## Dormant / Temporarily-Disabled Features
 These feature **entry points** are intentionally switched off in the working tree. The disabling is
@@ -315,6 +321,10 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Loop-avoidance is socket-level via `VpnService.protect()` (a global Xray dial controller in the Go
   bridge), not app-exclusion, so the whole app is tunneled and only Xray's own sockets bypass — no
   app traffic leaks around the tun. See `docs/features/failclosed-startup.md`.
+- Xray-core writes a **raw, unredacted** error log to the app-private `filesDir/logs/xray-core.log`
+  during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory
+  `LogRepository` buffer — never that file. Do not add a code path that reads or shares the file
+  directly. See `docs/features/logs-screen.md`.
 - `.gitignore` already excludes local/dev artifacts (`local.properties`, generated `app/libs/*.aar`,
   geo data assets, and `xray-go/go.sum`).
 - Dependency intake is dynamic in AAR scripts (`go get ...@main`, `go get ...@latest`).
@@ -353,9 +363,12 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Runtime config extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
   (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
+  `buildRuntimeConfig(input, log = LogSettings(WARNING, null))` ends with private `forceLog`, which
+  overwrites (not merges) the config's `log` object with the caller-supplied `LogSettings` — see
+  `config/LogSettings.kt` (`XrayLogLevel` + `errorFilePath`) and `docs/features/logs-screen.md`;
   `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound **and**
   minus `geoip:`/`geosite:` routing rules, which fail to build in the probe's geo-asset-less
-  throwaway core instance) and the
+  throwaway core instance, and forces `LogSettings(NONE, null)`) and the
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
   `config/ProfileShareLink.kt` (`fromStoredConfig` — reconstructs a shareable link from any stored JSON config by dispatching to the per-protocol codec; returns `null` for configs with no vless/hysteria outbound).
