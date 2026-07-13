@@ -33,6 +33,7 @@ import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
 import com.justme.xtls_core_proxy.log.LogPreferences
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.XrayCoreLogTailer
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
@@ -74,6 +75,7 @@ class XrayVpnService : VpnService() {
     // connect AND every kill-switch revive, so a mid-session log-level change can't leak in.
     @Volatile private var sessionLog: LogSettings = LogSettings(XrayLogLevel.WARNING, null)
     @Volatile private var sessionLogFile: File? = null
+    private var logTailer: XrayCoreLogTailer? = null
 
     // Last controlled-app label that triggered the exposed state; used to rebuild the
     // exposed notification if the user swipes it away while paused.
@@ -215,6 +217,9 @@ class XrayVpnService : VpnService() {
                 bringUpTunnel(profile)
                     .onSuccess {
                         LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                        sessionLogFile?.let { f ->
+                            if (logTailer == null) { logTailer = XrayCoreLogTailer(f).also { it.start() } }
+                        }
                         updateNotification(localizedString(R.string.vpn_status_connected))
                         val prefs = KillSwitchRepository.load(this@XrayVpnService)
                         applyKillSwitchPreferences(prefs)
@@ -456,6 +461,9 @@ class XrayVpnService : VpnService() {
             stopSelf()
             return
         }
+
+        logTailer?.stop()
+        logTailer = null
 
         killSwitchMonitor?.stop()
         killSwitchMonitor = null
