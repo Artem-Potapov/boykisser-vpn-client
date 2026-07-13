@@ -6,15 +6,31 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object ConfigBuilder {
-    fun buildRuntimeConfig(input: String): String {
+    fun buildRuntimeConfig(
+        input: String,
+        log: LogSettings = LogSettings(XrayLogLevel.WARNING, null)
+    ): String {
         val trimmed = input.trim()
         require(trimmed.isNotEmpty()) { "Configuration input is empty" }
 
-        return when {
+        val base = when {
             trimmed.startsWith("vless://", ignoreCase = true) -> fromVlessUri(trimmed)
             Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> fromHysteria2Uri(trimmed)
             else -> fromJson(trimmed)
         }
+        return forceLog(base, log)
+    }
+
+    /** Overwrites the `log` object on a runtime config with the forced posture.
+     *  Overwrite (not merge) so a pasted config cannot aim Xray's writes elsewhere. */
+    private fun forceLog(configJson: String, log: LogSettings): String {
+        val root = JSONObject(configJson)
+        val logObj = JSONObject()
+            .put("access", "none")
+            .put("loglevel", log.level.wire)
+        if (log.errorFilePath != null) logObj.put("error", log.errorFilePath)
+        root.put("log", logObj)
+        return root.toString()
     }
 
     fun fromVlessUri(uri: String): String {
@@ -74,7 +90,7 @@ object ConfigBuilder {
      * and the DoH dns block have no geo dependency and are preserved — secure-DNS posture is intact.
      */
     fun toPingTestConfig(stored: String): String {
-        val root = JSONObject(buildRuntimeConfig(stored))
+        val root = JSONObject(buildRuntimeConfig(stored, LogSettings(XrayLogLevel.NONE, null)))
         root.remove("inbounds")
         stripGeoRoutingRules(root)
         return root.toString()

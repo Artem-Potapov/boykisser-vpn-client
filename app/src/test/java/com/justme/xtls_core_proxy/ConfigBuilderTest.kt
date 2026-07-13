@@ -1,8 +1,11 @@
 package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.LogSettings
+import com.justme.xtls_core_proxy.config.XrayLogLevel
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -424,5 +427,46 @@ class ConfigBuilderTest {
         assertEquals("stream-up", xhttp.getString("mode"))
         assertEquals("100-1000", xhttp.getJSONObject("extra").getString("xPaddingBytes"))
         assertEquals("1000000", xhttp.getJSONObject("extra").getString("scMaxEachPostBytes"))
+    }
+
+    @Test
+    fun buildRuntimeConfig_forcesLogObject_onVless() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443" +
+            "?type=tcp&security=reality&pbk=key123&sid=ab&sni=sni.com&fp=firefox"
+        val out = ConfigBuilder.buildRuntimeConfig(
+            uri,
+            LogSettings(XrayLogLevel.DEBUG, "/data/x/logs/xray-core.log")
+        )
+        val log = JSONObject(out).getJSONObject("log")
+        assertEquals("debug", log.getString("loglevel"))
+        assertEquals("/data/x/logs/xray-core.log", log.getString("error"))
+    }
+
+    @Test
+    fun buildRuntimeConfig_forcesLogObject_onRawJson_overwritingPastedLog() {
+        val pasted = """{"log":{"loglevel":"info","error":"/evil/path"},"outbounds":[{"protocol":"freedom"}]}"""
+        val out = ConfigBuilder.buildRuntimeConfig(pasted, LogSettings(XrayLogLevel.ERROR, "/safe/log"))
+        val log = JSONObject(out).getJSONObject("log")
+        assertEquals("error", log.getString("loglevel"))
+        assertEquals("/safe/log", log.getString("error"))   // pasted /evil/path overwritten
+    }
+
+    @Test
+    fun buildRuntimeConfig_nullPath_omitsErrorKey() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            """{"outbounds":[{"protocol":"freedom"}]}""",
+            LogSettings(XrayLogLevel.WARNING, null)
+        )
+        val log = JSONObject(out).getJSONObject("log")
+        assertEquals("warning", log.getString("loglevel"))
+        assertFalse(log.has("error"))
+    }
+
+    @Test
+    fun toPingTestConfig_forcesNoneAndNoFile() {
+        val ping = ConfigBuilder.toPingTestConfig("""{"outbounds":[{"protocol":"freedom"}]}""")
+        val log = JSONObject(ping).getJSONObject("log")
+        assertEquals("none", log.getString("loglevel"))
+        assertFalse(log.has("error"))
     }
 }
