@@ -49,6 +49,27 @@
     <string name="settings_kill_title">Kill-switch при открытии</string>
     <string name="settings_kill_subtitle">Полностью отключать VPN, когда выбранные приложения активны</string>
 
+    <!-- Settings hub sections -->
+    <string name="settings_section_ui">Интерфейс</string>
+    <string name="settings_section_tunnel">Туннель</string>
+    <string name="settings_section_advanced">Дополнительно</string>
+    <string name="settings_section_diagnostics">Диагностика</string>
+    <string name="settings_section_about">О программе</string>
+    <string name="settings_logs_title">Логи</string>
+    <string name="settings_about_title">О программе</string>
+    <string name="settings_badge_debug">debug</string>
+    <!-- Debug-only placeholder rows -->
+    <string name="settings_ph_appearance">Оформление</string>
+    <string name="settings_ph_autoconnect">Автоподключение при запуске</string>
+    <string name="settings_ph_fragmentation">Настройки фрагментации</string>
+    <string name="settings_ph_mux">Настройки Mux</string>
+    <string name="settings_ph_xray">Настройки XRAY</string>
+    <string name="settings_ph_dns">Настройки DNS</string>
+    <string name="settings_ph_sanitization">Санитизация конфигурации</string>
+    <string name="settings_ph_routing">Правила маршрутизации</string>
+    <string name="settings_ph_ping">Настройки пинг-теста</string>
+    <string name="settings_ph_check_update">Проверить обновления</string>
+
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>
     <string name="main_cd_subscriptions">Подписки</string>

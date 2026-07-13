@@ -5,19 +5,21 @@ import android.os.Bundle
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -30,50 +32,44 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.BuildConfig
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LanguageSettingsActivity
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.KillSwitchSettingsActivity
+import com.justme.xtls_core_proxy.log.LogsActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.split.SplitTunnelSettingsActivity
+import com.justme.xtls_core_proxy.ui.SettingsRow
+import com.justme.xtls_core_proxy.ui.SettingsSectionHeader
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
 /**
- * Top-level settings hub. Single entry point from MainActivity; lists each
- * sub-settings screen (Split tunneling, Kill on foreground, ServerSettings if
- * it shouldn't have its own entry — see Task 5).
+ * Top-level settings hub. Single entry point from MainActivity; a sectioned,
+ * single-scroll list of every sub-settings screen. Debug-only placeholder rows
+ * (and the whole Advanced section) render only under [BuildConfig.DEBUG].
  */
 class SettingsHubActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent {
-            XTLS_CORE_PROXYTheme {
-                SettingsHubScreen(
-                    onBack = { finish() },
-                    onOpenLanguage = {
-                        startActivity(Intent(this, LanguageSettingsActivity::class.java))
-                    }
-                )
-            }
-        }
+        setContent { XTLS_CORE_PROXYTheme { SettingsHubScreen(onBack = { finish() }) } }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsHubScreen(
-    onBack: () -> Unit,
-    onOpenLanguage: () -> Unit,
-) {
+private fun SettingsHubScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var showSideloadWarning by remember { mutableStateOf(false) }
-    val currentLang = SupportedLanguage.current(context)
-    val langLabel = when (currentLang) {
+    val badge = stringResource(R.string.settings_badge_debug)
+    val langLabel = when (SupportedLanguage.current(context)) {
         SupportedLanguage.AUTO -> stringResource(R.string.lang_auto)
         SupportedLanguage.ENGLISH -> stringResource(R.string.lang_english)
         SupportedLanguage.RUSSIAN -> stringResource(R.string.lang_russian)
     }
+    fun open(cls: Class<*>) = context.startActivity(Intent(context, cls))
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -81,7 +77,7 @@ private fun SettingsHubScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.settings_hub_cd_back)
                         )
                     }
@@ -90,55 +86,81 @@ private fun SettingsHubScreen(
         }
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxSize().padding(innerPadding)
+                .padding(horizontal = 16.dp).verticalScroll(rememberScrollState())
         ) {
+            // UI
+            SettingsSectionHeader(stringResource(R.string.settings_section_ui))
+            SettingsRow(
+                title = stringResource(R.string.settings_language_title),
+                trailingValue = langLabel,
+                leadingIcon = Icons.Default.Settings,
+                onClick = { open(LanguageSettingsActivity::class.java) }
+            )
+            if (BuildConfig.DEBUG) SettingsRow(
+                title = stringResource(R.string.settings_ph_appearance),
+                enabled = false, badge = badge
+            )
+
+            // Tunnel
+            SettingsSectionHeader(stringResource(R.string.settings_section_tunnel))
             SettingsRow(
                 title = stringResource(R.string.settings_split_title),
                 subtitle = stringResource(R.string.settings_split_subtitle),
-                onClick = {
-                    context.startActivity(Intent(context, SplitTunnelSettingsActivity::class.java))
-                }
+                onClick = { open(SplitTunnelSettingsActivity::class.java) }
             )
             HorizontalDivider()
             SettingsRow(
                 title = stringResource(R.string.settings_kill_title),
                 subtitle = stringResource(R.string.settings_kill_subtitle),
-                onClick = {
-                    context.startActivity(Intent(context, KillSwitchSettingsActivity::class.java))
-                }
+                onClick = { open(KillSwitchSettingsActivity::class.java) }
             )
-            HorizontalDivider()
+            if (BuildConfig.DEBUG) {
+                SettingsRow(title = stringResource(R.string.settings_ph_autoconnect), enabled = false, badge = badge)
+                SettingsRow(title = stringResource(R.string.settings_ph_fragmentation), enabled = false, badge = badge)
+                SettingsRow(title = stringResource(R.string.settings_ph_mux), enabled = false, badge = badge)
+            }
+
+            // Advanced (whole section debug-only)
+            if (BuildConfig.DEBUG) {
+                SettingsSectionHeader(stringResource(R.string.settings_section_advanced))
+                SettingsRow(title = stringResource(R.string.settings_ph_xray), enabled = false, badge = badge)
+                SettingsRow(title = stringResource(R.string.settings_ph_dns), enabled = false, badge = badge)
+                SettingsRow(title = stringResource(R.string.settings_ph_sanitization), enabled = false, badge = badge)
+                SettingsRow(title = stringResource(R.string.settings_ph_routing), enabled = false, badge = badge)
+            }
+
+            // Diagnostics
+            SettingsSectionHeader(stringResource(R.string.settings_section_diagnostics))
             SettingsRow(
-                title = stringResource(R.string.settings_language_title),
-                subtitle = langLabel,
-                onClick = onOpenLanguage
+                title = stringResource(R.string.settings_logs_title),
+                leadingIcon = Icons.AutoMirrored.Filled.List,
+                onClick = { open(LogsActivity::class.java) }
             )
-            HorizontalDivider()
+            if (BuildConfig.DEBUG) SettingsRow(
+                title = stringResource(R.string.settings_ph_ping), enabled = false, badge = badge
+            )
+
+            // About
+            SettingsSectionHeader(stringResource(R.string.settings_section_about))
             SettingsRow(
                 title = stringResource(R.string.settings_sideload_title),
                 subtitle = stringResource(R.string.settings_sideload_subtitle),
+                leadingIcon = Icons.Default.Warning,
                 onClick = { showSideloadWarning = true }
             )
-            if (showSideloadWarning) {
-                SideloadWarningDialog(onDismiss = { showSideloadWarning = false })
-            }
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_about_title),
+                leadingIcon = Icons.Default.Info,
+                onClick = { open(AboutActivity::class.java) }
+            )
+            if (BuildConfig.DEBUG) SettingsRow(
+                title = stringResource(R.string.settings_ph_check_update), enabled = false, badge = badge
+            )
         }
-    }
-}
-
-@Composable
-private fun SettingsRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp)
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+        if (showSideloadWarning) {
+            SideloadWarningDialog(onDismiss = { showSideloadWarning = false })
+        }
     }
 }
