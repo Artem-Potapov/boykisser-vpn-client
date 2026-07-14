@@ -4,22 +4,27 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Resources
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -50,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.R
@@ -57,7 +63,6 @@ import com.justme.xtls_core_proxy.config.XrayLogLevel
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.ui.SettingsRow
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
-import android.widget.Toast
 import kotlinx.coroutines.launch
 
 class LogsActivity : LocalizedComponentActivity() {
@@ -67,6 +72,9 @@ class LogsActivity : LocalizedComponentActivity() {
         setContent { XTLS_CORE_PROXYTheme { LogsScreen(onBack = { finish() }) } }
     }
 }
+
+/** Which inline (Binder-bound) action a large-log explainer dialog is confirming. */
+private enum class LogShareAction { COPY, SHARE }
 
 private fun levelLabelRes(level: XrayLogLevel): Int = when (level) {
     XrayLogLevel.DEBUG -> R.string.logs_level_debug
@@ -85,6 +93,8 @@ private fun LogsScreen(onBack: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     var levelDialog by remember { mutableStateOf(false) }
     var bufferDialog by remember { mutableStateOf(false) }
+    // Non-null while the "log is large" explainer is up; carries which action to run on confirm.
+    var pendingShare by remember { mutableStateOf<LogShareAction?>(null) }
     var level by remember { mutableStateOf(LogPreferences.getLogLevel(context)) }
     var buffer by remember { mutableStateOf(LogPreferences.getBufferLines(context)) }
 
@@ -111,6 +121,20 @@ private fun LogsScreen(onBack: () -> Unit) {
         }
     }
 
+    // Copy/Share inline their whole payload through a single ~1 MB Binder transaction, so the
+    // full buffer would throw TransactionTooLargeException (and, sharing this process with the
+    // VpnService, crash the tunnel). Bound the payload to the newest lines that fit; if that
+    // dropped anything, surface the explainer instead of acting silently. Export streams and
+    // needs no bounding.
+    fun onCopy() {
+        val bounded = LogShareBudget.bound(logs)
+        if (bounded.truncated) pendingShare = LogShareAction.COPY else runCopy(context, resources, bounded)
+    }
+    fun onShare() {
+        val bounded = LogShareBudget.bound(logs)
+        if (bounded.truncated) pendingShare = LogShareAction.SHARE else runShare(context, resources, bounded)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -121,13 +145,9 @@ private fun LogsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // Clear as the one toolbar icon; Copy/Share/Export live in the overflow
-                    // menu (material-icons-core has no dedicated copy icon, and adding
-                    // material-icons-extended is forbidden by Global Constraints).
-                    IconButton(onClick = { LogRepository.clear() }) {
-                        Icon(Icons.Default.Clear, contentDescription =
-                            stringResource(R.string.logs_action_clear))
-                    }
+                    // Single overflow entry point. Copy/Share/Export/Clear are all labeled
+                    // items inside it — Clear used to be a bare, unlabeled toolbar icon that
+                    // read as "close", and it's destructive, so it belongs behind the menu.
                     IconButton(onClick = { menuOpen = true }) {
                         Icon(Icons.Default.MoreVert, contentDescription =
                             stringResource(R.string.logs_action_more))
@@ -135,18 +155,17 @@ private fun LogsScreen(onBack: () -> Unit) {
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.logs_action_copy)) },
-                            onClick = {
-                                menuOpen = false
-                                copyLogs(context, logs.joinToString("\n"))
-                                Toast.makeText(context, resources.getString(R.string.logs_copied_toast),
-                                    Toast.LENGTH_SHORT).show()
-                            })
+                            onClick = { menuOpen = false; onCopy() })
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.logs_action_share)) },
-                            onClick = { menuOpen = false; shareLogs(context, logs.joinToString("\n")) })
+                            onClick = { menuOpen = false; onShare() })
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.logs_action_export)) },
                             onClick = { menuOpen = false; exportLauncher.launch("boykisser-log.txt") })
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.logs_action_clear)) },
+                            onClick = { menuOpen = false; LogRepository.clear() })
                     }
                 }
             )
@@ -192,17 +211,15 @@ private fun LogsScreen(onBack: () -> Unit) {
             text = {
                 Column {
                     choices.forEach { choice ->
-                        androidx.compose.foundation.layout.Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = choice == level, onClick = {
+                        SelectableRow(
+                            selected = choice == level,
+                            onSelect = {
                                 level = choice
                                 LogPreferences.setLogLevel(context, choice)
                                 levelDialog = false
-                            })
-                            Text(stringResource(levelLabelRes(choice)))
-                        }
+                            },
+                            label = stringResource(levelLabelRes(choice)),
+                        )
                     }
                 }
             },
@@ -222,18 +239,16 @@ private fun LogsScreen(onBack: () -> Unit) {
             text = {
                 Column {
                     LogPreferences.BUFFER_PRESETS.forEach { preset ->
-                        androidx.compose.foundation.layout.Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = preset == buffer, onClick = {
+                        SelectableRow(
+                            selected = preset == buffer,
+                            onSelect = {
                                 buffer = preset
                                 LogPreferences.setBufferLines(context, preset)
                                 LogRepository.setMaxLines(preset)
                                 bufferDialog = false
-                            })
-                            Text(stringResource(R.string.logs_buffer_lines, preset))
-                        }
+                            },
+                            label = stringResource(R.string.logs_buffer_lines, preset),
+                        )
                     }
                 }
             },
@@ -245,17 +260,88 @@ private fun LogsScreen(onBack: () -> Unit) {
             }
         )
     }
+
+    pendingShare?.let { action ->
+        // Recomputed live so the counts stay accurate even if lines arrive while it's open.
+        val bounded = LogShareBudget.bound(logs)
+        AlertDialog(
+            onDismissRequest = { pendingShare = null },
+            title = { Text(stringResource(R.string.logs_large_title)) },
+            text = {
+                Text(stringResource(
+                    R.string.logs_large_message, bounded.totalLines, bounded.includedLines))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingShare = null
+                    when (action) {
+                        LogShareAction.COPY -> runCopy(context, resources, bounded)
+                        LogShareAction.SHARE -> runShare(context, resources, bounded)
+                    }
+                }) {
+                    Text(stringResource(
+                        if (action == LogShareAction.COPY) R.string.logs_large_copy_recent
+                        else R.string.logs_large_share_recent))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingShare = null }) {
+                    Text(stringResource(R.string.logs_dialog_cancel))
+                }
+            }
+        )
+    }
 }
 
-private fun copyLogs(context: Context, text: String) {
+/** A full-width, fully-tappable radio row (the whole row is the hit target, not just the button). */
+@Composable
+private fun SelectableRow(selected: Boolean, onSelect: () -> Unit, label: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // onClick = null: the row's selectable owns the click, so the button doesn't
+        // double-handle it (and the row stays a single accessibility node).
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(12.dp))
+        Text(label)
+    }
+}
+
+private fun runCopy(context: Context, resources: Resources, bounded: BoundedLog) {
+    val ok = performCopy(context, bounded.text)
+    val message = when {
+        !ok -> resources.getString(R.string.logs_share_failed_toast)
+        bounded.truncated -> resources.getString(
+            R.string.logs_copied_truncated_toast, bounded.includedLines, bounded.totalLines)
+        else -> resources.getString(R.string.logs_copied_toast)
+    }
+    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+}
+
+private fun runShare(context: Context, resources: Resources, bounded: BoundedLog) {
+    if (!performShare(context, bounded.text)) {
+        Toast.makeText(context, resources.getString(R.string.logs_share_failed_toast),
+            Toast.LENGTH_SHORT).show()
+    }
+}
+
+// The Binder-crossing calls are wrapped so an unexpected TransactionTooLargeException (or a
+// missing share target) degrades to a toast instead of an uncaught throw that would take down
+// the whole process — and with it the VpnService. The byte budget already keeps us clear of
+// the limit; this is the belt-and-suspenders backstop.
+private fun performCopy(context: Context, text: String): Boolean = runCatching {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("logs", text))
-}
+}.isSuccess
 
-private fun shareLogs(context: Context, text: String) {
+private fun performShare(context: Context, text: String): Boolean = runCatching {
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, text)
     }
     context.startActivity(Intent.createChooser(send, null))
-}
+}.isSuccess

@@ -248,15 +248,42 @@ private fun sanitize(raw: String): String {
 }
 ```
 
-`LogsActivity`'s Copy/Share/Export actions (`copyLogs`, `shareLogs`, the `CreateDocument` export
-launcher) all operate on `logs.joinToString("\n")` where `logs` is the Compose `collectAsState()` of
-`LogRepository.logs` — the redacted `StateFlow`. There is no code path from the Logs screen (or
+`LogsActivity`'s Copy/Share/Export actions all read from `LogRepository.logs` (the Compose
+`collectAsState()` of the redacted `StateFlow`) — never the file. Export streams the full buffer
+(`logs.joinToString("\n")`) to the chosen `content://` output; Copy/Share hand a byte-bounded newest
+tail of that same redacted buffer to `LogShareBudget.bound(logs)` (see the next subsection). Either
+way the source is the sanitized in-memory buffer: there is no code path from the Logs screen (or
 anywhere else in the app) that reads `filesDir/logs/xray-core.log` directly. The tailer is the only
 reader of that file, and it always routes through `LogRepository.append` (hence through `sanitize`)
 before a line becomes visible anywhere.
 
 **Do not add a code path that reads or shares `filesDir/logs/xray-core.log` directly** — doing so would
 bypass the redaction that Copy/Share/Export currently guarantee.
+
+### Copy/Share are byte-bounded (Binder transaction limit)
+
+Copy (`ClipboardManager.setPrimaryClip`) and Share (`startActivity(ACTION_SEND, EXTRA_TEXT=...)`) both
+**inline their entire payload through a single Binder transaction**, whose per-process buffer is ~1 MB
+shared across all in-flight IPC. Handing the full buffer (e.g. the 10 000-line preset after a long Debug
+session) to either throws `TransactionTooLargeException`. Because `XrayVpnService` has **no
+`android:process`** in the manifest — it runs in the *same* process as the UI — that uncaught throw
+kills the whole process: the foreground VPN drops **and** the in-memory `LogRepository` buffer is wiped.
+The observed symptom ("share the log → VPN disconnects and the log clears") is the signature of that
+single-process death, not two separate bugs.
+
+[`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt)
+(`bound(lines, maxBytes = 256 KiB)`) fixes it at the source: it keeps the **newest** lines whose joined
+UTF-8 size fits under a conservative quarter-of-the-ceiling budget (always at least the last line), and
+reports `includedLines`/`totalLines` so the UI can tell the user what was dropped. When the tail is
+truncated, `LogsActivity` shows a small explainer dialog ("this log has N lines… only the most recent M
+will be included; use Export for the full log") offering **Copy/Share recent** or **Cancel**; when it
+fits, the action runs directly. **Export is deliberately exempt** — it writes to a `content://` output
+*stream*, so the payload never rides a Binder parcel and has no size limit; it remains the full-log path.
+
+As defense-in-depth, the actual `setPrimaryClip`/`startActivity` calls are wrapped in `runCatching`
+(`performCopy`/`performShare`) so an *unexpected* `TransactionTooLargeException` (or a missing share
+target) degrades to a toast rather than an uncaught throw that would again take down the process. The
+byte budget is the primary fix; the `runCatching` is the backstop.
 
 > **KNOWN FOLLOW-UP — broaden `sanitize()` before wide release (deferred; tracked here).**
 > `sanitize()` was designed for **app-authored** lines and only recognizes the app's own secret shapes:
@@ -335,7 +362,8 @@ fact about this screen:
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `maxLines` (default 5000) + `setMaxLines` (coerce `[100, 50_000]`, immediate trim); `append` timestamps + redacts (UUID / `publicKey` / `shortId`) every line; `logs: StateFlow<List<String>>`. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
 | [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringRevive` (current session AND `REVIVING` — the defer-vs-drop rule for a kill landing mid-revive). |
-| [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, Clear toolbar action, Copy/Share/Export overflow menu, level selector dialog (persist-only), buffer selector dialog (live). |
+| [`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt) | Pure `bound(lines, maxBytes)` → newest-tail `BoundedLog` (`text`/`includedLines`/`totalLines`/`truncated`) under a 256 KiB budget; keeps the inline Copy/Share payload clear of the Binder transaction limit. Export bypasses it (streams). |
+| [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, single overflow menu (Copy/Share/Export + a divider then the destructive **Clear** — no bare toolbar icon), fully-tappable radio rows (`selectable`), a large-log explainer dialog gating Copy/Share, level selector dialog (persist-only), buffer selector dialog (live). Copy/Share go through `LogShareBudget` + `runCatching`. |
 
 ## Error handling
 
@@ -374,6 +402,10 @@ fact about this screen:
     discard-until-newline policy and never emits a truncated secret prefix.
 - **JUnit4 (JVM)** — `app/src/test/.../log/LogRepositoryBufferTest.kt`: `setMaxLines` coerces into
   `[100, 50_000]`, trims the current buffer immediately, and caps subsequent `append`s.
+- **JUnit4 (JVM)** — `app/src/test/.../log/LogShareBudgetTest.kt`: `bound` returns an empty untruncated
+  result for an empty buffer; keeps every line (in order) when under budget; keeps only the newest tail
+  under the byte budget when over (oldest dropped, newest kept, payload ≤ `maxBytes`); and still returns
+  a single line that alone exceeds the budget rather than nothing.
 - **JUnit4 (JVM)** — `app/src/test/.../LogSettingsTest.kt`: `XrayLogLevel.fromName` parses known
   names and falls back to `WARNING` for unknown/`null`. (`LogPreferences` itself needs Android
   `SharedPreferences`, so there is no fabricated JVM persistence fake — wire-level enum parsing is
@@ -393,5 +425,7 @@ fact about this screen:
   connected, confirm the running session is unaffected, then disconnect/reconnect and confirm the new
   level takes effect; trigger kill-switch pause/revive and confirm log lines keep flowing to the same
   buffer with no level change; run Copy/Share/Export and confirm UUID/publicKey/shortId values read
-  `<redacted-uuid>` / `<redacted>` rather than raw values. See
+  `<redacted-uuid>` / `<redacted>` rather than raw values. **Also, at the 10 000-line preset after a long
+  Debug session, run Copy and Share and confirm the explainer dialog appears and neither crashes/drops
+  the VPN** (the `TransactionTooLargeException` path), while Export still writes the full log. See
   [`docs/qa/`](../qa/) for the broader QA scenario list.

@@ -347,10 +347,16 @@
     <string name="logs_buffer_lines">%1$d lines</string>
     <string name="logs_jump_latest">Jump to latest</string>
     <string name="logs_copied_toast">Logs copied</string>
-    <string name="logs_level_debug">Debug</string>
-    <string name="logs_level_info">Info</string>
-    <string name="logs_level_warning">Warning</string>
-    <string name="logs_level_error">Error</string>
+    <string name="logs_copied_truncated_toast">Copied the most recent %1$d of %2$d lines</string>
+    <string name="logs_share_failed_toast">Couldn\'t share logs</string>
+    <string name="logs_large_title">Log is large</string>
+    <string name="logs_large_message">This log has %1$d lines. Copying or sharing all of it can crash the app, so only the most recent %2$d lines will be included.\n\nFor the complete log, use Export as file instead.</string>
+    <string name="logs_large_copy_recent">Copy recent</string>
+    <string name="logs_large_share_recent">Share recent</string>
+    <string name="logs_level_debug" translatable="false">Debug</string>
+    <string name="logs_level_info" translatable="false">Info</string>
+    <string name="logs_level_warning" translatable="false">Warning</string>
+    <string name="logs_level_error" translatable="false">Error</string>
     <string name="logs_dialog_cancel">Cancel</string>
     <string name="about_title">About</string>
     <string name="about_version">Version %1$s</string>

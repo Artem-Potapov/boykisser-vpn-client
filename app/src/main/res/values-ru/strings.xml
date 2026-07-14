@@ -347,10 +347,12 @@
     <string name="logs_buffer_lines">%1$d строк</string>
     <string name="logs_jump_latest">К последней строке</string>
     <string name="logs_copied_toast">Логи скопированы</string>
-    <string name="logs_level_debug">Отладка</string>
-    <string name="logs_level_info">Инфо</string>
-    <string name="logs_level_warning">Предупреждения</string>
-    <string name="logs_level_error">Ошибки</string>
+    <string name="logs_copied_truncated_toast">Скопированы последние %1$d из %2$d строк</string>
+    <string name="logs_share_failed_toast">Не удалось поделиться логами</string>
+    <string name="logs_large_title">Большой журнал</string>
+    <string name="logs_large_message">В журнале %1$d строк. Копирование или отправка всего журнала может привести к сбою приложения, поэтому будут включены только последние %2$d строк.\n\nДля полного журнала используйте «Экспортировать в файл».</string>
+    <string name="logs_large_copy_recent">Копировать последние</string>
+    <string name="logs_large_share_recent">Отправить последние</string>
     <string name="logs_dialog_cancel">Отмена</string>
     <string name="about_title">О программе</string>
     <string name="about_version">Версия %1$s</string>
