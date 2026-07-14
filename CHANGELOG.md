@@ -3,6 +3,60 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
+## [2.2.0PRE] — 2026-07-14
+
+Tag: `2.2.0-PreRelease` (pending). Major release.
+
+## Dedicated Logs screen + a HAPP/Hiddify-style Settings hub, VPN-lifecycle concurrency hardening,
+and a crash fix for sharing large logs.
+
+### Added
+- **Dedicated Logs screen** (Settings → Diagnostics → Logs). Xray-core now writes its own error log to
+  an app-private file, which the app tails into the on-screen buffer — previously only app-authored
+  lines were visible and diagnosing a failed connection meant reaching for `adb logcat`. The screen
+  offers a **session-stable log level** (Debug / Info / Warning / Error; captioned "Applies from the
+  next connection", so a running tunnel's verbosity can't shift mid-flight) and a **live
+  log-buffer-size** picker (1 000 / 2 000 / 5 000 / 10 000 lines) that trims the on-screen list
+  immediately, plus **Copy / Share / Export** actions.
+- **Sectioned Settings hub** (inspired by HAPP / Hiddify): UI, Tunnel, Advanced, Diagnostics, and About
+  sections built from reusable `SettingsSectionHeader` / `SettingsRow` components. Debug builds show
+  greyed placeholder rows for planned settings; release builds hide them — and the whole Advanced
+  section — entirely.
+- **About screen**: app version, purpose, a GitHub source-code link, and license / acknowledgements.
+
+### Changed
+- **The main screen no longer hosts a log panel** — the profiles list fills the reclaimed space; logs
+  moved to their dedicated screen.
+- **`ConfigBuilder` now forces the `log` object** on every runtime config (level + app-private
+  error-file path), overwriting rather than merging, so a pasted or subscription-sourced config cannot
+  redirect Xray's own log writes elsewhere. This joins secure-DNS and inbound sanitization as a third
+  fail-closed normalization on the same chokepoint.
+
+### Fixed
+- **Sharing or copying a large log no longer crashes the app or drops the VPN.** Copy and Share inlined
+  the whole buffer through a single ~1 MB Binder transaction; at the 10 000-line preset this threw
+  `TransactionTooLargeException`, and because the VPN service shares the app process the uncaught throw
+  killed the process — dropping the tunnel and wiping the log buffer. Copy/Share are now byte-bounded to
+  the newest lines that fit (with a "log is large" explainer offering to include just the recent tail),
+  while **Export streams the full log unbounded**. A defensive guard keeps any unexpected share failure
+  from taking down the tunnel.
+- **VPN kill-switch / lifecycle concurrency hardening.** Async lifecycle callbacks are gated on a
+  monotonic session epoch, so a stale callback from a torn-down session can't publish or tear down a
+  newer session's tunnel. A kill-switch event that lands mid-revive is now deferred and replayed instead
+  of being lost by the edge-triggered monitor; disabling the kill switch mid-revive no longer strands
+  the tunnel paused; and a queued kill is ignored once the feature is turned off. The user-stop path was
+  moved off the lifecycle lock to prevent a UI freeze / ANR when disconnecting during connect.
+
+### Security
+- **Log redaction boundary.** The on-disk `xray-core.log` is raw and app-private; **every** user-facing
+  surface — the on-screen list, Copy, Share, and Export — reads exclusively from the in-memory
+  `LogRepository` buffer, which redacts UUID / `publicKey` / `shortId` values before a line is ever
+  shown or shared. No code path reads or shares the raw file directly, and the large-log fix narrows the
+  Copy/Share payload without changing that source.
+- **Known follow-up (tracked in `docs/features/logs-screen.md`):** `sanitize()` currently recognizes the
+  app's own secret shapes; broaden it to cover non-UUID credentials (e.g. a Hysteria2 password) that raw
+  core output could surface at Debug before wide release.
+
 ## [2.0.1R] - 2026-06-25
 
 Tag: `2.0.1Release`. Minor release.
