@@ -8,9 +8,18 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private val logTimestampFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US)
+
+internal fun formatLogTimestamp(
+    instant: Instant,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): String = instant.atZone(zoneId).toLocalTime().format(logTimestampFormatter)
 
 enum class VpnConnectionState {
     DISCONNECTED,
@@ -31,8 +40,6 @@ object LogRepository {
         maxLines = capped
         _logs.update { it.takeLast(capped) }
     }
-
-    private val timeFormatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs
@@ -71,7 +78,7 @@ object LogRepository {
     }
 
     fun append(line: String) {
-        val timestamp = timeFormatter.format(Date())
+        val timestamp = formatLogTimestamp(Instant.now())
         val sanitized = sanitize(line)
         _logs.update { prev ->
             (prev + "[$timestamp] $sanitized").takeLast(maxLines)

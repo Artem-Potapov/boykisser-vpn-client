@@ -3,6 +3,8 @@ package com.justme.xtls_core_proxy.log
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.time.Instant
+import java.time.ZoneOffset
 
 class LogRepositoryBufferTest {
     @After fun tearDown() {
@@ -32,5 +34,15 @@ class LogRepositoryBufferTest {
     @Test fun setMaxLines_coercesAboveMaximumDownToCeiling() {
         LogRepository.setMaxLines(1_000_000)
         assertEquals(50_000, LogRepository.maxLines)
+    }
+
+    @Test fun formatLogTimestamp_usesUs24HourMillisecondsFormat() {
+        assertEquals(
+            "03:04:05.678",
+            formatLogTimestamp(
+                instant = Instant.parse("2026-07-13T03:04:05.678Z"),
+                zoneId = ZoneOffset.UTC,
+            )
+        )
     }
 }

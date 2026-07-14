@@ -68,6 +68,9 @@ class XrayVpnService : VpnService() {
     private val lock = Any()
     private var tunInterface: ParcelFileDescriptor? = null
     private var running = false
+    private var nextSessionEpoch = 0L
+    private var activeSessionEpoch: Long? = null
+    private var sessionTunnelState = SessionTunnelState.STOPPED
 
     @Volatile private var currentProfileId: Long = -1L
 
@@ -90,6 +93,31 @@ class XrayVpnService : VpnService() {
     private val tunnelOpScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1)
     )
+
+    private data class SessionContext(
+        val epoch: Long,
+        val profileId: Long,
+        val log: LogSettings,
+    )
+
+    private class StaleSessionException : IllegalStateException("VPN session is no longer active")
+
+    private fun isCurrentSessionLocked(sessionEpoch: Long): Boolean =
+        acceptsSessionLifecycleCallback(running, activeSessionEpoch, sessionEpoch)
+
+    private fun ownsTunnelTransitionLocked(
+        sessionEpoch: Long,
+        expectedState: SessionTunnelState,
+    ): Boolean = ownsTunnelTransition(
+        running = running,
+        activeSessionEpoch = activeSessionEpoch,
+        callbackSessionEpoch = sessionEpoch,
+        tunnelState = sessionTunnelState,
+        expectedState = expectedState,
+    )
+
+    private fun isCurrentSession(sessionEpoch: Long): Boolean =
+        synchronized(lock) { isCurrentSessionLocked(sessionEpoch) }
 
     override fun onBind(intent: Intent?): IBinder? {
         return super.onBind(intent)
@@ -163,16 +191,31 @@ class XrayVpnService : VpnService() {
     }
 
     private fun startVpn(profileId: Long) {
-        synchronized(lock) {
+        val sessionEpoch = synchronized(lock) {
             if (running) {
                 LogRepository.append("VPN already running")
                 return
             }
             running = true
+            nextSessionEpoch += 1
+            activeSessionEpoch = nextSessionEpoch
+            sessionTunnelState = SessionTunnelState.STARTING
+            nextSessionEpoch
         }
 
-        createNotificationChannel()
-        startForeground(VpnNotifications.NOTIFICATION_ID, buildNotification(localizedString(R.string.vpn_status_connecting)))
+        val foregrounded = synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) {
+                false
+            } else {
+                createNotificationChannel()
+                startForeground(
+                    VpnNotifications.NOTIFICATION_ID,
+                    buildNotification(localizedString(R.string.vpn_status_connecting))
+                )
+                true
+            }
+        }
+        if (!foregrounded) return
 
         // Defensive re-check: a caller (e.g. the QS tile) may have pre-flighted
         // VpnService.prepare() before dispatching ACTION_START, and the user
@@ -182,16 +225,25 @@ class XrayVpnService : VpnService() {
         // explanation. startForeground above satisfies the FGS contract before
         // we stop ourselves.
         if (VpnService.prepare(this) != null) {
-            LogRepository.setConnectionState(VpnConnectionState.ERROR)
-            LogRepository.emitError(R.string.vpn_permission_revoked_error)
-            LogRepository.append("Refused to start: VPN permission not granted")
-            postPermissionRevokedNotification()
-            stopVpn()
+            failInitialStart(
+                sessionEpoch = sessionEpoch,
+                errorRes = R.string.vpn_permission_revoked_error,
+                logMessage = "Refused to start: VPN permission not granted",
+                postNotification = ::postPermissionRevokedNotification,
+            )
             return
         }
 
-        LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
-        LogRepository.append("Starting VPN service")
+        val announced = synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) {
+                false
+            } else {
+                LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
+                LogRepository.append("Starting VPN service")
+                true
+            }
+        }
+        if (!announced) return
 
         Thread {
             try {
@@ -199,55 +251,125 @@ class XrayVpnService : VpnService() {
                     AppDatabase.get(this@XrayVpnService).profileDao().getById(profileId)
                 }
                 if (profile == null) {
-                    LogRepository.setConnectionState(VpnConnectionState.ERROR)
-                    LogRepository.emitError(R.string.vpn_start_failed_error)
-                    LogRepository.append("Profile not found (id=$profileId)")
-                    stopVpn()
+                    failInitialStart(
+                        sessionEpoch = sessionEpoch,
+                        errorRes = R.string.vpn_start_failed_error,
+                        logMessage = "Profile not found (id=$profileId)",
+                    )
                     return@Thread
                 }
 
-                currentProfileId = profileId
-
                 // Capture the log level for the whole session (survives kill-switch revives).
-                val logFile = File(filesDir, "logs/xray-core.log").apply { parentFile?.mkdirs() }
-                runCatching { logFile.writeText("") }   // truncate once per session
-                sessionLogFile = logFile
-                sessionLog = LogSettings(LogPreferences.getLogLevel(this@XrayVpnService), logFile.absolutePath)
+                val logFile = File(filesDir, "logs/xray-core.log")
+                val initialLog = LogSettings(
+                    LogPreferences.getLogLevel(this@XrayVpnService),
+                    logFile.absolutePath,
+                )
+                val initialized = synchronized(lock) {
+                    if (!isCurrentSessionLocked(sessionEpoch)) {
+                        false
+                    } else {
+                        logFile.parentFile?.mkdirs()
+                        // Truncation is best-effort: a failure must not abort connect, but leave a
+                        // sanitized breadcrumb so operators know core logs may be missing.
+                        runCatching { logFile.writeText("") }
+                            .onFailure {
+                                LogRepository.append(
+                                    "Core log file truncate failed; Xray-core logs may be unavailable this session"
+                                )
+                            }
+                        currentProfileId = profileId
+                        sessionLogFile = logFile
+                        sessionLog = initialLog
+                        true
+                    }
+                }
+                if (!initialized) return@Thread
 
-                bringUpTunnel(profile)
+                bringUpTunnel(
+                    profile = profile,
+                    log = initialLog,
+                    sessionEpoch = sessionEpoch,
+                    expectedState = SessionTunnelState.STARTING,
+                )
                     .onSuccess {
-                        LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
-                        sessionLogFile?.let { f ->
-                            if (logTailer == null) { logTailer = XrayCoreLogTailer(f).also { it.start() } }
-                        }
-                        updateNotification(localizedString(R.string.vpn_status_connected))
+                        if (!isCurrentSession(sessionEpoch)) return@onSuccess
                         val prefs = KillSwitchRepository.load(this@XrayVpnService)
-                        applyKillSwitchPreferences(prefs)
-                        settingsObserverJob?.cancel()
-                        settingsObserverJob = serviceScope.launch {
-                            KillSwitchRepository.state.collect { newPrefs ->
-                                applyKillSwitchPreferences(newPrefs)
+                        val committed = synchronized(lock) {
+                            if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.STARTING)) {
+                                false
+                            } else {
+                                sessionLogFile?.let { f ->
+                                    if (logTailer == null) {
+                                        logTailer = XrayCoreLogTailer(f).also { it.start() }
+                                    }
+                                }
+                                sessionTunnelState = SessionTunnelState.CONNECTED
+                                LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                                updateNotification(localizedString(R.string.vpn_status_connected))
+                                applyKillSwitchPreferences(prefs, sessionEpoch)
+                                settingsObserverJob?.cancel()
+                                settingsObserverJob = serviceScope.launch {
+                                    KillSwitchRepository.state.collect { newPrefs ->
+                                        if (isCurrentSession(sessionEpoch)) {
+                                            applyKillSwitchPreferences(newPrefs, sessionEpoch)
+                                        }
+                                    }
+                                }
+                                true
                             }
                         }
+                        if (!committed) return@onSuccess
                     }
                     .onFailure { error ->
-                        LogRepository.setConnectionState(VpnConnectionState.ERROR)
-                        LogRepository.emitError(R.string.vpn_start_failed_error)
-                        LogRepository.append("Xray start failed: ${error.message}")
-                        stopVpn()
+                        failInitialStart(
+                            sessionEpoch = sessionEpoch,
+                            errorRes = R.string.vpn_start_failed_error,
+                            logMessage = "Xray start failed: ${error.message}",
+                        )
                     }
             } catch (error: Throwable) {
-                LogRepository.setConnectionState(VpnConnectionState.ERROR)
-                LogRepository.emitError(R.string.vpn_start_failed_error)
-                LogRepository.append("VPN start failed: ${error.message}")
-                stopVpn()
+                failInitialStart(
+                    sessionEpoch = sessionEpoch,
+                    errorRes = R.string.vpn_start_failed_error,
+                    logMessage = "VPN start failed: ${error.message}",
+                )
             }
         }.start()
     }
 
-    private fun bringUpTunnel(profile: Profile): Result<Unit> {
+    private fun failInitialStart(
+        sessionEpoch: Long,
+        @StringRes errorRes: Int,
+        logMessage: String,
+        postNotification: (() -> Unit)? = null,
+    ) {
+        val shouldStop = synchronized(lock) {
+            if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.STARTING)) {
+                false
+            } else {
+                LogRepository.setConnectionState(VpnConnectionState.ERROR)
+                LogRepository.emitError(errorRes)
+                LogRepository.append(logMessage)
+                postNotification?.invoke()
+                true
+            }
+        }
+        if (shouldStop) stopVpn(expectedSessionEpoch = sessionEpoch)
+    }
+
+    private fun bringUpTunnel(
+        profile: Profile,
+        log: LogSettings,
+        sessionEpoch: Long,
+        expectedState: SessionTunnelState,
+    ): Result<Unit> {
         return runCatching {
-            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, sessionLog)
+            val ownsTransition = synchronized(lock) {
+                ownsTunnelTransitionLocked(sessionEpoch, expectedState)
+            }
+            if (!ownsTransition) throw StaleSessionException()
+            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, log)
 
             val geoAssetDir = GeoAssetPreparer.prepare(this)
                 .getOrElse { error ->
@@ -286,26 +408,37 @@ class XrayVpnService : VpnService() {
                 }
             }
 
-            val pfd = builder.establish()
-                ?: throw IllegalStateException("VpnService.establish() returned null")
+            // Serialise ownership of the global TUN/Xray bridge with full stop and the next
+            // session admission. A stale starter is rejected before it can publish resources.
+            synchronized(lock) {
+                if (!ownsTunnelTransitionLocked(sessionEpoch, expectedState)) {
+                    throw StaleSessionException()
+                }
+                check(tunInterface == null) {
+                    "Cannot establish a tunnel while the active transition already owns a TUN interface"
+                }
 
-            tunInterface = pfd
-            val fd = pfd.fd
-            LogRepository.append("TUN established with fd=$fd")
-            LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
+                val pfd = builder.establish()
+                    ?: throw IllegalStateException("VpnService.establish() returned null")
 
-            // Loop-avoidance: Xray's own sockets bypass the tun via protect().
-            // Must succeed before Xray dials, or (with self-exclusion removed in
-            // Task 2) the proxy socket would route into the tun and loop. getOrThrow()
-            // also surfaces a controller-install failure from the Go bridge.
-            XrayBridge.registerProtector(this@XrayVpnService).getOrThrow()
+                tunInterface = pfd
+                val fd = pfd.fd
+                LogRepository.append("TUN established with fd=$fd")
+                LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
 
-            XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
-            LogRepository.append("Xray core started")
+                // Loop-avoidance: Xray's own sockets bypass the tun via protect().
+                // Must succeed before Xray dials, or (with self-exclusion removed in
+                // Task 2) the proxy socket would route into the tun and loop. getOrThrow()
+                // also surfaces a controller-install failure from the Go bridge.
+                XrayBridge.registerProtector(this@XrayVpnService).getOrThrow()
+
+                XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
+                LogRepository.append("Xray core started")
+            }
         }
     }
 
-    private fun tearDownTunnel() {
+    private fun tearDownTunnelLocked() {
         XrayBridge.stopXray().onFailure { error ->
             LogRepository.append("Xray stop warning: ${error.message}")
         }
@@ -318,117 +451,179 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun killTunnel(triggerPackageLabel: String) {
+    private fun killTunnel(sessionEpoch: Long, triggerPackageLabel: String) {
         tunnelOpScope.launch {
-            LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
             try {
-                tearDownTunnel()
-                // State first, then the notification: notify() is a silent no-op when
-                // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
-                // correct even if the exposed-notification build ever throws.
-                LogRepository.setConnectionState(VpnConnectionState.PAUSED)
-                lastTriggerLabel = triggerPackageLabel
-                // Quiet, persistent FGS notification (id 1101, low channel) drops to a
-                // paused status line; the loud heads-up exposed alert is a SEPARATE
-                // notification on the high channel (id 1103) so it can actually alert.
-                updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
-                VpnNotifications.postExposed(
-                    this@XrayVpnService,
-                    triggerPackageLabel,
-                    notificationDismissIntent()
-                )
+                synchronized(lock) {
+                    if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.CONNECTED)) {
+                        return@launch
+                    }
+                    LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
+                    tearDownTunnelLocked()
+                    sessionTunnelState = SessionTunnelState.PAUSED
+                    // State first, then the notification: notify() is a silent no-op when
+                    // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
+                    // correct even if the exposed-notification build ever throws.
+                    LogRepository.setConnectionState(VpnConnectionState.PAUSED)
+                    lastTriggerLabel = triggerPackageLabel
+                    // Quiet, persistent FGS notification (id 1101, low channel) drops to a
+                    // paused status line; the loud heads-up exposed alert is a SEPARATE
+                    // notification on the high channel (id 1103) so it can actually alert.
+                    updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
+                    VpnNotifications.postExposed(
+                        this@XrayVpnService,
+                        triggerPackageLabel,
+                        notificationDismissIntent()
+                    )
+                }
             } catch (error: Throwable) {
-                LogRepository.append("killTunnel failed: ${error.message}")
+                failKillSwitch(sessionEpoch, "killTunnel failed: ${error.message}")
+            }
+        }
+    }
+
+    private fun failKillSwitch(sessionEpoch: Long, logMessage: String) {
+        val shouldStop = synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) {
+                false
+            } else {
+                LogRepository.append(logMessage)
                 LogRepository.setConnectionState(VpnConnectionState.ERROR)
                 LogRepository.emitError(R.string.vpn_revive_error)
-                stopVpn()
+                true
             }
         }
+        if (shouldStop) stopVpn(expectedSessionEpoch = sessionEpoch)
     }
 
-    private fun reviveTunnel() {
+    private fun reviveTunnel(sessionEpoch: Long) {
         tunnelOpScope.launch {
-            val profileId = currentProfileId
-            if (profileId == -1L) {
-                LogRepository.append("reviveTunnel: no current profile, cannot revive")
-                stopVpn()
+            val session = synchronized(lock) {
+                if (!canReserveRevive(
+                        running = running,
+                        activeSessionEpoch = activeSessionEpoch,
+                        callbackSessionEpoch = sessionEpoch,
+                        tunnelState = sessionTunnelState,
+                    )
+                ) {
+                    null
+                } else {
+                    // Reserve PAUSED → REVIVING before any async DB/config work. A duplicate
+                    // same-epoch revive now observes REVIVING and returns without establishing.
+                    sessionTunnelState = SessionTunnelState.REVIVING
+                    SessionContext(sessionEpoch, currentProfileId, sessionLog)
+                }
+            } ?: return@launch
+            if (session.profileId == -1L) {
+                failRevive(session.epoch, "reviveTunnel: no current profile, cannot revive")
                 return@launch
             }
-            LogRepository.append("Kill-switch: reviving tunnel for profile id=$profileId")
-            val profile = AppDatabase.get(this@XrayVpnService).profileDao().getById(profileId)
+            if (!isCurrentSession(session.epoch)) return@launch
+            LogRepository.append("Kill-switch: reviving tunnel for profile id=${session.profileId}")
+            val profile = AppDatabase.get(this@XrayVpnService).profileDao().getById(session.profileId)
             if (profile == null) {
-                LogRepository.append("reviveTunnel: profile $profileId not found")
-                LogRepository.emitError(R.string.vpn_revive_error)
-                postReviveErrorNotification()
-                stopVpn()
+                failRevive(session.epoch, "reviveTunnel: profile ${session.profileId} not found")
                 return@launch
             }
-            bringUpTunnel(profile)
+            bringUpTunnel(
+                profile = profile,
+                log = session.log,
+                sessionEpoch = session.epoch,
+                expectedState = SessionTunnelState.REVIVING,
+            )
                 .onSuccess {
-                    LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
-                    // Dismiss the separate exposed heads-up; restore the connected status.
-                    VpnNotifications.cancelExposed(this@XrayVpnService)
-                    updateNotification(localizedString(R.string.vpn_status_connected))
+                    synchronized(lock) {
+                        if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.REVIVING)) {
+                            return@onSuccess
+                        }
+                        sessionTunnelState = SessionTunnelState.CONNECTED
+                        LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                        // Dismiss the separate exposed heads-up; restore the connected status.
+                        VpnNotifications.cancelExposed(this@XrayVpnService)
+                        updateNotification(localizedString(R.string.vpn_status_connected))
+                    }
                 }
                 .onFailure { error ->
-                    LogRepository.append("reviveTunnel failed: ${error.message}")
-                    LogRepository.emitError(R.string.vpn_revive_error)
-                    postReviveErrorNotification()
-                    stopVpn()
+                    failRevive(session.epoch, "reviveTunnel failed: ${error.message}")
                 }
         }
     }
 
-    private inner class KillSwitchListener : ForegroundAppMonitor.Listener {
+    private fun failRevive(sessionEpoch: Long, logMessage: String) {
+        val shouldStop = synchronized(lock) {
+            if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.REVIVING)) {
+                false
+            } else {
+                LogRepository.append(logMessage)
+                LogRepository.emitError(R.string.vpn_revive_error)
+                postReviveErrorNotification()
+                true
+            }
+        }
+        if (shouldStop) stopVpn(expectedSessionEpoch = sessionEpoch)
+    }
+
+    private inner class KillSwitchListener(
+        private val sessionEpoch: Long,
+    ) : ForegroundAppMonitor.Listener {
         override fun onControlledAppForeground(packageName: String) {
             val label = runCatching {
                 val pm = packageManager
                 pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
             }.getOrElse { packageName }
-            killTunnel(label)
+            killTunnel(sessionEpoch, label)
         }
 
         override fun onControlledAppLeftForeground() {
-            reviveTunnel()
+            reviveTunnel(sessionEpoch)
         }
     }
 
-    private fun applyKillSwitchPreferences(prefs: KillSwitchRepository.Preferences) {
-        val shouldRun = prefs.enabled && prefs.packages.isNotEmpty() && running
+    private fun applyKillSwitchPreferences(
+        prefs: KillSwitchRepository.Preferences,
+        sessionEpoch: Long,
+    ) {
+        synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) return
+            val shouldRun = prefs.enabled && prefs.packages.isNotEmpty()
 
-        if (!shouldRun) {
-            val wasPaused = LogRepository.connectionState.value == VpnConnectionState.PAUSED
-            killSwitchMonitor?.stop()
-            killSwitchMonitor = null
-            unregisterScreenReceiver()
-            // If the user disabled the feature (or cleared all packages) while
-            // the tunnel was paused, restore the tunnel. Without this the user
-            // has to manually stop+restart the VPN to recover.
-            if (wasPaused && running) {
-                reviveTunnel()
+            if (!shouldRun) {
+                val wasPaused = LogRepository.connectionState.value == VpnConnectionState.PAUSED
+                killSwitchMonitor?.stop()
+                killSwitchMonitor = null
+                unregisterScreenReceiver()
+                // If the user disabled the feature (or cleared all packages) while
+                // the tunnel was paused, restore the tunnel. Without this the user
+                // has to manually stop+restart the VPN to recover.
+                if (wasPaused) {
+                    reviveTunnel(sessionEpoch)
+                }
+                return
             }
-            return
-        }
 
-        if (killSwitchMonitor == null) {
-            val source = AndroidUsageStatsEventSource(this)
-            val monitor = UsageStatsForegroundAppMonitor(source)
-            killSwitchMonitor = monitor
-            monitor.start(prefs.packages, KillSwitchListener())
-            registerScreenReceiver()
-            LogRepository.append("Kill-switch monitor started with ${prefs.packages.size} package(s)")
-        } else {
-            killSwitchMonitor?.updatePackages(prefs.packages)
+            if (killSwitchMonitor == null) {
+                val source = AndroidUsageStatsEventSource(this)
+                val monitor = UsageStatsForegroundAppMonitor(source)
+                killSwitchMonitor = monitor
+                monitor.start(prefs.packages, KillSwitchListener(sessionEpoch))
+                registerScreenReceiver(sessionEpoch)
+                LogRepository.append("Kill-switch monitor started with ${prefs.packages.size} package(s)")
+            } else {
+                killSwitchMonitor?.updatePackages(prefs.packages)
+            }
         }
     }
 
-    private fun registerScreenReceiver() {
+    private fun registerScreenReceiver(sessionEpoch: Long) {
         if (screenReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
-                    Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                synchronized(lock) {
+                    if (!isCurrentSessionLocked(sessionEpoch)) return
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
+                        Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                    }
                 }
             }
         }
@@ -451,35 +646,46 @@ class XrayVpnService : VpnService() {
         screenReceiver = null
     }
 
-    private fun stopVpn() {
-        val shouldStop: Boolean
+    private fun stopVpn(expectedSessionEpoch: Long? = null) {
         synchronized(lock) {
-            shouldStop = running
+            if (expectedSessionEpoch != null && !isCurrentSessionLocked(expectedSessionEpoch)) return
+
+            val shouldStop = running
             running = false
-        }
-        if (!shouldStop && tunInterface == null) {
+            activeSessionEpoch = null
+            sessionTunnelState = SessionTunnelState.STOPPED
+            // Keep stop, global TUN/Xray teardown, and the next start admission under one lock.
+            // This prevents an old full stop from tearing down a newer session's resources.
+            val tailerToStop = logTailer
+            logTailer = null
+
+            if (!shouldStop && tunInterface == null) {
+                // No live session and no TUN yet — still stop any tailer we extracted
+                // defensively and exit cleanly.
+                tailerToStop?.stop()
+                stopSelf()
+                return
+            }
+
+            tailerToStop?.stop()
+
+            killSwitchMonitor?.stop()
+            killSwitchMonitor = null
+            settingsObserverJob?.cancel()
+            settingsObserverJob = null
+            unregisterScreenReceiver()
+
+            tearDownTunnelLocked()
+
+            currentProfileId = -1L
+            sessionLogFile = null
+            LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
+            LogRepository.append("VPN stopped")
+            // The exposed alert is a separate notification id; stopForeground won't remove it.
+            VpnNotifications.cancelExposed(this)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            return
         }
-
-        logTailer?.stop()
-        logTailer = null
-
-        killSwitchMonitor?.stop()
-        killSwitchMonitor = null
-        settingsObserverJob?.cancel()
-        settingsObserverJob = null
-        unregisterScreenReceiver()
-
-        tearDownTunnel()
-
-        currentProfileId = -1L
-        LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
-        LogRepository.append("VPN stopped")
-        // The exposed alert is a separate notification id; stopForeground won't remove it.
-        VpnNotifications.cancelExposed(this)
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     /**

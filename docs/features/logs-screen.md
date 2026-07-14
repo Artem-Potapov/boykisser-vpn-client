@@ -95,7 +95,12 @@ data class LogSettings(val level: XrayLogLevel, val errorFilePath: String?)
 
 ```kotlin
 val logFile = File(filesDir, "logs/xray-core.log").apply { parentFile?.mkdirs() }
-runCatching { logFile.writeText("") }   // truncate once per session
+runCatching { logFile.writeText("") }   // truncate once per session (best-effort)
+    .onFailure {
+        LogRepository.append(
+            "Core log file truncate failed; Xray-core logs may be unavailable this session"
+        )
+    }
 sessionLogFile = logFile
 sessionLog = LogSettings(LogPreferences.getLogLevel(this@XrayVpnService), logFile.absolutePath)
 ```
@@ -108,10 +113,20 @@ keeps appending to the same file.
 
 [`log/XrayCoreLogTailer.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/XrayCoreLogTailer.kt)
 polls that file on a `Dispatchers.IO` coroutine every **400 ms** (`POLL_MS`), tracking a byte offset so
-it only reads newly-appended bytes (`RandomAccessFile.seek(offset)`), buffers a partial trailing line in
-a `StringBuilder` `carry`, and emits only complete (`\n`-terminated) lines to `LogRepository.append(...)`.
-If the file shrinks between polls (rotation or the core reopening it truncated) the offset resets to 0
-and the carry buffer is cleared — this is the only case that re-reads from the start.
+it only reads newly-appended bytes (`RandomAccessFile.seek(offset)`). Each poll reads at most
+`MAX_READ_PER_POLL` (64 KiB) into a **fixed** buffer — it never allocates `ByteArray(len - offset)`
+for an arbitrarily large append. Incomplete lines are held as raw bytes by
+[`BoundedLogLineAccumulator`](../../app/src/main/java/com/justme/xtls_core_proxy/log/BoundedLogLineAccumulator.kt)
+(capped at `MAX_PENDING_LINE_BYTES` = 64 KiB); decoding to UTF-8 happens only for complete
+(`\n`-terminated) lines, so a multibyte character split across poll/chunk boundaries is never forced
+through a partial decode (no spurious U+FFFD). If the file shrinks between polls (rotation or the
+core reopening it truncated) the offset resets to 0 and the accumulator is `reset()` — this is the
+only case that re-reads from the start.
+
+**Overflow policy (deterministic, non-secret-leaking):** if an unterminated pending line would exceed
+`MAX_PENDING_LINE_BYTES`, the pending bytes are discarded and further input is skipped until the next
+`\n` (resync). The oversized fragment is **never emitted**, including as a truncated prefix — so a
+malformed/oversized line cannot retain or leak secrets through the log path.
 
 Each emitted line is first passed through `stripXrayTimestamp`, which strips Xray's own leading
 `2006/01/02 15:04:05(.000000)`-style stamp via a regex
@@ -119,20 +134,53 @@ Each emitted line is first passed through `stripXrayTimestamp`, which strips Xra
 which stamps its **own** `HH:mm:ss.SSS` timestamp — this avoids every Xray-core line showing two
 timestamps. Non-matching lines pass through unchanged.
 
-`XrayVpnService` starts the tailer in `startVpn`'s success path, guarded so a revive doesn't spawn a
-second one:
+`XrayVpnService` assigns a monotonically increasing **session epoch** under its lifecycle `lock` when
+`startVpn` admits a fresh connection. A background initial-start callback owns only the epoch captured
+at admission; `running` alone is not sufficient because a full stop can be followed by another start
+before that callback arrives. `stopVpn` clears the active epoch under the same lock before teardown.
+
+The tailer starts only when `running` is true **and** the callback epoch equals the active epoch.
+The same identity guard applies to initial-start failure state/errors, CONNECTED, notification,
+kill-switch monitor/observer installation, and their stale callbacks. Global TUN/Xray startup and
+full teardown also run under the lifecycle lock, so a stale session cannot publish or tear down a
+newer session's resources. The active session also owns an explicit tunnel transition state:
+`STARTING → CONNECTED → PAUSED → REVIVING → CONNECTED`; full stop resets it to `STOPPED`. A revive
+atomically reserves `PAUSED → REVIVING` before its asynchronous database/config work, so a duplicate
+same-epoch request sees `REVIVING` and does nothing. Before `Builder.establish()`, the service requires
+both the matching epoch/expected transition and `tunInterface == null`.
 
 ```kotlin
-sessionLogFile?.let { f ->
-    if (logTailer == null) { logTailer = XrayCoreLogTailer(f).also { it.start() } }
+bringUpTunnel(
+    profile = profile,
+    log = initialLog,
+    sessionEpoch = sessionEpoch,
+    expectedState = SessionTunnelState.STARTING,
+).onSuccess {
+    val committed = synchronized(lock) {
+        if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.STARTING)) {
+            false
+        } else {
+            sessionLogFile?.let { f ->
+                if (logTailer == null) {
+                    logTailer = XrayCoreLogTailer(f).also { it.start() }
+                }
+            }
+            sessionTunnelState = SessionTunnelState.CONNECTED
+            true
+        }
+    }
+    if (!committed) return@onSuccess // stale callback never tears down another session
 }
 ```
 
-and stops it only in `stopVpn()` (`logTailer?.stop(); logTailer = null`) — **not** in the kill-switch
-pause path (`killTunnel`). This is deliberate: the tailer (and the underlying log file) survive
+`stopVpn` extracts and stops `logTailer` under that same lock (`tailerToStop = logTailer;
+logTailer = null`) — **not** in the kill-switch pause path (`killTunnel` /
+`tearDownTunnelLocked`). This is deliberate: the tailer (and the underlying log file) survive
 kill-switch pause/revive, so log lines continue flowing to the same `LogRepository` buffer across a
-pause — only a full VPN stop tears the tailer down. `XrayCoreLogTailer`'s own class doc states this
-explicitly: "Deliberately survives kill-switch pause/revive."
+pause — only a full VPN stop tears the tailer down. The kill-switch listener/revive callback carries
+that same session epoch and reuses its captured `LogSettings`, so revive remains part of the original
+session and cannot adopt a newer session's profile or log posture. `XrayCoreLogTailer`'s own class
+doc states this explicitly: "Deliberately survives kill-switch pause/revive."
 
 ## Session-stable log level
 
@@ -146,18 +194,20 @@ The log level a connection runs with is captured **once**, in `startVpn`, from
 sessionLog = LogSettings(LogPreferences.getLogLevel(this@XrayVpnService), logFile.absolutePath)
 ```
 
-`bringUpTunnel(profile)` always builds the runtime config with this captured `sessionLog`:
+`bringUpTunnel(...)` receives this captured session log posture (the initial call passes
+`initialLog`; revive passes its captured session value) and always builds the runtime config with it:
 
 ```kotlin
-val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, sessionLog)
+val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, log)
 ```
 
-Because `reviveTunnel()` calls the same `bringUpTunnel(profile)` (not `startVpn`), a kill-switch
-pause/revive cycle reuses `sessionLog` unchanged — **the level cannot change mid-session**, even if the
-user opens the Logs screen and picks a different level while connected. A level change made in the UI
-only takes effect on the **next** `startVpn` call (i.e. the next full connect), because that's the only
-place `sessionLog` is re-derived from the persisted preference. This is the load-bearing invariant
-behind the Logs screen's "Applies from the next connection" caption (see below).
+Because `reviveTunnel()` calls `bringUpTunnel(...)` with the same captured log posture (not
+`startVpn`), a kill-switch pause/revive cycle reuses `sessionLog` unchanged — **the level cannot change
+mid-session**, even if the user opens the Logs screen and picks a different level while connected. A
+level change made in the UI only takes effect on the **next** `startVpn` call (i.e. the next full
+connect), because that's the only place `sessionLog` is re-derived from the persisted preference. This
+is the load-bearing invariant behind the Logs screen's "Applies from the next connection" caption (see
+below).
 
 ## The redaction boundary
 
@@ -248,19 +298,24 @@ fact about this screen:
 | [`config/LogSettings.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/LogSettings.kt) | `XrayLogLevel` enum (`wire` strings, `fromName` fallback to `WARNING`); `LogSettings(level, errorFilePath)`. |
 | [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | `buildRuntimeConfig(input, log = LogSettings(WARNING, null))` ends with private `forceLog`, which overwrites (not merges) the config's `log` object; `toPingTestConfig` forces `LogSettings(NONE, null)`. |
 | [`log/LogPreferences.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogPreferences.kt) | `xray_prefs`-backed `getLogLevel`/`setLogLevel`, `getBufferLines`/`setBufferLines`, `BUFFER_PRESETS`, `DEFAULT_BUFFER`. |
-| [`log/XrayCoreLogTailer.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/XrayCoreLogTailer.kt) | Polls the log file every 400 ms, tracks byte offset, resets on shrink, strips Xray's own timestamp, feeds `LogRepository.append`. |
+| [`log/XrayCoreLogTailer.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/XrayCoreLogTailer.kt) | Polls the log file every 400 ms (≤64 KiB/poll fixed buffer), tracks byte offset, resets on shrink, strips Xray's own timestamp, feeds `LogRepository.append`. Catches only `IOException` (rethrows `CancellationException`). |
+| [`log/BoundedLogLineAccumulator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/BoundedLogLineAccumulator.kt) | Byte-oriented complete-line splitter; UTF-8 decode only after `\n`; discard-until-newline on pending overflow (>64 KiB). |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `maxLines` (default 5000) + `setMaxLines` (coerce `[100, 50_000]`, immediate trim); `append` timestamps + redacts (UUID / `publicKey` / `shortId`) every line; `logs: StateFlow<List<String>>`. |
-| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, starts `logTailer` on first successful `bringUpTunnel`; `stopVpn` stops+clears `logTailer` (kill-switch pause does not). |
+| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity rule: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, Clear toolbar action, Copy/Share/Export overflow menu, level selector dialog (persist-only), buffer selector dialog (live). |
 
 ## Error handling
 
-- **Log file creation/truncation is best-effort.** `runCatching { logFile.writeText("") }` swallows any
-  IO failure (e.g. storage pressure) rather than aborting the connect — a missing/unwritable log file
-  degrades to "no Xray-core log lines this session," not a failed connection.
+- **Log file creation/truncation is best-effort.** `runCatching { logFile.writeText("") }` does not
+  abort the connect on IO failure (e.g. storage pressure) — a missing/unwritable log file degrades to
+  "no Xray-core log lines this session," not a failed connection. On failure the service appends a
+  sanitized `LogRepository` breadcrumb (`"Core log file truncate failed; Xray-core logs may be
+  unavailable this session"`) with no path or exception detail.
 - **Tailer IO errors are transient and retried.** `XrayCoreLogTailer.start()`'s poll loop catches
-  `Throwable` around each read attempt (file being written/rotated concurrently) and simply retries on
-  the next 400 ms tick; it never crashes the coroutine or the service.
+  `IOException` around each read attempt (file being written/rotated concurrently) and simply retries
+  on the next 400 ms tick; `CancellationException` is rethrown so `stop()` cancels cleanly. It does
+  **not** swallow `Error` / arbitrary `Throwable`.
 - **Unknown/corrupted persisted level falls back to `WARNING`**, not a crash or `NONE` — `fromName`'s
   `firstOrNull { it.name == name } ?: WARNING`.
 
@@ -278,10 +333,26 @@ fact about this screen:
 
 ## Testing
 
-- No dedicated JUnit4 suite exists yet for `XrayCoreLogTailer.stripXrayTimestamp` or
-  `LogRepository.setMaxLines`'s coercion — verify these paths on-device (Debug level while connected
-  shows chatty Xray-core output with single, correctly-formatted timestamps; buffer preset changes trim
-  the visible list immediately).
+- **JUnit4 (JVM)** — `app/src/test/.../log/XrayCoreLogTailerTest.kt`:
+  - `stripXrayTimestamp` — strips micros / no-micros stamps; leaves untimestamped lines unchanged.
+  - `BoundedLogLineAccumulator` — partial lines do not emit until `\n`; a UTF-8 multibyte character
+    split across accepts round-trips correctly; oversized unterminated input follows the
+    discard-until-newline policy and never emits a truncated secret prefix.
+- **JUnit4 (JVM)** — `app/src/test/.../log/LogRepositoryBufferTest.kt`: `setMaxLines` coerces into
+  `[100, 50_000]`, trims the current buffer immediately, and caps subsequent `append`s.
+- **JUnit4 (JVM)** — `app/src/test/.../LogSettingsTest.kt`: `XrayLogLevel.fromName` parses known
+  names and falls back to `WARNING` for unknown/`null`. (`LogPreferences` itself needs Android
+  `SharedPreferences`, so there is no fabricated JVM persistence fake — wire-level enum parsing is
+  what the JVM suite covers.)
+- **JUnit4 (JVM)** — `app/src/test/.../vpn/SessionLifecycleDecisionTest.kt`: matching active epoch
+  accepts a lifecycle callback; a callback from an earlier session is rejected even when a later
+  session is running; stopped sessions reject matching callbacks. It also verifies that a matching
+  `PAUSED` session accepts one revive reservation, while `REVIVING`, stale-epoch, and stopped sessions
+  reject it. Android service/TUN/Xray scheduling itself remains integration behavior, so this suite
+  tests the extracted identity/transition decision rather than fabricating a JVM `VpnService`.
+- **JUnit4 (JVM)** — `ConfigBuilderTest` forces the `log` object (including hard-coded `access =
+  "none"`) for VLESS, Hysteria2 URI, and raw-JSON overwrite paths; `toPingTestConfig` forces
+  `NONE` with no `error` key.
 - **On-device (manual)**: set level = Debug, connect, confirm Xray-core lines appear; change level while
   connected, confirm the running session is unaffected, then disconnect/reconnect and confirm the new
   level takes effect; trigger kill-switch pause/revive and confirm log lines keep flowing to the same

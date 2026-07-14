@@ -440,15 +440,33 @@ class ConfigBuilderTest {
         val log = JSONObject(out).getJSONObject("log")
         assertEquals("debug", log.getString("loglevel"))
         assertEquals("/data/x/logs/xray-core.log", log.getString("error"))
+        assertEquals("none", log.getString("access"))
+    }
+
+    @Test
+    fun buildRuntimeConfig_forcesLogObject_onHysteria2Uri() {
+        val uri = "hysteria2://secret@example.com:443/?sni=cdn.example.com"
+        val out = ConfigBuilder.buildRuntimeConfig(
+            uri,
+            LogSettings(XrayLogLevel.INFO, "/data/x/logs/xray-core.log")
+        )
+        val log = JSONObject(out).getJSONObject("log")
+        assertEquals("info", log.getString("loglevel"))
+        assertEquals("/data/x/logs/xray-core.log", log.getString("error"))
+        // forceLog overwrites the whole log object — access is hard-coded "none", not merged.
+        assertEquals("none", log.getString("access"))
+        assertEquals(3, log.length()) // only access + loglevel + error
     }
 
     @Test
     fun buildRuntimeConfig_forcesLogObject_onRawJson_overwritingPastedLog() {
-        val pasted = """{"log":{"loglevel":"info","error":"/evil/path"},"outbounds":[{"protocol":"freedom"}]}"""
+        val pasted = """{"log":{"loglevel":"info","error":"/evil/path","access":"/evil/access"},"outbounds":[{"protocol":"freedom"}]}"""
         val out = ConfigBuilder.buildRuntimeConfig(pasted, LogSettings(XrayLogLevel.ERROR, "/safe/log"))
         val log = JSONObject(out).getJSONObject("log")
         assertEquals("error", log.getString("loglevel"))
         assertEquals("/safe/log", log.getString("error"))   // pasted /evil/path overwritten
+        assertEquals("none", log.getString("access"))       // pasted access overwritten
+        assertEquals(3, log.length()) // replacement contains only access + loglevel + error
     }
 
     @Test
