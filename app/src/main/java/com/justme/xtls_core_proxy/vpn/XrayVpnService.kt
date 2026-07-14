@@ -72,6 +72,13 @@ class XrayVpnService : VpnService() {
     private var activeSessionEpoch: Long? = null
     private var sessionTunnelState = SessionTunnelState.STOPPED
 
+    // Lock-free mirror of activeSessionEpoch (authored ONLY under `lock`, when activeSessionEpoch is
+    // set/cleared). The screen-state BroadcastReceiver reads this to answer "is this still the current
+    // session?" without taking the full lifecycle lock on the main thread. It is a best-effort hint:
+    // the receiver only decides whether to enqueue lightweight polling pause/resume, and the monitor's
+    // own state machine is the source of truth. `lock` remains the authority for all session mutation.
+    @Volatile private var activeEpochVolatile: Long? = null
+
     @Volatile private var currentProfileId: Long = -1L
 
     // Captured ONCE per connection in startVpn(); reused by bringUpTunnel() on the initial
@@ -83,6 +90,11 @@ class XrayVpnService : VpnService() {
     // Last controlled-app label that triggered the exposed state; used to rebuild the
     // exposed notification if the user swipes it away while paused.
     @Volatile private var lastTriggerLabel: String = ""
+
+    // A kill-switch event that landed while a revive was in flight (state REVIVING) is deferred
+    // here instead of being dropped, then replayed once the revive commits CONNECTED. Mutated only
+    // under `lock`. Cleared on replay and on full-stop teardown so it never leaks across sessions.
+    private var pendingKillLabel: String? = null
 
     private var killSwitchMonitor: UsageStatsForegroundAppMonitor? = null
     private var screenReceiver: BroadcastReceiver? = null
@@ -129,7 +141,15 @@ class XrayVpnService : VpnService() {
         when (val decision = StartCommandDecision.decide(intent?.action, profileId)) {
             is StartCommandDecision.StartProfile -> startVpn(decision.profileId)
             StartCommandDecision.StartActiveProfile -> resolveActiveAndStart()
-            StartCommandDecision.Stop -> stopVpn()
+            StartCommandDecision.Stop ->
+                // User-initiated stop. Route through tunnelOpScope instead of running the blocking
+                // stopVpn (Xray/TUN teardown, plus contention on the lock a connect holds across the
+                // seconds-long XrayBridge.startXray) on the main thread — a Disconnect during a connect
+                // would otherwise freeze the UI / risk an ANR. limitedParallelism(1) serializes this
+                // behind any in-flight kill/revive; stopVpn (no expected epoch) then tears down whatever
+                // session is current, so a stop landing mid-start still reliably stops the tunnel.
+                // onDestroy/onRevoke keep the SYNCHRONOUS stopVpn where teardown must complete inline.
+                tunnelOpScope.launch { stopVpn() }
             StartCommandDecision.RepostNotification -> {
                 // User swiped the ongoing notification (allowed on Android 14+). Re-post it
                 // so the connected/exposed status stays visible while the VPN runs; if we are
@@ -199,6 +219,7 @@ class XrayVpnService : VpnService() {
             running = true
             nextSessionEpoch += 1
             activeSessionEpoch = nextSessionEpoch
+            activeEpochVolatile = nextSessionEpoch
             sessionTunnelState = SessionTunnelState.STARTING
             nextSessionEpoch
         }
@@ -456,6 +477,23 @@ class XrayVpnService : VpnService() {
             try {
                 synchronized(lock) {
                     if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.CONNECTED)) {
+                        // A kill can only tear down a CONNECTED tunnel. If the same session is
+                        // mid-revive, DEFER the event (record it, replay after the revive commits)
+                        // rather than dropping it — the foreground monitor is edge-triggered and
+                        // would never re-fire this safety event. Any other state (stale epoch,
+                        // stopped, already paused) has nothing to defer to, so drop as before.
+                        if (shouldDeferKillDuringRevive(
+                                running = running,
+                                activeSessionEpoch = activeSessionEpoch,
+                                callbackSessionEpoch = sessionEpoch,
+                                tunnelState = sessionTunnelState,
+                            )
+                        ) {
+                            pendingKillLabel = triggerPackageLabel
+                            LogRepository.append(
+                                "Kill-switch: deferring kill for $triggerPackageLabel until revive completes"
+                            )
+                        }
                         return@launch
                     }
                     LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
@@ -498,54 +536,70 @@ class XrayVpnService : VpnService() {
 
     private fun reviveTunnel(sessionEpoch: Long) {
         tunnelOpScope.launch {
-            val session = synchronized(lock) {
-                if (!canReserveRevive(
-                        running = running,
-                        activeSessionEpoch = activeSessionEpoch,
-                        callbackSessionEpoch = sessionEpoch,
-                        tunnelState = sessionTunnelState,
-                    )
-                ) {
-                    null
-                } else {
-                    // Reserve PAUSED → REVIVING before any async DB/config work. A duplicate
-                    // same-epoch revive now observes REVIVING and returns without establishing.
-                    sessionTunnelState = SessionTunnelState.REVIVING
-                    SessionContext(sessionEpoch, currentProfileId, sessionLog)
-                }
-            } ?: return@launch
-            if (session.profileId == -1L) {
-                failRevive(session.epoch, "reviveTunnel: no current profile, cannot revive")
-                return@launch
-            }
-            if (!isCurrentSession(session.epoch)) return@launch
-            LogRepository.append("Kill-switch: reviving tunnel for profile id=${session.profileId}")
-            val profile = AppDatabase.get(this@XrayVpnService).profileDao().getById(session.profileId)
-            if (profile == null) {
-                failRevive(session.epoch, "reviveTunnel: profile ${session.profileId} not found")
-                return@launch
-            }
-            bringUpTunnel(
-                profile = profile,
-                log = session.log,
-                sessionEpoch = session.epoch,
-                expectedState = SessionTunnelState.REVIVING,
-            )
-                .onSuccess {
-                    synchronized(lock) {
-                        if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.REVIVING)) {
-                            return@onSuccess
-                        }
-                        sessionTunnelState = SessionTunnelState.CONNECTED
-                        LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
-                        // Dismiss the separate exposed heads-up; restore the connected status.
-                        VpnNotifications.cancelExposed(this@XrayVpnService)
-                        updateNotification(localizedString(R.string.vpn_status_connected))
+            // Mirror killTunnel's guard: revive's async getById/append/bringUpTunnel would otherwise
+            // let an unexpected Throwable escape into the SupervisorJob scope with no handler, which
+            // crashes the process. Route any escape through failRevive (a no-op unless this coroutine
+            // still owns the REVIVING transition for sessionEpoch).
+            try {
+                val session = synchronized(lock) {
+                    if (!canReserveRevive(
+                            running = running,
+                            activeSessionEpoch = activeSessionEpoch,
+                            callbackSessionEpoch = sessionEpoch,
+                            tunnelState = sessionTunnelState,
+                        )
+                    ) {
+                        null
+                    } else {
+                        // Reserve PAUSED → REVIVING before any async DB/config work. A duplicate
+                        // same-epoch revive now observes REVIVING and returns without establishing.
+                        sessionTunnelState = SessionTunnelState.REVIVING
+                        SessionContext(sessionEpoch, currentProfileId, sessionLog)
                     }
+                } ?: return@launch
+                if (session.profileId == -1L) {
+                    failRevive(session.epoch, "reviveTunnel: no current profile, cannot revive")
+                    return@launch
                 }
-                .onFailure { error ->
-                    failRevive(session.epoch, "reviveTunnel failed: ${error.message}")
+                if (!isCurrentSession(session.epoch)) return@launch
+                LogRepository.append("Kill-switch: reviving tunnel for profile id=${session.profileId}")
+                val profile = AppDatabase.get(this@XrayVpnService).profileDao().getById(session.profileId)
+                if (profile == null) {
+                    failRevive(session.epoch, "reviveTunnel: profile ${session.profileId} not found")
+                    return@launch
                 }
+                bringUpTunnel(
+                    profile = profile,
+                    log = session.log,
+                    sessionEpoch = session.epoch,
+                    expectedState = SessionTunnelState.REVIVING,
+                )
+                    .onSuccess {
+                        val replayKillLabel = synchronized(lock) {
+                            if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.REVIVING)) {
+                                return@onSuccess
+                            }
+                            sessionTunnelState = SessionTunnelState.CONNECTED
+                            LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            // Dismiss the separate exposed heads-up; restore the connected status.
+                            VpnNotifications.cancelExposed(this@XrayVpnService)
+                            updateNotification(localizedString(R.string.vpn_status_connected))
+                            // A kill-switch event deferred during this revive must now be replayed
+                            // so the tunnel does not stay CONNECTED with the kill-listed app in the
+                            // foreground. Clear the pending marker under the same lock, then re-run
+                            // the normal kill path (pause + exposed heads-up) for the current epoch.
+                            pendingKillLabel.also { pendingKillLabel = null }
+                        }
+                        if (replayKillLabel != null) {
+                            killTunnel(session.epoch, replayKillLabel)
+                        }
+                    }
+                    .onFailure { error ->
+                        failRevive(session.epoch, "reviveTunnel failed: ${error.message}")
+                    }
+            } catch (error: Throwable) {
+                failRevive(sessionEpoch, "reviveTunnel failed: ${error.message}")
+            }
         }
     }
 
@@ -618,11 +672,22 @@ class XrayVpnService : VpnService() {
         if (screenReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-                synchronized(lock) {
-                    if (!isCurrentSessionLocked(sessionEpoch)) return
-                    when (intent?.action) {
-                        Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
-                        Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                // onReceive runs on the main thread. Do NOT take the lifecycle lock here — a connect
+                // in flight holds it across the blocking XrayBridge.startXray, which would stall the
+                // main thread (ANR risk). Read the lock-free epoch mirror to cheaply reject a stale
+                // session, then enqueue the actual monitor mutation onto tunnelOpScope, where it runs
+                // under the lock and serializes behind any in-flight kill/revive. The monitor field is
+                // re-read and re-checked under the lock there, so this stays race-free.
+                if (activeEpochVolatile != sessionEpoch) return
+                val action = intent?.action ?: return
+                if (action != Intent.ACTION_SCREEN_OFF && action != Intent.ACTION_SCREEN_ON) return
+                tunnelOpScope.launch {
+                    synchronized(lock) {
+                        if (!isCurrentSessionLocked(sessionEpoch)) return@launch
+                        when (action) {
+                            Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
+                            Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                        }
                     }
                 }
             }
@@ -653,7 +718,12 @@ class XrayVpnService : VpnService() {
             val shouldStop = running
             running = false
             activeSessionEpoch = null
+            activeEpochVolatile = null
             sessionTunnelState = SessionTunnelState.STOPPED
+            // Drop any kill-switch event deferred during a revive so it can't replay into a later
+            // session (epoch is invalidated above under the same lock). Cleared on every teardown
+            // path, including the no-live-session early return below.
+            pendingKillLabel = null
             // Keep stop, global TUN/Xray teardown, and the next start admission under one lock.
             // This prevents an old full stop from tearing down a newer session's resources.
             val tailerToStop = logTailer

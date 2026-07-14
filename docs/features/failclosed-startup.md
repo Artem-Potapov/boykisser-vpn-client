@@ -60,7 +60,7 @@ mirroring the existing `TileClickDecision`):
 | --- | --- | --- |
 | `ACTION_START` + valid profile id | `StartProfile(id)` | `startVpn(id)` |
 | `ACTION_START` + sentinel id | `RefuseNoProfile` | error state + `stopSelf()` (pre-existing) |
-| `ACTION_STOP` | `Stop` | `stopVpn()` |
+| `ACTION_STOP` | `Stop` | `tunnelOpScope.launch { stopVpn() }` — user-stop is marshalled OFF the main thread (see note below) |
 | `ACTION_NOTIFICATION_DISMISSED` | `RepostNotification` | `if (running)` marshal `repostOngoingNotification()` onto `tunnelOpScope` (serializes behind in-flight kill/revive writers on the same notification id) `else stopSelf()`; when state is **PAUSED**, restores both the quiet FGS line and the separate exposed heads-up |
 | `null` / anything else | `StartActiveProfile` | resolve active profile, then start |
 
@@ -68,6 +68,28 @@ mirroring the existing `TileClickDecision`):
 last `ACTION_START` (profile id included) and reconnects the same profile. The decision is **total** —
 every concrete action is enumerated — specifically so the Android 14+ `ACTION_NOTIFICATION_DISMISSED`
 start doesn't fall through a catch-all `else` into a spurious auto-connect.
+
+### User-stop runs OFF the main thread
+
+`bringUpTunnel` holds the lifecycle `lock` across the blocking `XrayBridge.startXray` (seconds, with
+geo-file loading). The **user-stop** path (`ACTION_STOP` → `stopVpn()`) previously ran that blocking
+teardown — and contended for the same lock — **on the main thread**, so a Disconnect during a connect
+could freeze the UI or ANR (single lock, so no deadlock — a stall). It is now marshalled onto
+`tunnelOpScope` (`limitedParallelism(1)`), which serializes it behind any in-flight kill/revive.
+`stopVpn()` is still called with **no expected epoch**, so it tears down whatever session is current;
+a stop that lands mid-start still reliably stops the tunnel — either it wins the lock and tears down
+the just-published resources, or the start commits `CONNECTED` first and the epoch-agnostic stop then
+tears that down. Moving the work changes the **thread, not the locking**: `stopVpn` still flips
+`running`/epoch and sets `STOPPED` under `lock`.
+
+**`onDestroy` and `onRevoke` keep the SYNCHRONOUS `stopVpn()`** — those must complete teardown inline
+(the system is destroying the service / revoking permission), so they are deliberately not marshalled.
+
+The screen-state `BroadcastReceiver` (kill-switch screen-off/on polling pause) no longer takes the full
+lock on the main thread either: it reads a `@Volatile` epoch mirror (`activeEpochVolatile`, authored
+only under `lock` alongside `activeSessionEpoch`) to cheaply reject a stale session, then enqueues the
+actual `pausePolling()`/`resumePolling()` onto `tunnelOpScope`, where the monitor field is read and the
+session re-checked under `lock` — race-free, just off the main thread.
 
 ## Components
 

@@ -44,3 +44,24 @@ internal fun canReserveRevive(
     tunnelState = tunnelState,
     expectedState = SessionTunnelState.PAUSED,
 )
+
+/**
+ * Whether a kill-switch event that lands while a revive is in flight must be DEFERRED (recorded and
+ * replayed after the revive commits) rather than dropped. A kill can only tear down a CONNECTED
+ * tunnel; if the same session is mid-revive (`REVIVING`), the event would otherwise be silently and
+ * permanently lost, because the foreground monitor is edge-triggered and never re-fires it. This is
+ * true only for the CURRENT session and only in `REVIVING` — a CONNECTED session kills immediately,
+ * and PAUSED/stale/stopped states have nothing to defer to.
+ */
+internal fun shouldDeferKillDuringRevive(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+): Boolean = ownsTunnelTransition(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+    tunnelState = tunnelState,
+    expectedState = SessionTunnelState.REVIVING,
+)

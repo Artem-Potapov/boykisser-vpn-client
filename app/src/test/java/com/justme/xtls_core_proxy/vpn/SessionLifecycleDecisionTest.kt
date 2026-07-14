@@ -81,4 +81,64 @@ class SessionLifecycleDecisionTest {
             )
         )
     }
+
+    @Test
+    fun currentSessionInReviving_defersKill() {
+        assertTrue(
+            shouldDeferKillDuringRevive(
+                running = true,
+                activeSessionEpoch = 42L,
+                callbackSessionEpoch = 42L,
+                tunnelState = SessionTunnelState.REVIVING,
+            )
+        )
+    }
+
+    @Test
+    fun currentSessionConnected_doesNotDeferKill() {
+        assertFalse(
+            shouldDeferKillDuringRevive(
+                running = true,
+                activeSessionEpoch = 42L,
+                callbackSessionEpoch = 42L,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun currentSessionPaused_doesNotDeferKill() {
+        assertFalse(
+            shouldDeferKillDuringRevive(
+                running = true,
+                activeSessionEpoch = 42L,
+                callbackSessionEpoch = 42L,
+                tunnelState = SessionTunnelState.PAUSED,
+            )
+        )
+    }
+
+    @Test
+    fun staleEpochInReviving_doesNotDeferKill() {
+        assertFalse(
+            shouldDeferKillDuringRevive(
+                running = true,
+                activeSessionEpoch = 43L,
+                callbackSessionEpoch = 42L,
+                tunnelState = SessionTunnelState.REVIVING,
+            )
+        )
+    }
+
+    @Test
+    fun stoppedSessionInReviving_doesNotDeferKill() {
+        assertFalse(
+            shouldDeferKillDuringRevive(
+                running = false,
+                activeSessionEpoch = 42L,
+                callbackSessionEpoch = 42L,
+                tunnelState = SessionTunnelState.REVIVING,
+            )
+        )
+    }
 }

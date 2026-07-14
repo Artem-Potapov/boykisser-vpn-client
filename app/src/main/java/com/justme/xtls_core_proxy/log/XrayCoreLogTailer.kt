@@ -34,7 +34,18 @@ class XrayCoreLogTailer(private val file: File) {
             var offset = 0L
             val readBuf = ByteArray(MAX_READ_PER_POLL)
             val accumulator = BoundedLogLineAccumulator { rawLine ->
-                LogRepository.append(stripXrayTimestamp(rawLine))
+                // Guard the per-line handoff. The IOException retry above is scoped to the file read;
+                // a non-IOException thrown here (a bug in append/regex sanitize) would otherwise escape
+                // the loop and silently kill the tailer coroutine, ending log capture for the session.
+                // Leave a breadcrumb and keep tailing; rethrow cancellation so stop() still cancels.
+                try {
+                    LogRepository.append(stripXrayTimestamp(rawLine))
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (t: Throwable) {
+                    // Best-effort breadcrumb; must not itself escape and re-kill the loop.
+                    runCatching { LogRepository.append("Log line processing failed: ${t.message}") }
+                }
             }
             while (isActive) {
                 try {
