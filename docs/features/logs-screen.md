@@ -155,8 +155,14 @@ the foreground monitor is edge-triggered (`if (previous == newForeground) return
 re-fire it, so the revive would otherwise commit `CONNECTED` with the kill-listed app foregrounded and
 no pause. Instead the label is recorded in `pendingKillLabel` (mutated only under `lock`) and, once the
 revive commits `CONNECTED`, the success path clears it and re-dispatches `killTunnel(epoch, label)` on
-`tunnelOpScope` so the normal pause + exposed heads-up runs. `pendingKillLabel` is cleared in `stopVpn`
-teardown so it can't replay into a later session. The predicate lives in `SessionLifecycleDecision.kt`
+`tunnelOpScope` so the normal pause + exposed heads-up runs. `pendingKillLabel` is cleared on **every**
+path that voids the deferred event: `stopVpn` teardown (so it can't replay into a later session) **and**
+the kill-switch-disable branch of `applyKillSwitchPreferences` (so turning the feature off mid-revive
+doesn't replay a now-stale kill — which, with the monitor already gone, would strand the tunnel `PAUSED`
+with nothing left to revive it). One deliberate trade remains in the replay design: if the kill-listed
+app *leaves* the foreground during the revive window, the commit still replays the deferred kill and the
+tunnel ends `PAUSED` with the exposed heads-up until that app next foregrounds and leaves again —
+fail-closed, and the monitor stays alive. The predicate lives in `SessionLifecycleDecision.kt`
 as `shouldDeferKillDuringRevive(...)` (current session AND `tunnelState == REVIVING`). `reviveTunnel`'s
 coroutine body is wrapped in the same `try/catch(Throwable) → failRevive(...)` shape `killTunnel` uses,
 so an unexpected throw from its `getById`/`append`/`bringUpTunnel` can't escape into the SupervisorJob

@@ -38,6 +38,7 @@ import com.justme.xtls_core_proxy.state.ActiveProfileRepository
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -597,6 +598,11 @@ class XrayVpnService : VpnService() {
                     .onFailure { error ->
                         failRevive(session.epoch, "reviveTunnel failed: ${error.message}")
                     }
+            } catch (ce: CancellationException) {
+                // Structured-concurrency cancellation (e.g. tunnelOpScope.cancel() in onDestroy) must
+                // propagate, not be reported as a revive failure. Unlike killTunnel (whose body has no
+                // suspension points), reviveTunnel suspends at getById, so its catch CAN observe a CE.
+                throw ce
             } catch (error: Throwable) {
                 failRevive(sessionEpoch, "reviveTunnel failed: ${error.message}")
             }
@@ -646,6 +652,11 @@ class XrayVpnService : VpnService() {
                 killSwitchMonitor?.stop()
                 killSwitchMonitor = null
                 unregisterScreenReceiver()
+                // Void any kill deferred during an in-flight revive. The feature is now OFF, so
+                // replaying it when the revive commits would park the tunnel PAUSED for a feature the
+                // user just disabled — and with the monitor gone, no left-foreground event would ever
+                // revive it, stranding the connection until a manual stop/start.
+                pendingKillLabel = null
                 // If the user disabled the feature (or cleared all packages) while
                 // the tunnel was paused, restore the tunnel. Without this the user
                 // has to manually stop+restart the VPN to recover.
