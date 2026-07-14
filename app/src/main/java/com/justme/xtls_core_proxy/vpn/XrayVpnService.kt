@@ -497,6 +497,17 @@ class XrayVpnService : VpnService() {
                         }
                         return@launch
                     }
+                    // The kill-switch subsystem may have been disabled after this event was queued on
+                    // tunnelOpScope (applyKillSwitchPreferences stops + nulls the monitor under the lock).
+                    // Do not tear down a tunnel for a feature that is no longer active — drop the stale
+                    // queued kill. (The defer/replay path can't reach here with a null monitor: the
+                    // disable branch clears pendingKillLabel, so no replay is dispatched.)
+                    if (killSwitchMonitor == null) {
+                        LogRepository.append(
+                            "Kill-switch: ignoring queued kill for $triggerPackageLabel (feature disabled)"
+                        )
+                        return@launch
+                    }
                     LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
                     tearDownTunnelLocked()
                     sessionTunnelState = SessionTunnelState.PAUSED

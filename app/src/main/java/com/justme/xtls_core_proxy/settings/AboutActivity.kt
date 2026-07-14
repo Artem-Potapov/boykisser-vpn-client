@@ -63,7 +63,7 @@ private fun AboutScreen(onBack: () -> Unit) {
             Text(stringResource(R.string.about_purpose), style = MaterialTheme.typography.bodyLarge)
             TextButton(onClick = {
                 context.startActivity(Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://github.com/")))
+                    Uri.parse("https://github.com/Artem-Potapov/boykisser-vpn-client")))
             }) { Text(stringResource(R.string.about_github)) }
             Text(stringResource(R.string.about_license), style = MaterialTheme.typography.bodySmall)
         }
