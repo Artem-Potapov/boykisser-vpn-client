@@ -61,19 +61,19 @@ Reach it via Settings → Diagnostics → Logs.
 - [✔] **(unit-tested too) Buffer size is live:** change the buffer preset to a smaller value → the
   on-screen list trims **immediately** (no reconnect needed).
 - [✔] **Buffer persists:** set a preset, force-stop the app, reopen → the buffer size is remembered.
-- [ ] **(RISK, FIXED — re-verify) Copy/Share at the 10 000-line preset with a long-running Debug
+- [✔] **(RISK, FIXED — re-verify) Copy/Share at the 10 000-line preset with a long-running Debug
   session** → **no crash, VPN stays connected, buffer NOT cleared.** Previously both threw
   `TransactionTooLargeException` and killed the process (tunnel dropped + logs wiped — the two
   consequences you confirmed). Now Copy/Share are byte-bounded (`LogShareBudget`, 256 KiB newest tail):
-  - [ ] Copy at 10 000 lines → the **"Log is large" explainer dialog** appears; tap **Copy recent** → a
+  - [✔] Copy at 10 000 lines → the **"Log is large" explainer dialog** appears; tap **Copy recent** → a
     toast reads "Copied the most recent N of M lines"; pasting elsewhere shows the newest lines. No crash.
-  - [ ] Share at 10 000 lines → same explainer, **Share recent** opens the chooser with the recent tail.
+  - [✔] Share at 10 000 lines → same explainer, **Share recent** opens the chooser with the recent tail.
     No crash, VPN stays up.
-  - [ ] Under budget (e.g. 1 000-line idle buffer) → Copy/Share act **directly**, no dialog.
-  - [ ] **Export as file** still writes the **full** log (it streams — never hit the bug).
-- [ ] **Dialog rows fully tappable** → in both the Xray-log-level and Log-buffer-size dialogs, tapping
+  - [✔] Under budget (e.g. 1 000-line idle buffer) → Copy/Share act **directly**, no dialog.
+  - [✔] **Export as file** still writes the **full** log (it streams — never hit the bug).
+- [✔] **Dialog rows fully tappable** → in both the Xray-log-level and Log-buffer-size dialogs, tapping
   the **text label** (not only the radio circle) selects the option.
-- [ ] **Clear moved into the ⋮ menu** → the top bar shows only the ⋮ overflow (no bare "X"); the menu
+- [✔] **Clear moved into the ⋮ menu** → the top bar shows only the ⋮ overflow (no bare "X"); the menu
   lists Copy / Share / Export, a divider, then **Clear**. Clear empties the on-screen buffer.
 - [✔] **Jump-to-latest FAB** scrolls to the newest line; the list auto-follows when already at the bottom.
 
@@ -83,16 +83,16 @@ Reach it via Settings → Diagnostics → Logs.
 - [✔] **Debug placeholders look disabled:** each placeholder row is greyed (~38% alpha), shows the
   "DEBUG" badge, has no chevron, and is not clickable.
 - [✔] **Real rows navigate:** Language, Split tunnel, Kill switch, Logs, About each open their screen.
-- [ ] **Sideload row opens in-place:** it shows the sideload dialog as an overlay, does NOT navigate away.
-- [ ] **(RISK) Release build — placeholders GONE:** install the `assembleRelease` APK and confirm ONLY
+- [✔] **Sideload row opens in-place:** it shows the sideload dialog as an overlay, does NOT navigate away.
+- [✔] **(RISK) Release build — placeholders GONE:** install the `assembleRelease` APK and confirm ONLY
   the real rows show (Language, Split tunnel, Kill switch, Logs, Sideload warning, About) and the whole
   **Advanced section is absent**. (BuildConfig.DEBUG gating — must not leak into release.)
 
 ## D. About screen
 
-- [ ] Version line shows the correct `BuildConfig.VERSION_NAME`.
-- [ ] **GitHub link** opens `https://github.com/Artem-Potapov/boykisser-vpn-client` in the browser.
-- [ ] License/acknowledgement text renders.
+- [✔] Version line shows the correct `BuildConfig.VERSION_NAME`.
+- [✔] **GitHub link** opens `https://github.com/Artem-Potapov/boykisser-vpn-client` in the browser.
+- [✔] License/acknowledgement text renders.
 
 ## E. Main screen
 
@@ -101,19 +101,19 @@ Reach it via Settings → Diagnostics → Logs.
 
 ## F. Localization
 
-- [ ] Switch app language to Russian (UI settings → Language) → the new Logs screen, Settings hub,
+- [✔] Switch app language to Russian (UI settings → Language) → the new Logs screen, Settings hub,
   and About strings are all translated (no raw `settings_*` / `logs_*` keys or English fallthrough).
 
 ## G. Build / release sanity
 
-- [ ] `:app:testDebugUnitTest` green.
-- [ ] `:app:assembleRelease` green (R8 + lint-vital) and the release APK **installs and runs** — a green
+- [✔] `:app:testDebugUnitTest` green.
+- [✔] `:app:assembleRelease` green (R8 + lint-vital) and the release APK **installs and runs** — a green
   build does not prove the R8-obfuscated app works; exercise a connect + the Logs screen on the release
   build specifically (the bridge/reflection paths only fail at runtime).
 
 ---
 
-### Known deferred (not bugs — decided follow-ups)
+### Known deferred (not bugs — decided follow-ups) 
 - Redaction breadth: `sanitize()` only covers UUID/`publicKey`/`shortId`; a non-UUID secret (e.g. a
   Hysteria2 password) in a raw core line at Debug could reach the shareable buffer. Audit + broaden
   before wide release. (Tracked in `docs/features/logs-screen.md`.)
