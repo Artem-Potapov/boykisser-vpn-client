@@ -51,6 +51,8 @@
     <string name="settings_appearance_subtitle">Theme and colors</string>
     <string name="settings_autoconnect_title">Auto-connect on boot</string>
     <string name="settings_autoconnect_subtitle">Keep the VPN on across restarts</string>
+    <string name="settings_fragmentation_title">Fragmentation</string>
+    <string name="settings_fragmentation_subtitle">Split the TLS handshake to bypass DPI</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">UI</string>
@@ -62,7 +64,6 @@
     <string name="settings_about_title">About</string>
     <string name="settings_badge_debug">debug</string>
     <!-- Debug-only placeholder rows -->
-    <string name="settings_ph_fragmentation">Fragmentation settings</string>
     <string name="settings_ph_mux">Mux settings</string>
     <string name="settings_ph_xray">XRAY settings</string>
     <string name="settings_ph_dns">DNS settings</string>
@@ -87,6 +88,20 @@
     <string name="appearance_mode_true_dark">True Dark</string>
     <string name="appearance_dynamic_color_title">Material You colors</string>
     <string name="appearance_dynamic_color_subtitle">Use colors from your wallpaper (Android 12+)</string>
+
+    <!-- Fragmentation settings screen -->
+    <string name="fragmentation_title">Fragmentation</string>
+    <string name="fragmentation_cd_back">Back</string>
+    <string name="fragmentation_enable">Enable fragmentation</string>
+    <string name="fragmentation_preset_label">Preset</string>
+    <string name="fragmentation_preset_tlshello">TLS ClientHello</string>
+    <string name="fragmentation_preset_aggressive">Aggressive</string>
+    <string name="fragmentation_preset_custom">Custom</string>
+    <string name="fragmentation_packets">Packets</string>
+    <string name="fragmentation_length">Length</string>
+    <string name="fragmentation_interval">Interval (ms)</string>
+    <string name="fragmentation_hint">Only affects TCP/TLS-based servers. Has no effect on Hysteria2 (QUIC).</string>
+    <string name="fragmentation_save">Save</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>

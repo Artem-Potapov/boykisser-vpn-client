@@ -124,8 +124,13 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 subtitle = stringResource(R.string.settings_autoconnect_subtitle),
                 onClick = { showAutoConnectInfo = true }
             )
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_fragmentation_title),
+                subtitle = stringResource(R.string.settings_fragmentation_subtitle),
+                onClick = { open(FragmentationSettingsActivity::class.java) }
+            )
             if (BuildConfig.DEBUG) {
-                SettingsRow(title = stringResource(R.string.settings_ph_fragmentation), enabled = false, badge = badge)
                 SettingsRow(title = stringResource(R.string.settings_ph_mux), enabled = false, badge = badge)
             }
 
