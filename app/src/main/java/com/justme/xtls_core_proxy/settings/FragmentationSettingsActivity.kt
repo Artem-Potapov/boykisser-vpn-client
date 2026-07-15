@@ -44,6 +44,9 @@ private const val PRESET_TLSHELLO = "tlshello_preset"
 private const val PRESET_AGGRESSIVE = "aggressive_preset"
 private const val PRESET_CUSTOM = "custom_preset"
 
+private val PACKETS_RE = Regex("""^(tlshello|\d+(-\d+)?)$""")
+private val RANGE_RE = Regex("""^\d+(-\d+)?$""")
+
 private val AGGRESSIVE = FragmentationSettings(enabled = true, packets = "1-3", length = "10-20", interval = "10-20")
 private val TLSHELLO = FragmentationSettings.DISABLED.copy(enabled = true)
 
@@ -75,6 +78,11 @@ private fun FragmentationScreen(onBack: () -> Unit) {
         )
     }
 
+    val packetsValid = PACKETS_RE.matches(packets.trim())
+    val lengthValid = RANGE_RE.matches(length.trim())
+    val intervalValid = RANGE_RE.matches(interval.trim())
+    val inputsValid = packetsValid && lengthValid && intervalValid
+
     val presetOptions = listOf(
         PRESET_TLSHELLO to stringResource(R.string.fragmentation_preset_tlshello),
         PRESET_AGGRESSIVE to stringResource(R.string.fragmentation_preset_aggressive),
@@ -103,13 +111,16 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    TextButton(onClick = {
-                        FragmentationPreferences.save(
-                            context,
-                            FragmentationSettings(enabled, packets.trim(), length.trim(), interval.trim())
-                        )
-                        onBack()
-                    }) {
+                    TextButton(
+                        enabled = !enabled || inputsValid,
+                        onClick = {
+                            FragmentationPreferences.save(
+                                context,
+                                FragmentationSettings(enabled, packets.trim(), length.trim(), interval.trim())
+                            )
+                            onBack()
+                        }
+                    ) {
                         Text(stringResource(R.string.fragmentation_save))
                     }
                 }
@@ -141,6 +152,10 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                 value = packets,
                 onValueChange = { packets = it; preset = PRESET_CUSTOM },
                 label = { Text(stringResource(R.string.fragmentation_packets)) },
+                isError = !packetsValid,
+                supportingText = {
+                    if (!packetsValid) Text(stringResource(R.string.fragmentation_error_packets))
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -148,6 +163,10 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                 value = length,
                 onValueChange = { length = it; preset = PRESET_CUSTOM },
                 label = { Text(stringResource(R.string.fragmentation_length)) },
+                isError = !lengthValid,
+                supportingText = {
+                    if (!lengthValid) Text(stringResource(R.string.fragmentation_error_range))
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -155,6 +174,10 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                 value = interval,
                 onValueChange = { interval = it; preset = PRESET_CUSTOM },
                 label = { Text(stringResource(R.string.fragmentation_interval)) },
+                isError = !intervalValid,
+                supportingText = {
+                    if (!intervalValid) Text(stringResource(R.string.fragmentation_error_range))
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )

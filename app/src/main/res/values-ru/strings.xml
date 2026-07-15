@@ -103,6 +103,8 @@
     <string name="fragmentation_interval">Интервал (мс)</string>
     <string name="fragmentation_hint">Работает только для серверов на TCP/TLS. На Hysteria2 (QUIC) не влияет.</string>
     <string name="fragmentation_save">Сохранить</string>
+    <string name="fragmentation_error_packets">Укажите «tlshello» или число/диапазон, например 1-3</string>
+    <string name="fragmentation_error_range">Укажите число или диапазон, например 100-200</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>
