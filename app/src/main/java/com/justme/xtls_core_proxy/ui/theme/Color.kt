@@ -14,3 +14,11 @@ val Pink40 = Color(0xFF7D5260)
 // MaterialTheme.colorScheme) so device dynamic-color theming cannot override it.
 // Content (text/icons) on top of it should be white.
 val BoykisserMagenta = Color(0xFFD81B60)
+
+// Brand palette seeded from BoykisserMagenta (#D81B60) so app chrome shares the brand identity.
+// Used only when Material You / dynamic color is OFF (or unavailable on API < 31).
+val BrandMagenta = Color(0xFFD81B60)
+val BrandMagentaLight = Color(0xFFFF5C8D)
+val BrandMagentaDeep = Color(0xFFA00037)
+val BrandMauve = Color(0xFF7D5260)
+val BrandPink = Color(0xFFEFB8C8)

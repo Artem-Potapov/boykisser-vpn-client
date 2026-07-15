@@ -1,6 +1,5 @@
 package com.justme.xtls_core_proxy.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -9,45 +8,50 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+private val BrandLightColorScheme = lightColorScheme(
+    primary = BrandMagenta,
+    secondary = BrandMauve,
+    tertiary = BrandMagentaDeep,
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
+private val BrandDarkColorScheme = darkColorScheme(
+    primary = BrandMagentaLight,
+    secondary = BrandPink,
+    tertiary = BrandMagentaLight,
+)
 
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+// True Dark = the dark scheme with backgrounds/surfaces forced to pure black (OLED).
+private val BrandTrueDarkColorScheme = BrandDarkColorScheme.copy(
+    background = Color(0xFF000000),
+    surface = Color(0xFF000000),
+    surfaceVariant = Color(0xFF121212),
 )
 
 @Composable
 fun XTLS_CORE_PROXYTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
+    val context = LocalContext.current
+    val prefs by AppearanceRepository.state.collectAsState()
+    val resolved = resolveScheme(prefs.themeMode, isSystemInDarkTheme())
+    val dynamic = useDynamic(prefs.dynamicColor, Build.VERSION.SDK_INT)
 
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val colorScheme = when {
+        dynamic && resolved == ResolvedScheme.LIGHT -> dynamicLightColorScheme(context)
+        dynamic && resolved == ResolvedScheme.DARK -> dynamicDarkColorScheme(context)
+        dynamic && resolved == ResolvedScheme.TRUE_DARK -> dynamicDarkColorScheme(context).copy(
+            background = Color(0xFF000000),
+            surface = Color(0xFF000000),
+            surfaceVariant = Color(0xFF121212),
+        )
+        resolved == ResolvedScheme.LIGHT -> BrandLightColorScheme
+        resolved == ResolvedScheme.DARK -> BrandDarkColorScheme
+        else -> BrandTrueDarkColorScheme
     }
 
     MaterialTheme(
