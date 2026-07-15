@@ -48,6 +48,8 @@
     <string name="settings_split_subtitle">Выберите приложения, которые пойдут через VPN</string>
     <string name="settings_kill_title">Kill-switch при открытии</string>
     <string name="settings_kill_subtitle">Полностью отключать VPN, когда выбранные приложения активны</string>
+    <string name="settings_appearance_title">Внешний вид</string>
+    <string name="settings_appearance_subtitle">Тема и цвета</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">Интерфейс</string>
@@ -59,7 +61,6 @@
     <string name="settings_about_title">О программе</string>
     <string name="settings_badge_debug">debug</string>
     <!-- Debug-only placeholder rows -->
-    <string name="settings_ph_appearance">Оформление</string>
     <string name="settings_ph_autoconnect">Автоподключение при запуске</string>
     <string name="settings_ph_fragmentation">Настройки фрагментации</string>
     <string name="settings_ph_mux">Настройки Mux</string>
@@ -69,6 +70,17 @@
     <string name="settings_ph_routing">Правила маршрутизации</string>
     <string name="settings_ph_ping">Настройки пинг-теста</string>
     <string name="settings_ph_check_update">Проверить обновления</string>
+
+    <!-- Appearance settings screen -->
+    <string name="appearance_title">Внешний вид</string>
+    <string name="appearance_cd_back">Назад</string>
+    <string name="appearance_section_theme">Тема</string>
+    <string name="appearance_mode_system">Как в системе</string>
+    <string name="appearance_mode_light">Светлая</string>
+    <string name="appearance_mode_dark">Тёмная</string>
+    <string name="appearance_mode_true_dark">Абсолютно тёмная</string>
+    <string name="appearance_dynamic_color_title">Цвета Material You</string>
+    <string name="appearance_dynamic_color_subtitle">Использовать цвета из обоев (Android 12+)</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>

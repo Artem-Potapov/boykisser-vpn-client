@@ -97,9 +97,11 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 leadingIcon = Icons.Default.Settings,
                 onClick = { open(LanguageSettingsActivity::class.java) }
             )
-            if (BuildConfig.DEBUG) SettingsRow(
-                title = stringResource(R.string.settings_ph_appearance),
-                enabled = false, badge = badge
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_appearance_title),
+                subtitle = stringResource(R.string.settings_appearance_subtitle),
+                onClick = { open(AppearanceSettingsActivity::class.java) }
             )
 
             // Tunnel

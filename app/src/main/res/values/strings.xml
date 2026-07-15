@@ -47,6 +47,8 @@
     <string name="settings_split_subtitle">Choose which apps go through the VPN</string>
     <string name="settings_kill_title">Kill on foreground</string>
     <string name="settings_kill_subtitle">Fully disconnect the VPN when selected apps are open</string>
+    <string name="settings_appearance_title">App appearance</string>
+    <string name="settings_appearance_subtitle">Theme and colors</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">UI</string>
@@ -58,7 +60,6 @@
     <string name="settings_about_title">About</string>
     <string name="settings_badge_debug">debug</string>
     <!-- Debug-only placeholder rows -->
-    <string name="settings_ph_appearance">App appearance</string>
     <string name="settings_ph_autoconnect">Auto-connect on boot</string>
     <string name="settings_ph_fragmentation">Fragmentation settings</string>
     <string name="settings_ph_mux">Mux settings</string>
@@ -68,6 +69,17 @@
     <string name="settings_ph_routing">Routing rules</string>
     <string name="settings_ph_ping">Ping test settings</string>
     <string name="settings_ph_check_update">Check for updates</string>
+
+    <!-- Appearance settings screen -->
+    <string name="appearance_title">App appearance</string>
+    <string name="appearance_cd_back">Back</string>
+    <string name="appearance_section_theme">Theme</string>
+    <string name="appearance_mode_system">System default</string>
+    <string name="appearance_mode_light">Light</string>
+    <string name="appearance_mode_dark">Dark</string>
+    <string name="appearance_mode_true_dark">True Dark</string>
+    <string name="appearance_dynamic_color_title">Material You colors</string>
+    <string name="appearance_dynamic_color_subtitle">Use colors from your wallpaper (Android 12+)</string>
 
     <!-- MainActivity -->
     <string name="main_title">Xray Tun</string>
