@@ -39,16 +39,21 @@ fun XTLS_CORE_PROXYTheme(
     val context = LocalContext.current
     val prefs by AppearanceRepository.state.collectAsState()
     val resolved = resolveScheme(prefs.themeMode, isSystemInDarkTheme())
-    val dynamic = useDynamic(prefs.dynamicColor, Build.VERSION.SDK_INT)
-
+    // Keep `Build.VERSION.SDK_INT >= S` textually inline in each Material You branch: lint's NewApi
+    // detector recognizes an inline SDK guard but cannot see through the useDynamic() helper, so
+    // hoisting the check into a val/function reintroduces a lint-vital NewApi failure that breaks
+    // release builds. useDynamic() stays the source of truth for the *preference* (screen + tests).
     val colorScheme = when {
-        dynamic && resolved == ResolvedScheme.LIGHT -> dynamicLightColorScheme(context)
-        dynamic && resolved == ResolvedScheme.DARK -> dynamicDarkColorScheme(context)
-        dynamic && resolved == ResolvedScheme.TRUE_DARK -> dynamicDarkColorScheme(context).copy(
-            background = Color(0xFF000000),
-            surface = Color(0xFF000000),
-            surfaceVariant = Color(0xFF121212),
-        )
+        prefs.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && resolved == ResolvedScheme.LIGHT ->
+            dynamicLightColorScheme(context)
+        prefs.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && resolved == ResolvedScheme.DARK ->
+            dynamicDarkColorScheme(context)
+        prefs.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && resolved == ResolvedScheme.TRUE_DARK ->
+            dynamicDarkColorScheme(context).copy(
+                background = Color(0xFF000000),
+                surface = Color(0xFF000000),
+                surfaceVariant = Color(0xFF121212),
+            )
         resolved == ResolvedScheme.LIGHT -> BrandLightColorScheme
         resolved == ResolvedScheme.DARK -> BrandDarkColorScheme
         else -> BrandTrueDarkColorScheme
