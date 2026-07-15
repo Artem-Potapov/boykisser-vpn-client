@@ -19,7 +19,9 @@ import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.FragmentationPreferences
 import com.justme.xtls_core_proxy.config.LogSettings
+import com.justme.xtls_core_proxy.config.TuningSettings
 import com.justme.xtls_core_proxy.config.XrayLogLevel
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
@@ -86,6 +88,10 @@ class XrayVpnService : VpnService() {
     // connect AND every kill-switch revive, so a mid-session log-level change can't leak in.
     @Volatile private var sessionLog: LogSettings = LogSettings(XrayLogLevel.WARNING, null)
     @Volatile private var sessionLogFile: File? = null
+
+    // Captured ONCE per connection alongside sessionLog; reused on kill-switch revive so a
+    // mid-session fragmentation change can't leak in (same discipline as sessionLog).
+    @Volatile private var sessionTuning: TuningSettings = TuningSettings.NONE
     private var logTailer: XrayCoreLogTailer? = null
 
     // Last controlled-app label that triggered the exposed state; used to rebuild the
@@ -302,6 +308,9 @@ class XrayVpnService : VpnService() {
                             }
                         currentProfileId = profileId
                         sessionLogFile = logFile
+                        sessionTuning = TuningSettings(
+                            FragmentationPreferences.load(this@XrayVpnService)
+                        )
                         sessionLog = initialLog
                         true
                     }
@@ -391,7 +400,7 @@ class XrayVpnService : VpnService() {
                 ownsTunnelTransitionLocked(sessionEpoch, expectedState)
             }
             if (!ownsTransition) throw StaleSessionException()
-            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, log)
+            val configJson = ConfigBuilder.buildRuntimeConfig(profile.config, log, sessionTuning)
 
             val geoAssetDir = GeoAssetPreparer.prepare(this)
                 .getOrElse { error ->
@@ -771,6 +780,7 @@ class XrayVpnService : VpnService() {
 
             currentProfileId = -1L
             sessionLogFile = null
+            sessionTuning = TuningSettings.NONE
             LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
             LogRepository.append("VPN stopped")
             // The exposed alert is a separate notification id; stopForeground won't remove it.
