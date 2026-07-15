@@ -20,15 +20,17 @@ per-section sub-screens. Sections appear in this fixed order:
 
 | Section | String resource | Real rows today |
 |---|---|---|
-| UI | `settings_section_ui` | Language (→ `LanguageSettingsActivity`) |
-| Tunnel | `settings_section_tunnel` | Split tunnel (→ `SplitTunnelSettingsActivity`), Kill switch (→ `KillSwitchSettingsActivity`) |
+| UI | `settings_section_ui` | App appearance (→ `AppearanceSettingsActivity`), Language (→ `LanguageSettingsActivity`) |
+| Tunnel | `settings_section_tunnel` | Split tunnel (→ `SplitTunnelSettingsActivity`), Kill switch (→ `KillSwitchSettingsActivity`), Auto-connect on boot (opens `AutoConnectInfoDialog` in-place), Fragmentation (→ `FragmentationSettingsActivity`) |
 | Advanced | `settings_section_advanced` | none — **the whole section is debug-only** (see below) |
 | Diagnostics | `settings_section_diagnostics` | Logs (→ `LogsActivity`) |
 | About | `settings_section_about` | Sideload warning (opens `SideloadWarningDialog` in-place), About (→ `AboutActivity`) |
 
 Each real, navigable row calls a local `open(cls: Class<*>)` helper
-(`context.startActivity(Intent(context, cls))`) except the sideload row, which sets
-`showSideloadWarning = true` to show `SideloadWarningDialog` as an overlay rather than navigating away.
+(`context.startActivity(Intent(context, cls))`) except the two in-place-dialog rows — the sideload row
+(`showSideloadWarning = true` → `SideloadWarningDialog`) and the Auto-connect on boot row
+(`showAutoConnectInfo = true` → `AutoConnectInfoDialog`, see [`auto-connect-boot.md`](auto-connect-boot.md))
+— which show an overlay rather than navigating away.
 
 ## The reusable components
 
@@ -73,12 +75,12 @@ fun SettingsRow(
 
 ## The `BuildConfig.DEBUG` placeholder convention
 
-Several rows across the UI, Tunnel, Advanced, and About sections exist only to show where a
+Several rows across the Tunnel, Advanced, Diagnostics, and About sections exist only to show where a
 not-yet-implemented setting will eventually live. Every one of them follows the same shape:
 
 ```kotlin
 if (BuildConfig.DEBUG) SettingsRow(
-    title = stringResource(R.string.settings_ph_appearance),
+    title = stringResource(R.string.settings_ph_mux),
     enabled = false, badge = badge
 )
 ```
@@ -89,11 +91,15 @@ i.e. `enabled = false` (greyed out, unclickable, no chevron), `badge = badge` (t
 
 | Section | Placeholder string resource |
 |---|---|
-| UI | `settings_ph_appearance` |
-| Tunnel | `settings_ph_autoconnect`, `settings_ph_fragmentation`, `settings_ph_mux` |
+| Tunnel | `settings_ph_mux` |
 | Advanced | `settings_ph_xray`, `settings_ph_dns`, `settings_ph_sanitization`, `settings_ph_routing` |
 | Diagnostics | `settings_ph_ping` |
 | About | `settings_ph_check_update` |
+
+The former UI `settings_ph_appearance` and the Tunnel `settings_ph_autoconnect` / `settings_ph_fragmentation`
+placeholders have since been **promoted to real rows** — see [`app-appearance.md`](app-appearance.md),
+[`auto-connect-boot.md`](auto-connect-boot.md), and [`fragmentation.md`](fragmentation.md). The UI section
+therefore no longer carries any placeholder.
 
 **The entire Advanced section header + all four of its rows are wrapped in one `if (BuildConfig.DEBUG)`**
 — unlike the other sections (which are always visible with individual placeholder rows debug-gated
@@ -161,5 +167,6 @@ To promote a placeholder (or add a wholly new setting) to a real row:
   logic to unit test).
 - **On-device (manual)**: confirm the hub renders all five sections in a debug build with placeholder
   rows visible (greyed out, "DEBUG" badge, no chevron, unclickable); confirm a release build
-  (`assembleRelease`) shows only the real rows (Language, Split tunnel, Kill switch, Logs, Sideload
-  warning, About) with the Advanced section absent entirely.
+  (`assembleRelease`) shows only the real rows (App appearance, Language, Split tunnel, Kill switch,
+  Auto-connect on boot, Fragmentation, Logs, Sideload warning, About) with the Advanced section absent
+  entirely.

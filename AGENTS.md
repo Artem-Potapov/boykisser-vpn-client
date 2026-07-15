@@ -33,20 +33,20 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── add/            Paste/clipboard/subscription routing into Add UI
 │       │   │   ├── apps/           Installed-app picker (kill-switch / split-tunnel)
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
-│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization + forced log posture → docs/features), LogSettings (XrayLogLevel + errorFilePath), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
+│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization + forced log posture + fragmentation overlay → docs/features), LogSettings (XrayLogLevel + errorFilePath), TuningSettings/FragmentationSettings + FragmentationPreferences (global fragmentation → docs/features/fragmentation.md), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
 │       │   │   ├── log/            LogRepository (sanitized state/log surface), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
-│       │   │   ├── settings/       Per-server + settings hub screens (SettingsHubActivity, AboutActivity → docs/features)
+│       │   │   ├── settings/       Per-server + settings hub screens (SettingsHubActivity, AboutActivity, AppearanceSettingsActivity, FragmentationSettingsActivity, AutoConnectInfoDialog → docs/features)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
-│       │   │   ├── ui/             Reusable Compose components + theme; SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
+│       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
 │       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features), StartCommandDecision, VpnNotifications
 │       │   └── res/
 │       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon)
@@ -57,10 +57,13 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       └── test/java/...           JVM unit tests (mirrors main package structure)
 ├── docs/
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
+│   │   ├── app-appearance.md        Theme modes (System/Light/Dark/True Dark) + Material You; live repo recompose; Theme.kt inline-SDK-guard gotcha
+│   │   ├── auto-connect-boot.md     Stateless explainer + deep-link to OS Always-on VPN (no boot receiver, no local state)
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
 │   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
+│   │   ├── fragmentation.md         Global anti-DPI sockopt.fragment overlay (TCP-only; xhttp-over-h3 skipped); ConfigBuilder merge + XrayVpnService session capture
 │   │   ├── hysteria2-support.md      Hysteria2 share links, codec, toShareLink, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
@@ -363,9 +366,13 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Runtime config extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
   (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
-  `buildRuntimeConfig(input, log = LogSettings(WARNING, null))` ends with private `forceLog`, which
-  overwrites (not merges) the config's `log` object with the caller-supplied `LogSettings` — see
-  `config/LogSettings.kt` (`XrayLogLevel` + `errorFilePath`) and `docs/features/logs-screen.md`;
+  `buildRuntimeConfig(input, log = LogSettings(WARNING, null), tuning = TuningSettings.NONE)` ends with
+  private `forceLog`, which overwrites (not merges) the config's `log` object with the caller-supplied
+  `LogSettings` — see `config/LogSettings.kt` (`XrayLogLevel` + `errorFilePath`) and
+  `docs/features/logs-screen.md` — then private `applyFragmentation`, which MERGES `sockopt.fragment`
+  onto the proxy outbound when `tuning.fragmentation.enabled` and the outbound is TCP-based (skips
+  QUIC/Hysteria2/kcp and xhttp-over-HTTP/3; preserves the `makeSecureDns` `ForceIP` in the same sockopt)
+  — see `config/TuningSettings.kt`, `config/FragmentationPreferences.kt`, `docs/features/fragmentation.md`;
   `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound **and**
   minus `geoip:`/`geosite:` routing rules, which fail to build in the probe's geo-asset-less
   throwaway core instance, and forces `LogSettings(NONE, null)`) and the
