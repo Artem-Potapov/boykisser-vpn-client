@@ -50,6 +50,8 @@
     <string name="settings_kill_subtitle">Полностью отключать VPN, когда выбранные приложения активны</string>
     <string name="settings_appearance_title">Внешний вид</string>
     <string name="settings_appearance_subtitle">Тема и цвета</string>
+    <string name="settings_autoconnect_title">Автоподключение при запуске</string>
+    <string name="settings_autoconnect_subtitle">Держать VPN включённым после перезагрузки</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">Интерфейс</string>
@@ -61,7 +63,6 @@
     <string name="settings_about_title">О программе</string>
     <string name="settings_badge_debug">debug</string>
     <!-- Debug-only placeholder rows -->
-    <string name="settings_ph_autoconnect">Автоподключение при запуске</string>
     <string name="settings_ph_fragmentation">Настройки фрагментации</string>
     <string name="settings_ph_mux">Настройки Mux</string>
     <string name="settings_ph_xray">Настройки XRAY</string>
@@ -70,6 +71,12 @@
     <string name="settings_ph_routing">Правила маршрутизации</string>
     <string name="settings_ph_ping">Настройки пинг-теста</string>
     <string name="settings_ph_check_update">Проверить обновления</string>
+
+    <!-- Диалог автоподключения при запуске -->
+    <string name="autoconnect_dialog_title">Автоподключение при запуске</string>
+    <string name="autoconnect_dialog_body">Android может автоматически поддерживать подключение VPN — в том числе после перезагрузки — с помощью встроенной функции «Постоянная VPN». Откройте настройки VPN и включите «Постоянная VPN» (и «Блокировать подключения без VPN» для строгого kill switch) для этого приложения.</string>
+    <string name="autoconnect_open_settings">Открыть настройки VPN</string>
+    <string name="autoconnect_dismiss">Закрыть</string>
 
     <!-- Appearance settings screen -->
     <string name="appearance_title">Внешний вид</string>

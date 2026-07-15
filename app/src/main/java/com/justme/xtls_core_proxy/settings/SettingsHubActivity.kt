@@ -62,6 +62,7 @@ class SettingsHubActivity : LocalizedComponentActivity() {
 private fun SettingsHubScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var showSideloadWarning by remember { mutableStateOf(false) }
+    var showAutoConnectInfo by remember { mutableStateOf(false) }
     val badge = stringResource(R.string.settings_badge_debug)
     val langLabel = when (SupportedLanguage.current(context)) {
         SupportedLanguage.AUTO -> stringResource(R.string.lang_auto)
@@ -117,8 +118,13 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 subtitle = stringResource(R.string.settings_kill_subtitle),
                 onClick = { open(KillSwitchSettingsActivity::class.java) }
             )
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_autoconnect_title),
+                subtitle = stringResource(R.string.settings_autoconnect_subtitle),
+                onClick = { showAutoConnectInfo = true }
+            )
             if (BuildConfig.DEBUG) {
-                SettingsRow(title = stringResource(R.string.settings_ph_autoconnect), enabled = false, badge = badge)
                 SettingsRow(title = stringResource(R.string.settings_ph_fragmentation), enabled = false, badge = badge)
                 SettingsRow(title = stringResource(R.string.settings_ph_mux), enabled = false, badge = badge)
             }
@@ -163,6 +169,9 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
         }
         if (showSideloadWarning) {
             SideloadWarningDialog(onDismiss = { showSideloadWarning = false })
+        }
+        if (showAutoConnectInfo) {
+            AutoConnectInfoDialog(onDismiss = { showAutoConnectInfo = false })
         }
     }
 }
