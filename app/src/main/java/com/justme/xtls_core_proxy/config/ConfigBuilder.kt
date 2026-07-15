@@ -8,7 +8,8 @@ import org.json.JSONObject
 object ConfigBuilder {
     fun buildRuntimeConfig(
         input: String,
-        log: LogSettings = LogSettings(XrayLogLevel.WARNING, null)
+        log: LogSettings = LogSettings(XrayLogLevel.WARNING, null),
+        tuning: TuningSettings = TuningSettings.NONE
     ): String {
         val trimmed = input.trim()
         require(trimmed.isNotEmpty()) { "Configuration input is empty" }
@@ -18,7 +19,8 @@ object ConfigBuilder {
             Hysteria2ConfigCodec.isHysteria2Uri(trimmed) -> fromHysteria2Uri(trimmed)
             else -> fromJson(trimmed)
         }
-        return forceLog(base, log)
+        val withLog = forceLog(base, log)
+        return applyFragmentation(withLog, tuning.fragmentation)
     }
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
@@ -266,6 +268,42 @@ object ConfigBuilder {
         is String -> entry
         is JSONObject -> entry.optString("address").ifBlank { null }
         else -> null
+    }
+
+    // Transports that ride TCP — the only ones sockopt.fragment applies to. Blank network == "tcp".
+    private val TCP_NETWORKS = setOf("tcp", "ws", "grpc", "h2", "httpupgrade", "xhttp")
+
+    /**
+     * Merges TLS-ClientHello fragmentation into the proxy outbound's sockopt when enabled AND the
+     * outbound is TCP-based. Merge (not overwrite): makeSecureDns already wrote domainStrategy=ForceIP
+     * into the same sockopt. QUIC/kcp/Hysteria2 outbounds are skipped (fragment is a TCP-dialer knob).
+     */
+    private fun applyFragmentation(configJson: String, frag: FragmentationSettings): String {
+        if (!frag.enabled) return configJson
+        val root = JSONObject(configJson)
+        val outbounds = root.optJSONArray("outbounds") ?: return configJson
+        val proxy = firstProxyOutbound(outbounds) ?: return configJson
+        if (!isTcpBasedOutbound(proxy)) return configJson
+
+        val ss = proxy.optJSONObject("streamSettings")
+            ?: JSONObject().also { proxy.put("streamSettings", it) }
+        val sockopt = ss.optJSONObject("sockopt")
+            ?: JSONObject().also { ss.put("sockopt", it) }
+        sockopt.put(
+            "fragment",
+            JSONObject()
+                .put("packets", frag.packets)
+                .put("length", frag.length)
+                .put("interval", frag.interval)
+        )
+        return root.toString()
+    }
+
+    private fun isTcpBasedOutbound(outbound: JSONObject): Boolean {
+        if (outbound.optString("protocol").lowercase().startsWith("hysteria")) return false
+        val network = outbound.optJSONObject("streamSettings")?.optString("network")?.lowercase().orEmpty()
+        val net = if (network.isBlank()) "tcp" else network
+        return net in TCP_NETWORKS
     }
 
     /** First outbound that isn't a `freedom`/`blackhole`/`dns` helper — the actual proxy. */
