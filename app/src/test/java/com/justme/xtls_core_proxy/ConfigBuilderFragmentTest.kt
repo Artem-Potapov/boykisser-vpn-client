@@ -79,4 +79,73 @@ class ConfigBuilderFragmentTest {
         val probe = ConfigBuilder.toPingTestConfig(stored)
         assertNull("probe config must never carry fragmentation", fragmentOf(probe))
     }
+
+    @Test
+    fun skipsFragmentForXhttpOverHttp3() {
+        // xhttp + TLS + alpn contains "h3" == HTTP/3 (QUIC) — fragment is a TCP knob, must be skipped.
+        val json = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"h.example","port":443,
+                "users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+              "streamSettings":{"network":"xhttp","security":"tls",
+                "tlsSettings":{"alpn":["h3"]}}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(input = json, tuning = fragOn)
+        assertNull("xhttp over HTTP/3 (QUIC) must not get sockopt.fragment", fragmentOf(out))
+    }
+
+    @Test
+    fun skipsFragmentForXhttpWithH3AmongAlpn() {
+        // Conservative: if "h3" appears at all in ALPN, treat as possibly-QUIC and skip.
+        val json = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"h.example","port":443,
+                "users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+              "streamSettings":{"network":"xhttp","security":"tls",
+                "tlsSettings":{"alpn":["h3","h2"]}}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(input = json, tuning = fragOn)
+        assertNull("xhttp with h3 among ALPN must not get sockopt.fragment", fragmentOf(out))
+    }
+
+    @Test
+    fun appliesFragmentForXhttpOverH2() {
+        // xhttp + TLS + alpn h2 == HTTP/2 over TCP — fragment IS applied.
+        val json = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"h.example","port":443,
+                "users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+              "streamSettings":{"network":"xhttp","security":"tls",
+                "tlsSettings":{"alpn":["h2"]}}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(input = json, tuning = fragOn)
+        assertNotNull("xhttp over h2 (TCP) must get sockopt.fragment", fragmentOf(out))
+    }
+
+    @Test
+    fun appliesFragmentForXhttpReality() {
+        // REALITY is TCP-only (no QUIC-REALITY) → fragment IS applied.
+        val json = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"h.example","port":443,
+                "users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+              "streamSettings":{"network":"xhttp","security":"reality",
+                "realitySettings":{"publicKey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(input = json, tuning = fragOn)
+        assertNotNull("xhttp+REALITY (TCP) must get sockopt.fragment", fragmentOf(out))
+    }
+
+    @Test
+    fun appliesFragmentForXhttpPlaintext() {
+        // security "none" can't be h3 (QUIC needs TLS) → TCP → fragment IS applied.
+        val json = """
+            {"outbounds":[{"protocol":"vless","tag":"proxy",
+              "settings":{"vnext":[{"address":"h.example","port":443,
+                "users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+              "streamSettings":{"network":"xhttp","security":"none"}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(input = json, tuning = fragOn)
+        assertNotNull("plaintext xhttp (TCP) must get sockopt.fragment", fragmentOf(out))
+    }
 }

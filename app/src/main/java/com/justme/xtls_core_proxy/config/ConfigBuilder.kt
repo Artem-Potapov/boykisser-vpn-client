@@ -301,9 +301,27 @@ object ConfigBuilder {
 
     private fun isTcpBasedOutbound(outbound: JSONObject): Boolean {
         if (outbound.optString("protocol").lowercase().startsWith("hysteria")) return false
-        val network = outbound.optJSONObject("streamSettings")?.optString("network")?.lowercase().orEmpty()
+        val ss = outbound.optJSONObject("streamSettings")
+        val network = ss?.optString("network")?.lowercase().orEmpty()
         val net = if (network.isBlank()) "tcp" else network
-        return net in TCP_NETWORKS
+        if (net !in TCP_NETWORKS) return false
+        // XHTTP is the one TCP_NETWORKS member that can also ride HTTP/3 (QUIC/UDP), where sockopt.fragment
+        // (a TCP-dialer knob) is inert. QUIC mandates TLS 1.3, and h3 is never the ALPN default, so xhttp is
+        // HTTP/3 only when security==tls AND ALPN opts into "h3". Every other xhttp (none / reality /
+        // tls-without-h3) is TCP.
+        if (net == "xhttp" && isHttp3(ss)) return false
+        return true
+    }
+
+    /** True only for an HTTP/3 (QUIC) transport: security==tls AND tlsSettings.alpn contains "h3". */
+    private fun isHttp3(streamSettings: JSONObject?): Boolean {
+        val ss = streamSettings ?: return false
+        if (!ss.optString("security").equals("tls", ignoreCase = true)) return false
+        val alpn = ss.optJSONObject("tlsSettings")?.optJSONArray("alpn") ?: return false
+        for (i in 0 until alpn.length()) {
+            if (alpn.optString(i).equals("h3", ignoreCase = true)) return true
+        }
+        return false
     }
 
     /** First outbound that isn't a `freedom`/`blackhole`/`dns` helper — the actual proxy. */
