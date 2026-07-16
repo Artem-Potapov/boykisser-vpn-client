@@ -3,6 +3,20 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
+## [2.2.1R] — 2026-07-16
+
+Tag: `2.2.1-Release`. Minor release.
+
+### Fixed
+- DNS enforcement and bootstrapping follow-ups from the 2.2.0PRE cycle.
+- VPN lifecycle concurrency hardening: stale-callback gating, kill-switch mid-revive
+  replay, and user-stop path moved off the lifecycle lock to prevent ANR.
+
+### Changed
+- The main screen no longer hosts a log panel; profiles list fills the reclaimed space.
+- `ConfigBuilder` forces the `log` object on every runtime config (level + app-private
+  error-file path), overwriting rather than merging.
+
 ## [2.2.0PRE] — 2026-07-14
 
 Tag: `2.2.0-PreRelease` (pending). Major release.
