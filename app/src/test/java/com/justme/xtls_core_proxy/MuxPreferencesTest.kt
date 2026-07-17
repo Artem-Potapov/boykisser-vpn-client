@@ -46,4 +46,18 @@ class MuxPreferencesTest {
         assertEquals(1024, loaded.concurrency)
         assertEquals(QuicHandling.BLOCK, loaded.quicHandling)
     }
+
+    @Test
+    fun load_coerces_concurrency_lower_bound() {
+        prefs.edit().putInt("mux_concurrency", 0).apply()
+
+        assertEquals(1, MuxPreferences.load(context).concurrency)
+    }
+
+    @Test
+    fun load_coerces_xudp_concurrency_lower_bound() {
+        prefs.edit().putInt("mux_xudp_concurrency", -5).apply()
+
+        assertEquals(0, MuxPreferences.load(context).xudpConcurrency)
+    }
 }

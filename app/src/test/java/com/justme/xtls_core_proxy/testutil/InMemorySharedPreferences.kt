@@ -67,10 +67,18 @@ class InMemorySharedPreferences : SharedPreferences {
         // No-op, mirrors registerOnSharedPreferenceChangeListener above.
     }
 
-    /** Accumulates put/remove/clear ops and flushes them into the backing map on apply()/commit(). */
+    /**
+     * Accumulates put/remove/clear ops and flushes them into the backing map on apply()/commit().
+     *
+     * Models Android's documented [SharedPreferences.Editor.clear] contract: `clear()` only marks
+     * the *persisted* map for a wipe at commit time — it does not touch operations already staged
+     * in this same editor, and any `put*`/`remove` staged before OR after `clear()` still applies
+     * on top of that wipe. `pending` is a single ordered map so puts/removes replay in call order;
+     * [REMOVE] is a private sentinel marking a staged removal (vs. a staged `null` put, which is
+     * legal for `putString`).
+     */
     private inner class InMemoryEditor : SharedPreferences.Editor {
-        private val pendingWrites = HashMap<String, Any?>()
-        private val pendingRemovals = mutableSetOf<String>()
+        private val pending = LinkedHashMap<String, Any?>()
         private var pendingClear = false
 
         override fun putString(key: String, value: String?): SharedPreferences.Editor = stage(key, value)
@@ -89,15 +97,12 @@ class InMemorySharedPreferences : SharedPreferences {
         override fun putBoolean(key: String, value: Boolean): SharedPreferences.Editor = stage(key, value)
 
         override fun remove(key: String): SharedPreferences.Editor {
-            pendingWrites.remove(key)
-            pendingRemovals += key
+            pending[key] = REMOVE
             return this
         }
 
         override fun clear(): SharedPreferences.Editor {
             pendingClear = true
-            pendingWrites.clear()
-            pendingRemovals.clear()
             return this
         }
 
@@ -111,8 +116,7 @@ class InMemorySharedPreferences : SharedPreferences {
         }
 
         private fun stage(key: String, value: Any?): SharedPreferences.Editor {
-            pendingRemovals -= key
-            pendingWrites[key] = value
+            pending[key] = value
             return this
         }
 
@@ -121,10 +125,15 @@ class InMemorySharedPreferences : SharedPreferences {
                 map.clear()
                 pendingClear = false
             }
-            pendingRemovals.forEach { map.remove(it) }
-            pendingRemovals.clear()
-            map.putAll(pendingWrites)
-            pendingWrites.clear()
+            for ((key, value) in pending) {
+                if (value === REMOVE) map.remove(key) else map[key] = value
+            }
+            pending.clear()
         }
+    }
+
+    private companion object {
+        /** Sentinel distinguishing a staged `remove(key)` from a staged `put(key, null)`. */
+        private val REMOVE = Any()
     }
 }
