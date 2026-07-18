@@ -415,7 +415,15 @@ object ConfigBuilder {
         val proxy = firstProxyOutbound(outbounds) ?: return configJson
         val proxyTag = ensureTag(proxy, "proxy")
         val directTag = ensureHelperOutbound(outbounds, "freedom", "direct")
-        val blockTag = if (routing.blockAds || routing.mode == RoutingMode.BLOCKED_ONLY) {
+        // Fail-closed: a BLOCKED_ONLY value whose country has no blocked dataset would emit a catch-all
+        // direct with nothing routed to proxy — 100% of traffic egressing direct while the UI says
+        // "connected". Degrade to PROXY_ALL here at the chokepoint so no caller can construct that config.
+        val effectiveMode = if (routing.mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(routing.country)) {
+            RoutingMode.PROXY_ALL
+        } else {
+            routing.mode
+        }
+        val blockTag = if (routing.blockAds || effectiveMode == RoutingMode.BLOCKED_ONLY) {
             ensureHelperOutbound(outbounds, "blackhole", "block")
         } else null
 
@@ -437,16 +445,16 @@ object ConfigBuilder {
 
         val out = JSONArray()
         if (port53 != null) out.put(port53)
-        if (routing.mode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
+        if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
-        when (routing.mode) {
+        when (effectiveMode) {
             RoutingMode.PROXY_ALL -> {}
             RoutingMode.EXCEPT_COUNTRY -> directTags(routing.country).forEach { (k, v) -> out.put(fieldRule(k, listOf(v), directTag)) }
             RoutingMode.BLOCKED_ONLY -> blockedTags(routing.country).forEach { (k, v) -> out.put(fieldRule(k, listOf(v), proxyTag)) }
         }
         for (i in 0 until passthrough.length()) out.put(passthrough.get(i))
-        if (routing.mode == RoutingMode.BLOCKED_ONLY) {
+        if (effectiveMode == RoutingMode.BLOCKED_ONLY) {
             out.put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", directTag))
         }
         routingObj.put("rules", out)
@@ -465,7 +473,8 @@ object ConfigBuilder {
 
     /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
     private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {
-        val servers = root.optJSONObject("dns")?.optJSONArray("servers") ?: return emptyList()
+        val dnsObj = root.optJSONObject("dns") ?: return emptyList()
+        val servers = dnsObj.optJSONArray("servers") ?: return emptyList()
         val ips = mutableListOf<String>()
         val domains = mutableListOf<String>()
         for (i in 0 until servers.length()) {
@@ -476,9 +485,21 @@ object ConfigBuilder {
             if (host.isBlank()) continue
             if (isIpLiteral(host)) ips.add(host) else domains.add("full:$host")
         }
+        // A hostname resolver pinned via dns.hosts is dialled at its pinned IP; without an ip-side rule the
+        // DoH connection falls through the BLOCKED_ONLY catch-all to direct. Guard both forms.
+        dnsObj.optJSONObject("hosts")?.let { hosts ->
+            for (key in hosts.keys()) {
+                when (val v = hosts.opt(key)) {
+                    is JSONArray -> for (j in 0 until v.length()) {
+                        v.optString(j).takeIf { it.isNotBlank() && isIpLiteral(it) }?.let { ips.add(it) }
+                    }
+                    is String -> if (v.isNotBlank() && isIpLiteral(v)) ips.add(v)
+                }
+            }
+        }
         val rules = mutableListOf<JSONObject>()
-        if (ips.isNotEmpty()) rules.add(fieldRule("ip", ips, proxyTag))
-        if (domains.isNotEmpty()) rules.add(fieldRule("domain", domains, proxyTag))
+        if (ips.isNotEmpty()) rules.add(fieldRule("ip", ips.distinct(), proxyTag))
+        if (domains.isNotEmpty()) rules.add(fieldRule("domain", domains.distinct(), proxyTag))
         return rules
     }
 
@@ -490,14 +511,31 @@ object ConfigBuilder {
         return fallback
     }
 
-    /** Returns the tag of an existing outbound with [protocol], else appends one tagged [preferredTag]. */
+    /** Returns the tag of a usable existing outbound with [protocol], else appends one. */
     private fun ensureHelperOutbound(outbounds: JSONArray, protocol: String, preferredTag: String): String {
         for (i in 0 until outbounds.length()) {
             val ob = outbounds.optJSONObject(i) ?: continue
-            if (ob.optString("protocol").equals(protocol, ignoreCase = true)) return ob.optString("tag").ifBlank { ensureTag(ob, preferredTag) }
+            if (!ob.optString("protocol").equals(protocol, ignoreCase = true)) continue
+            // Don't adopt a redirecting freedom (e.g. a WARP-chain outbound): pointing "direct" traffic at
+            // its local redirect port would black-hole every direct rule. Append a clean one instead.
+            if (ob.optJSONObject("settings")?.has("redirect") == true) continue
+            return ob.optString("tag").ifBlank { ensureTag(ob, preferredTag) }
         }
-        outbounds.put(JSONObject().put("tag", preferredTag).put("protocol", protocol))
-        return preferredTag
+        val tag = uniqueOutboundTag(outbounds, preferredTag)
+        outbounds.put(JSONObject().put("tag", tag).put("protocol", protocol))
+        return tag
+    }
+
+    /** [preferred] if free, else the first "preferred-N" not already taken by another outbound. */
+    private fun uniqueOutboundTag(outbounds: JSONArray, preferred: String): String {
+        val taken = mutableSetOf<String>()
+        for (i in 0 until outbounds.length()) {
+            outbounds.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotBlank() }?.let { taken.add(it) }
+        }
+        if (preferred !in taken) return preferred
+        var n = 2
+        while ("$preferred-$n" in taken) n++
+        return "$preferred-$n"
     }
 
     private fun isMuxEligible(outbound: JSONObject): Boolean {
