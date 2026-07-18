@@ -21,7 +21,8 @@ object ConfigBuilder {
         }
         val withLog = forceLog(base, log)
         val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
-        return applyMux(withFragmentation, tuning.mux)
+        val withMux = applyMux(withFragmentation, tuning.mux)
+        return applyDns(withMux, tuning.dns)
     }
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
@@ -323,6 +324,70 @@ object ConfigBuilder {
                 .put("xudpConcurrency", mux.xudpConcurrency)
                 .put("xudpProxyUDP443", mux.quicHandling.wire)
         )
+        return root.toString()
+    }
+
+    /**
+     * Overlays the global DoH resolver choice + query strategy onto the dns block makeSecureDns built.
+     * FROM_CONFIG is a no-op. An explicit preset replaces the unscoped resolver pair AND rewrites the
+     * `+local` proxy-hostname bootstrap pair to the chosen resolver (privacy: don't leak the proxy name
+     * to Cloudflare when the user picked another resolver). A hostname custom URL is pinned via
+     * `dns.hosts`. queryStrategy is force-overwritten (a global knob must win over makeSecureDns's
+     * set-if-absent). applyDns runs BEFORE applyRouting so routing's mode-3 DoH-guard derives from the
+     * swapped resolver.
+     */
+    private fun applyDns(configJson: String, dns: DnsSettings): String {
+        if (dns.resolver == DnsResolver.FROM_CONFIG) return configJson
+        val root = JSONObject(configJson)
+        val dnsObj = root.optJSONObject("dns") ?: JSONObject().also { root.put("dns", it) }
+
+        // Resolve the chosen primary/secondary DoH endpoints.
+        val (primary, secondary) = when (dns.resolver) {
+            DnsResolver.CUSTOM -> dns.customUrl.trim() to null
+            else -> dns.resolver.presetPair() ?: return configJson
+        }
+
+        // Is the effective resolver host a hostname needing a hosts pin?
+        val customHost = if (dns.resolver == DnsResolver.CUSTOM) DohUrl.host(dns.customUrl) else null
+        val pinnedIp = dns.customPinnedIp.trim()
+        val needsPin = customHost != null && !isIpLiteral(customHost) && pinnedIp.isNotBlank()
+        // The IP form used for the +local proxy bootstrap: preset secondary/primary IP, or the pinned IP.
+        val bootstrapIpUrl = when {
+            needsPin -> "https+local://$pinnedIp/dns-query"
+            dns.resolver == DnsResolver.CUSTOM -> customHost?.takeIf { isIpLiteral(it) }?.let { "https+local://$it/dns-query" }
+            else -> primary.replaceFirst("https://", "https+local://")
+        }
+
+        // Rebuild the servers array: preserve makeSecureDns's structure (scoped bootstrap first, unscoped
+        // after) but swap addresses. We identify scoped bootstrap entries by their `domains` field.
+        val oldServers = dnsObj.optJSONArray("servers") ?: JSONArray()
+        val newServers = JSONArray()
+        for (i in 0 until oldServers.length()) {
+            val entry = oldServers.opt(i)
+            if (entry is JSONObject && entry.has("domains")) {
+                // Scoped proxy-hostname bootstrap entry → point it at the chosen resolver's IP form.
+                // If no IP form exists (hostname custom without a pin — UI-unreachable, but prefs could
+                // be stale/corrupt), keep the original bootstrap instead of dropping it: losing the
+                // scoped entry would deadlock a hostname-addressed proxy's own name resolution.
+                if (bootstrapIpUrl != null) {
+                    newServers.put(JSONObject().put("address", bootstrapIpUrl).put("domains", entry.getJSONArray("domains")))
+                } else {
+                    newServers.put(entry)
+                }
+            }
+        }
+        // Unscoped resolver entries: the chosen primary (+ secondary if a preset).
+        newServers.put(primary)
+        if (secondary != null) newServers.put(secondary)
+        dnsObj.put("servers", newServers)
+
+        // Hosts pin for a hostname custom resolver (merge, don't overwrite existing hosts).
+        if (needsPin && customHost != null) {
+            val hosts = dnsObj.optJSONObject("hosts") ?: JSONObject().also { dnsObj.put("hosts", it) }
+            hosts.put(customHost, pinnedIp)
+        }
+
+        dnsObj.put("queryStrategy", dns.queryStrategy.wire)
         return root.toString()
     }
 
