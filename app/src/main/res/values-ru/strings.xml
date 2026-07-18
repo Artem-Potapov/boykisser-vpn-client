@@ -54,6 +54,21 @@
     <string name="settings_autoconnect_subtitle">Держать VPN включённым после перезагрузки</string>
     <string name="settings_fragmentation_title">Фрагментация</string>
     <string name="settings_fragmentation_subtitle">Разбивать TLS-рукопожатие для обхода DPI</string>
+    <string name="settings_mux_subtitle">Объединять соединения в один канал (только VLESS/TCP)</string>
+
+    <!-- Mux settings screen -->
+    <string name="mux_title">Мультиплексирование</string>
+    <string name="mux_enable">Включить мультиплексирование</string>
+    <string name="mux_concurrency">Макс. потоков (1–1024)</string>
+    <string name="mux_xudp_concurrency">Параллелизм UDP</string>
+    <string name="mux_quic_handling_label">Обработка QUIC</string>
+    <string name="mux_quic_block">Блокировать QUIC (форс TCP)</string>
+    <string name="mux_quic_allow">Проксировать QUIC через mux</string>
+    <string name="mux_quic_skip">Проксировать QUIC вне mux</string>
+    <string name="mux_hint">Применяется к профилям VLESS по TCP-транспортам. Hysteria2 и xhttp не затрагиваются. Вступает в силу при следующем подключении.</string>
+    <string name="mux_error_concurrency">Введите число от 1 до 1024</string>
+    <string name="mux_cd_back">Назад</string>
+    <string name="mux_save">Сохранить</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">Интерфейс</string>

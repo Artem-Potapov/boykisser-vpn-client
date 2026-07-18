@@ -130,9 +130,12 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 subtitle = stringResource(R.string.settings_fragmentation_subtitle),
                 onClick = { open(FragmentationSettingsActivity::class.java) }
             )
-            if (BuildConfig.DEBUG) {
-                SettingsRow(title = stringResource(R.string.settings_ph_mux), enabled = false, badge = badge)
-            }
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.mux_title),
+                subtitle = stringResource(R.string.settings_mux_subtitle),
+                onClick = { open(MuxSettingsActivity::class.java) }
+            )
 
             // Advanced (whole section debug-only)
             if (BuildConfig.DEBUG) {

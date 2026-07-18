@@ -53,6 +53,21 @@
     <string name="settings_autoconnect_subtitle">Keep the VPN on across restarts</string>
     <string name="settings_fragmentation_title">Fragmentation</string>
     <string name="settings_fragmentation_subtitle">Split the TLS handshake to bypass DPI</string>
+    <string name="settings_mux_subtitle">Combine connections over one link (VLESS/TCP only)</string>
+
+    <!-- Mux settings screen -->
+    <string name="mux_title">Multiplexing</string>
+    <string name="mux_enable">Enable multiplexing</string>
+    <string name="mux_concurrency">Max concurrent streams (1–1024)</string>
+    <string name="mux_xudp_concurrency">UDP concurrency</string>
+    <string name="mux_quic_handling_label">QUIC handling</string>
+    <string name="mux_quic_block">Block QUIC (force TCP)</string>
+    <string name="mux_quic_allow">Proxy QUIC via mux</string>
+    <string name="mux_quic_skip">Proxy QUIC outside mux</string>
+    <string name="mux_hint">Applies to VLESS profiles over TCP-based transports. Hysteria2 and xhttp are unaffected. Takes effect on the next connect.</string>
+    <string name="mux_error_concurrency">Enter a number from 1 to 1024</string>
+    <string name="mux_cd_back">Back</string>
+    <string name="mux_save">Save</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">UI</string>
