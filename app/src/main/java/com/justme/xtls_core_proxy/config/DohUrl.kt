@@ -9,4 +9,13 @@ object DohUrl {
         val host = u.substringAfter("://").substringBefore("/").substringBefore(":").trim()
         return host.ifBlank { null }
     }
+
+    fun isValidHttps(url: String): Boolean = host(url) != null
+
+    /**
+     * Resolves [host] to an IP via [resolver] (default: system DNS). Returns null on failure — a
+     * convenience for the settings UI, never a gate. Must run off the main thread.
+     */
+    fun resolveHostname(host: String, resolver: (String) -> String = { java.net.InetAddress.getByName(it).hostAddress ?: "" }): String? =
+        runCatching { resolver(host).ifBlank { null } }.getOrNull()
 }

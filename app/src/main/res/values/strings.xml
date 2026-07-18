@@ -87,6 +87,30 @@
     <string name="settings_ph_ping">Ping test settings</string>
     <string name="settings_ph_check_update">Check for updates</string>
 
+    <!-- DNS settings screen -->
+    <string name="dns_title">DNS</string>
+    <string name="settings_dns_subtitle">Choose a secure DoH resolver</string>
+    <string name="dns_resolver_label">Resolver</string>
+    <string name="dns_resolver_from_config">From config</string>
+    <string name="dns_resolver_cloudflare">Cloudflare</string>
+    <string name="dns_resolver_google">Google</string>
+    <string name="dns_resolver_quad9">Quad9</string>
+    <string name="dns_resolver_adguard">AdGuard (blocks ads)</string>
+    <string name="dns_resolver_custom">Custom</string>
+    <string name="dns_custom_url">Custom DoH URL (https://)</string>
+    <string name="dns_custom_url_error">Must be an https:// URL</string>
+    <string name="dns_pinned_ip">Server IP (for hostname URLs)</string>
+    <string name="dns_pinned_ip_error">Enter the resolver\'s IP</string>
+    <string name="dns_resolve">Resolve</string>
+    <string name="dns_resolve_failed">Couldn\'t resolve — enter the IP manually</string>
+    <string name="dns_query_strategy_label">Query strategy</string>
+    <string name="dns_strategy_use_ip">Auto (IPv4 + IPv6)</string>
+    <string name="dns_strategy_use_ipv4">IPv4 only</string>
+    <string name="dns_strategy_use_ipv6">IPv6 only</string>
+    <string name="dns_hint">Takes effect on the next connect. Plaintext DNS is never used.</string>
+    <string name="dns_cd_back">Back</string>
+    <string name="dns_save">Save</string>
+
     <!-- Auto-connect on boot dialog -->
     <string name="autoconnect_dialog_title">Auto-connect on boot</string>
     <string name="autoconnect_dialog_body">Android can keep this VPN connected automatically — including after a reboot — using its built-in Always-on VPN feature. Open VPN settings, then enable \"Always-on VPN\" (and \"Block connections without VPN\" for a strict kill switch) for this app.</string>

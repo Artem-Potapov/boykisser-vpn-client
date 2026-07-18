@@ -88,6 +88,30 @@
     <string name="settings_ph_ping">Настройки пинг-теста</string>
     <string name="settings_ph_check_update">Проверить обновления</string>
 
+    <!-- Экран настроек DNS -->
+    <string name="dns_title">DNS</string>
+    <string name="settings_dns_subtitle">Выберите защищённый DoH-резолвер</string>
+    <string name="dns_resolver_label">Резолвер</string>
+    <string name="dns_resolver_from_config">Из конфига</string>
+    <string name="dns_resolver_cloudflare">Cloudflare</string>
+    <string name="dns_resolver_google">Google</string>
+    <string name="dns_resolver_quad9">Quad9</string>
+    <string name="dns_resolver_adguard">AdGuard (блокирует рекламу)</string>
+    <string name="dns_resolver_custom">Свой</string>
+    <string name="dns_custom_url">Свой DoH URL (https://)</string>
+    <string name="dns_custom_url_error">Требуется URL https://</string>
+    <string name="dns_pinned_ip">IP сервера (для доменных URL)</string>
+    <string name="dns_pinned_ip_error">Укажите IP резолвера</string>
+    <string name="dns_resolve">Определить</string>
+    <string name="dns_resolve_failed">Не удалось определить — введите IP вручную</string>
+    <string name="dns_query_strategy_label">Стратегия запросов</string>
+    <string name="dns_strategy_use_ip">Авто (IPv4 + IPv6)</string>
+    <string name="dns_strategy_use_ipv4">Только IPv4</string>
+    <string name="dns_strategy_use_ipv6">Только IPv6</string>
+    <string name="dns_hint">Вступает в силу при следующем подключении. Открытый DNS не используется.</string>
+    <string name="dns_cd_back">Назад</string>
+    <string name="dns_save">Сохранить</string>
+
     <!-- Диалог автоподключения при запуске -->
     <string name="autoconnect_dialog_title">Автоподключение при запуске</string>
     <string name="autoconnect_dialog_body">Android может автоматически поддерживать подключение VPN — в том числе после перезагрузки — с помощью встроенной функции «Постоянная VPN». Откройте настройки VPN и включите «Постоянная VPN» (и «Блокировать подключения без VPN» для строгого kill switch) для этого приложения.</string>
