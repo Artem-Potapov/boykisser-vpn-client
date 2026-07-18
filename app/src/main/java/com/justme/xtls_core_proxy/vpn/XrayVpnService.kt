@@ -19,6 +19,7 @@ import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.bridge.XrayBridge
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.DnsPreferences
 import com.justme.xtls_core_proxy.config.FragmentationPreferences
 import com.justme.xtls_core_proxy.config.LogSettings
 import com.justme.xtls_core_proxy.config.MuxPreferences
@@ -312,6 +313,7 @@ class XrayVpnService : VpnService() {
                         sessionTuning = TuningSettings(
                             fragmentation = FragmentationPreferences.load(this@XrayVpnService),
                             mux = MuxPreferences.load(this@XrayVpnService),
+                            dns = DnsPreferences.load(this@XrayVpnService),
                         )
                         sessionLog = initialLog
                         true
