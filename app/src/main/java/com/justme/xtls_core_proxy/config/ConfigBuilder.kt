@@ -338,6 +338,9 @@ object ConfigBuilder {
      */
     private fun applyDns(configJson: String, dns: DnsSettings): String {
         if (dns.resolver == DnsResolver.FROM_CONFIG) return configJson
+        // Fail-closed: a corrupt/blank CUSTOM url must not re-introduce a plaintext/empty resolver
+        // past makeSecureDns's plaintext strip — no-op keeps the secure Cloudflare DoH posture.
+        if (dns.resolver == DnsResolver.CUSTOM && !DohUrl.isValidHttps(dns.customUrl)) return configJson
         val root = JSONObject(configJson)
         val dnsObj = root.optJSONObject("dns") ?: JSONObject().also { root.put("dns", it) }
 
@@ -382,7 +385,7 @@ object ConfigBuilder {
         dnsObj.put("servers", newServers)
 
         // Hosts pin for a hostname custom resolver (merge, don't overwrite existing hosts).
-        if (needsPin && customHost != null) {
+        if (needsPin) {
             val hosts = dnsObj.optJSONObject("hosts") ?: JSONObject().also { dnsObj.put("hosts", it) }
             hosts.put(customHost, pinnedIp)
         }

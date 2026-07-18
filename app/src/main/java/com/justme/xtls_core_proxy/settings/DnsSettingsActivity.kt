@@ -142,7 +142,7 @@ private fun DnsScreen(onBack: () -> Unit) {
                         )
                         OutlinedButton(
                             onClick = {
-                                val host = customHost ?: return@OutlinedButton
+                                val host = customHost
                                 scope.launch {
                                     val ip = withContext(Dispatchers.IO) { DohUrl.resolveHostname(host) }
                                     if (ip != null) { pinnedIp = ip; resolveError = false } else resolveError = true

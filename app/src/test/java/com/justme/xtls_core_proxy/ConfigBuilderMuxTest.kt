@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.FragmentationSettings
 import com.justme.xtls_core_proxy.config.MuxSettings
 import com.justme.xtls_core_proxy.config.QuicHandling
 import com.justme.xtls_core_proxy.config.TuningSettings
@@ -58,5 +59,25 @@ class ConfigBuilderMuxTest {
             vlessTcp(), tuning = TuningSettings(mux = MuxSettings(true, 8, 16, QuicHandling.ALLOW))
         )
         assertEquals("allow", mux(out)!!.getString("xudpProxyUDP443"))
+    }
+
+    @Test fun mux_and_fragmentation_both_overlay_proxy_without_clobbering() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessTcp(),
+            tuning = TuningSettings(
+                fragmentation = FragmentationSettings(
+                    enabled = true, packets = "tlshello", length = "100-200", interval = "10-20"
+                ),
+                mux = MuxSettings(true, 8, 16, QuicHandling.BLOCK),
+            )
+        )
+        val outbound = JSONObject(out).getJSONArray("outbounds").getJSONObject(0)
+        // Mux overlay landed on the proxy outbound.
+        assertTrue(outbound.getJSONObject("mux").getBoolean("enabled"))
+        // Fragmentation overlay landed in the same outbound's sockopt.
+        val sockopt = outbound.getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertEquals("tlshello", sockopt.getJSONObject("fragment").getString("packets"))
+        // makeSecureDns's ForceIP in that same sockopt survives both overlays.
+        assertEquals("ForceIP", sockopt.getString("domainStrategy"))
     }
 }
