@@ -112,6 +112,24 @@
     <string name="dns_cd_back">Назад</string>
     <string name="dns_save">Сохранить</string>
 
+    <!-- Настройки маршрутизации -->
+    <string name="routing_title">Правила маршрутизации</string>
+    <string name="settings_routing_subtitle">Выберите, что идёт через VPN</string>
+    <string name="routing_mode_label">Режим маршрутизации</string>
+    <string name="routing_mode_proxy_all">Весь трафик через прокси</string>
+    <string name="routing_mode_except">Всё, кроме моей страны</string>
+    <string name="routing_mode_blocked">Только заблокированные сайты</string>
+    <string name="routing_country_label">Моя страна</string>
+    <string name="routing_country_ru">Россия</string>
+    <string name="routing_country_ir">Иран</string>
+    <string name="routing_bypass_lan">В обход локальной сети и частных адресов</string>
+    <string name="routing_block_ads">Блокировать рекламу и трекеры</string>
+    <string name="routing_blocked_caution">В этом режиме трафик к незаблокированным сайтам идёт мимо VPN.</string>
+    <string name="routing_country_unavailable">Недоступно в этой сборке</string>
+    <string name="routing_hint">Вступает в силу при следующем подключении.</string>
+    <string name="routing_cd_back">Назад</string>
+    <string name="routing_save">Сохранить</string>
+
     <!-- Диалог автоподключения при запуске -->
     <string name="autoconnect_dialog_title">Автоподключение при запуске</string>
     <string name="autoconnect_dialog_body">Android может автоматически поддерживать подключение VPN — в том числе после перезагрузки — с помощью встроенной функции «Постоянная VPN». Откройте настройки VPN и включите «Постоянная VPN» (и «Блокировать подключения без VPN» для строгого kill switch) для этого приложения.</string>

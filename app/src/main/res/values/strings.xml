@@ -111,6 +111,24 @@
     <string name="dns_cd_back">Back</string>
     <string name="dns_save">Save</string>
 
+    <!-- Routing settings -->
+    <string name="routing_title">Routing rules</string>
+    <string name="settings_routing_subtitle">Choose what goes through the VPN</string>
+    <string name="routing_mode_label">Routing mode</string>
+    <string name="routing_mode_proxy_all">Proxy everything</string>
+    <string name="routing_mode_except">Proxy all except my country</string>
+    <string name="routing_mode_blocked">Proxy only blocked sites</string>
+    <string name="routing_country_label">My country</string>
+    <string name="routing_country_ru">Russia</string>
+    <string name="routing_country_ir">Iran</string>
+    <string name="routing_bypass_lan">Bypass LAN / private addresses</string>
+    <string name="routing_block_ads">Block ads &amp; trackers</string>
+    <string name="routing_blocked_caution">In this mode, traffic to non-blocked sites leaves the VPN.</string>
+    <string name="routing_country_unavailable">Not available in this build</string>
+    <string name="routing_hint">Takes effect on the next connect.</string>
+    <string name="routing_cd_back">Back</string>
+    <string name="routing_save">Save</string>
+
     <!-- Auto-connect on boot dialog -->
     <string name="autoconnect_dialog_title">Auto-connect on boot</string>
     <string name="autoconnect_dialog_body">Android can keep this VPN connected automatically — including after a reboot — using its built-in Always-on VPN feature. Open VPN settings, then enable \"Always-on VPN\" (and \"Block connections without VPN\" for a strict kill switch) for this app.</string>
