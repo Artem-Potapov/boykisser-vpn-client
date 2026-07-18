@@ -20,7 +20,8 @@ object ConfigBuilder {
             else -> fromJson(trimmed)
         }
         val withLog = forceLog(base, log)
-        return applyFragmentation(withLog, tuning.fragmentation)
+        val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
+        return applyMux(withFragmentation, tuning.mux)
     }
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
@@ -298,6 +299,47 @@ object ConfigBuilder {
         )
         return root.toString()
     }
+
+    // Transports Mux.Cool is paired with. Blank network == "tcp". xhttp is excluded (uses XMUX);
+    // kcp/quic are UDP-based transports where Mux.Cool is redundant.
+    private val MUX_TRANSPORTS = setOf("tcp", "ws", "grpc", "h2", "httpupgrade")
+
+    /**
+     * Merges Mux.Cool onto the proxy outbound when enabled AND the outbound is a VLESS proxy with a
+     * blank flow (XTLS Vision is incompatible with mux) over a MUX_TRANSPORTS transport. Overwrites any
+     * existing mux object; disabled leaves the config's own mux untouched.
+     */
+    private fun applyMux(configJson: String, mux: MuxSettings): String {
+        if (!mux.enabled) return configJson
+        val root = JSONObject(configJson)
+        val outbounds = root.optJSONArray("outbounds") ?: return configJson
+        val proxy = firstProxyOutbound(outbounds) ?: return configJson
+        if (!isMuxEligible(proxy)) return configJson
+        proxy.put(
+            "mux",
+            JSONObject()
+                .put("enabled", true)
+                .put("concurrency", mux.concurrency)
+                .put("xudpConcurrency", mux.xudpConcurrency)
+                .put("xudpProxyUDP443", mux.quicHandling.wire)
+        )
+        return root.toString()
+    }
+
+    private fun isMuxEligible(outbound: JSONObject): Boolean {
+        if (!outbound.optString("protocol").equals("vless", ignoreCase = true)) return false
+        if (vlessFlow(outbound).isNotBlank()) return false
+        val network = outbound.optJSONObject("streamSettings")?.optString("network")?.lowercase().orEmpty()
+        val net = if (network.isBlank()) "tcp" else network
+        return net in MUX_TRANSPORTS
+    }
+
+    /** The VLESS user's flow, at settings.vnext[0].users[0].flow; blank if absent. */
+    private fun vlessFlow(outbound: JSONObject): String =
+        outbound.optJSONObject("settings")
+            ?.optJSONArray("vnext")?.optJSONObject(0)
+            ?.optJSONArray("users")?.optJSONObject(0)
+            ?.optString("flow").orEmpty()
 
     private fun isTcpBasedOutbound(outbound: JSONObject): Boolean {
         if (outbound.optString("protocol").lowercase().startsWith("hysteria")) return false

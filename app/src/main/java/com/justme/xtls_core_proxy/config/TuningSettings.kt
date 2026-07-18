@@ -7,6 +7,7 @@ package com.justme.xtls_core_proxy.config
  */
 data class TuningSettings(
     val fragmentation: FragmentationSettings = FragmentationSettings.DISABLED,
+    val mux: MuxSettings = MuxSettings.OFF,
 ) {
     companion object {
         val NONE = TuningSettings()
