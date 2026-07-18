@@ -9,6 +9,7 @@ data class TuningSettings(
     val fragmentation: FragmentationSettings = FragmentationSettings.DISABLED,
     val mux: MuxSettings = MuxSettings.OFF,
     val dns: DnsSettings = DnsSettings.FROM_CONFIG,
+    val routing: RoutingSettings? = null,
 ) {
     companion object {
         val NONE = TuningSettings()

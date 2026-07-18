@@ -22,7 +22,8 @@ object ConfigBuilder {
         val withLog = forceLog(base, log)
         val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
         val withMux = applyMux(withFragmentation, tuning.mux)
-        return applyDns(withMux, tuning.dns)
+        val withDns = applyDns(withMux, tuning.dns)
+        return applyRouting(withDns, tuning.routing)
     }
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
@@ -120,10 +121,16 @@ object ConfigBuilder {
 
     private fun ruleReferencesGeo(rule: JSONObject): Boolean {
         rule.optJSONArray("ip")?.let { ip ->
-            for (i in 0 until ip.length()) if (ip.optString(i).startsWith("geoip:")) return true
+            for (i in 0 until ip.length()) {
+                val v = ip.optString(i)
+                if (v.startsWith("geoip:") || v.startsWith("ext:")) return true
+            }
         }
         rule.optJSONArray("domain")?.let { domain ->
-            for (i in 0 until domain.length()) if (domain.optString(i).startsWith("geosite:")) return true
+            for (i in 0 until domain.length()) {
+                val v = domain.optString(i)
+                if (v.startsWith("geosite:") || v.startsWith("ext:")) return true
+            }
         }
         return false
     }
@@ -392,6 +399,105 @@ object ConfigBuilder {
 
         dnsObj.put("queryStrategy", dns.queryStrategy.wire)
         return root.toString()
+    }
+
+    /**
+     * Global routing overlay. null → no-op (probes). Owns the geoip:private LAN rule (strips the baked
+     * one, re-injects per toggle). Injected order, spliced after the forced port-53 rule:
+     * DoH-guard(mode3) · LAN · ads · mode rules · config's own rules · catch-all direct(mode3, last).
+     * applyCoreSettings later inserts the IPv6 ::/0-block at index 1. Ensures direct/block outbounds and
+     * a proxy tag exist before referencing them.
+     */
+    private fun applyRouting(configJson: String, routing: RoutingSettings?): String {
+        if (routing == null) return configJson
+        val root = JSONObject(configJson)
+        val outbounds = root.optJSONArray("outbounds") ?: return configJson
+        val proxy = firstProxyOutbound(outbounds) ?: return configJson
+        val proxyTag = ensureTag(proxy, "proxy")
+        val directTag = ensureHelperOutbound(outbounds, "freedom", "direct")
+        val blockTag = if (routing.blockAds || routing.mode == RoutingMode.BLOCKED_ONLY) {
+            ensureHelperOutbound(outbounds, "blackhole", "block")
+        } else null
+
+        val routingObj = root.optJSONObject("routing") ?: JSONObject().also { root.put("routing", it) }
+        val existing = routingObj.optJSONArray("rules") ?: JSONArray()
+
+        // Partition existing rules: the forced port-53 rule (kept first), the owned LAN rule (dropped),
+        // and everything else (preserved after the injected block).
+        var port53: JSONObject? = null
+        val passthrough = JSONArray()
+        for (i in 0 until existing.length()) {
+            val rule = existing.optJSONObject(i) ?: continue
+            when {
+                ruleMatchesDnsPort(rule) && port53 == null -> port53 = rule
+                isOwnedLanRule(rule, directTag) -> {} // drop; re-injected per toggle
+                else -> passthrough.put(rule)
+            }
+        }
+
+        val out = JSONArray()
+        if (port53 != null) out.put(port53)
+        if (routing.mode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
+        if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
+        if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
+        when (routing.mode) {
+            RoutingMode.PROXY_ALL -> {}
+            RoutingMode.EXCEPT_COUNTRY -> directTags(routing.country).forEach { (k, v) -> out.put(fieldRule(k, listOf(v), directTag)) }
+            RoutingMode.BLOCKED_ONLY -> blockedTags(routing.country).forEach { (k, v) -> out.put(fieldRule(k, listOf(v), proxyTag)) }
+        }
+        for (i in 0 until passthrough.length()) out.put(passthrough.get(i))
+        if (routing.mode == RoutingMode.BLOCKED_ONLY) {
+            out.put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", directTag))
+        }
+        routingObj.put("rules", out)
+        return root.toString()
+    }
+
+    private fun fieldRule(key: String, items: List<String>, tag: String): JSONObject =
+        JSONObject().put("type", "field").put(key, JSONArray(items)).put("outboundTag", tag)
+
+    /** True for the exact baked-in LAN rule shape (single geoip:private ip → the direct outbound). */
+    private fun isOwnedLanRule(rule: JSONObject, directTag: String): Boolean {
+        if (rule.optString("outboundTag") != directTag) return false
+        val ip = rule.optJSONArray("ip") ?: return false
+        return ip.length() == 1 && ip.optString(0) == "geoip:private"
+    }
+
+    /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
+    private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {
+        val servers = root.optJSONObject("dns")?.optJSONArray("servers") ?: return emptyList()
+        val ips = mutableListOf<String>()
+        val domains = mutableListOf<String>()
+        for (i in 0 until servers.length()) {
+            val entry = servers.opt(i)
+            if (entry is JSONObject && entry.has("domains")) continue // +local bootstrap, already carved out
+            val addr = if (entry is JSONObject) entry.optString("address") else entry?.toString() ?: continue
+            val host = addr.substringAfter("://").substringBefore("/").substringBefore(":").trim()
+            if (host.isBlank()) continue
+            if (isIpLiteral(host)) ips.add(host) else domains.add("full:$host")
+        }
+        val rules = mutableListOf<JSONObject>()
+        if (ips.isNotEmpty()) rules.add(fieldRule("ip", ips, proxyTag))
+        if (domains.isNotEmpty()) rules.add(fieldRule("domain", domains, proxyTag))
+        return rules
+    }
+
+    /** Returns the outbound's tag, assigning [fallback] if it has none. */
+    private fun ensureTag(outbound: JSONObject, fallback: String): String {
+        val tag = outbound.optString("tag")
+        if (tag.isNotBlank()) return tag
+        outbound.put("tag", fallback)
+        return fallback
+    }
+
+    /** Returns the tag of an existing outbound with [protocol], else appends one tagged [preferredTag]. */
+    private fun ensureHelperOutbound(outbounds: JSONArray, protocol: String, preferredTag: String): String {
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.optJSONObject(i) ?: continue
+            if (ob.optString("protocol").equals(protocol, ignoreCase = true)) return ob.optString("tag").ifBlank { ensureTag(ob, preferredTag) }
+        }
+        outbounds.put(JSONObject().put("tag", preferredTag).put("protocol", protocol))
+        return preferredTag
     }
 
     private fun isMuxEligible(outbound: JSONObject): Boolean {
