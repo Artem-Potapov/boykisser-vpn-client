@@ -52,20 +52,34 @@ fun blockedSupported(country: RoutingCountry): Boolean = blockedTags(country).is
 fun routingNeedsDomainRules(r: RoutingSettings?): Boolean =
     r != null && (r.mode != RoutingMode.PROXY_ALL || r.blockAds)
 
+/**
+ * The .dat files a tag list actually references: `ext:<file>:<list>` needs `<file>`, while
+ * `geosite:`/`geoip:` resolve out of the general bundles. Derived from the tables rather than
+ * hardcoded per country — the two must never drift (a country whose tags use only the general
+ * bundles must NOT be reported as needing its per-country file).
+ */
+private fun filesForTags(tags: List<Pair<String, String>>): Set<String> {
+    val files = mutableSetOf<String>()
+    for ((_, value) in tags) {
+        when {
+            value.startsWith("ext:") ->
+                value.removePrefix("ext:").substringBefore(":").takeIf { it.isNotBlank() }?.let { files += it }
+            value.startsWith("geoip:") -> files += "geoip.dat"
+            value.startsWith("geosite:") -> files += "geosite.dat"
+        }
+    }
+    return files
+}
+
 /** Geo .dat files a settings value needs present to build without a core-start failure. */
 fun requiredGeoFiles(r: RoutingSettings): Set<String> {
     val files = mutableSetOf<String>()
-    if (r.bypassLan) files += "geoip.dat"
-    if (r.blockAds) files += "geosite.dat"
+    if (r.bypassLan) files += "geoip.dat"      // geoip:private
+    if (r.blockAds) files += "geosite.dat"     // geosite:category-ads-all
     when (r.mode) {
         RoutingMode.PROXY_ALL -> {}
-        RoutingMode.EXCEPT_COUNTRY -> {
-            files += "geosite.dat"; files += "geoip.dat"          // geosite:category-*, geoip:*
-            files += r.country.geositeFile                        // ext:geosite_XX
-        }
-        RoutingMode.BLOCKED_ONLY -> {
-            files += r.country.geositeFile; files += r.country.geoipFile
-        }
+        RoutingMode.EXCEPT_COUNTRY -> files += filesForTags(directTags(r.country))
+        RoutingMode.BLOCKED_ONLY -> files += filesForTags(blockedTags(r.country))
     }
     return files
 }

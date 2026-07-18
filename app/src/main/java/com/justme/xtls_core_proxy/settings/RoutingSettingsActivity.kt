@@ -68,7 +68,7 @@ private fun RoutingScreen(onBack: () -> Unit) {
     // DropdownField is String-keyed and has no per-option disabling, so an unbuildable
     // combination is flagged with a label suffix; sanitizeForAvailability on save is the
     // actual enforcement (an impossible combo can never be persisted).
-    val unavailable = stringResource(R.string.routing_country_unavailable)
+    val unavailable = stringResource(R.string.routing_option_unavailable)
     fun suffixed(label: String, availableFor: Boolean) =
         if (availableFor) label else "$label — $unavailable"
 
@@ -83,6 +83,9 @@ private fun RoutingScreen(onBack: () -> Unit) {
         if (mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(candidate)) return false
         return sanitizeForAvailability(probe, available).mode == mode
     }
+
+    val lanAvailable = "geoip.dat" in available
+    val adsAvailable = "geosite.dat" in available
 
     val modeOptions = listOf(
         RoutingMode.PROXY_ALL.name to
@@ -139,17 +142,27 @@ private fun RoutingScreen(onBack: () -> Unit) {
                 )
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.routing_bypass_lan), modifier = Modifier.weight(1f))
-                Switch(checked = bypassLan, onCheckedChange = { bypassLan = it })
+                Text(suffixed(stringResource(R.string.routing_bypass_lan), lanAvailable), modifier = Modifier.weight(1f))
+                Switch(checked = bypassLan, onCheckedChange = { bypassLan = it }, enabled = lanAvailable)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.routing_block_ads), modifier = Modifier.weight(1f))
-                Switch(checked = blockAds, onCheckedChange = { blockAds = it })
+                Text(suffixed(stringResource(R.string.routing_block_ads), adsAvailable), modifier = Modifier.weight(1f))
+                Switch(checked = blockAds, onCheckedChange = { blockAds = it }, enabled = adsAvailable)
             }
-            if (mode == RoutingMode.BLOCKED_ONLY) {
+            if (mode == RoutingMode.BLOCKED_ONLY && modeAvailable(mode)) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Text(
                         stringResource(R.string.routing_blocked_caution),
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+            if (!modeAvailable(mode)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text(
+                        stringResource(R.string.routing_mode_fallback_notice),
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer

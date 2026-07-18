@@ -124,7 +124,8 @@
     <string name="routing_bypass_lan">Bypass LAN / private addresses</string>
     <string name="routing_block_ads">Block ads &amp; trackers</string>
     <string name="routing_blocked_caution">In this mode, traffic to non-blocked sites leaves the VPN.</string>
-    <string name="routing_country_unavailable">Not available in this build</string>
+    <string name="routing_option_unavailable">Not available in this build</string>
+    <string name="routing_mode_fallback_notice">This mode is not available in this build. Proxy everything will be used instead.</string>
     <string name="routing_hint">Takes effect on the next connect.</string>
     <string name="routing_cd_back">Back</string>
     <string name="routing_save">Save</string>

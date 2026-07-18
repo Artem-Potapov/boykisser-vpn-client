@@ -125,7 +125,8 @@
     <string name="routing_bypass_lan">В обход локальной сети и частных адресов</string>
     <string name="routing_block_ads">Блокировать рекламу и трекеры</string>
     <string name="routing_blocked_caution">В этом режиме трафик к незаблокированным сайтам идёт мимо VPN.</string>
-    <string name="routing_country_unavailable">Недоступно в этой сборке</string>
+    <string name="routing_option_unavailable">Недоступно в этой сборке</string>
+    <string name="routing_mode_fallback_notice">Этот режим недоступен в этой сборке. Будет использован режим «Весь трафик через прокси».</string>
     <string name="routing_hint">Вступает в силу при следующем подключении.</string>
     <string name="routing_cd_back">Назад</string>
     <string name="routing_save">Сохранить</string>

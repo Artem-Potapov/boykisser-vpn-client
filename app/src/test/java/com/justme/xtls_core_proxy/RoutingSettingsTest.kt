@@ -45,4 +45,22 @@ class RoutingSettingsTest {
         val sane = sanitizeForAvailability(s, availableFiles = setOf("geoip.dat", "geosite.dat", "geoip_IR.dat", "geosite_IR.dat"))
         assertEquals(RoutingMode.PROXY_ALL, sane.mode)
     }
+
+    @Test fun ir_except_country_needs_only_the_general_bundles() {
+        // directTags(IR) is geosite:category-ir + geoip:ir — both resolve out of the general
+        // bundles, so geosite_IR.dat must NOT be required. A build shipping only the general pair
+        // (a supported setup: the per-country files are a separate manual download) must keep the mode.
+        val s = RoutingSettings(RoutingMode.EXCEPT_COUNTRY, RoutingCountry.IR, bypassLan = false, blockAds = false)
+        assertEquals(setOf("geosite.dat", "geoip.dat"), requiredGeoFiles(s))
+        val sane = sanitizeForAvailability(s, availableFiles = setOf("geoip.dat", "geosite.dat"))
+        assertEquals(RoutingMode.EXCEPT_COUNTRY, sane.mode)
+    }
+
+    @Test fun ru_except_country_still_requires_its_ext_file() {
+        // RU's directTags DO include ext:geosite_RU.dat, so the per-country file stays required.
+        val s = RoutingSettings(RoutingMode.EXCEPT_COUNTRY, RoutingCountry.RU, bypassLan = false, blockAds = false)
+        assertEquals(setOf("geosite.dat", "geoip.dat", "geosite_RU.dat"), requiredGeoFiles(s))
+        val sane = sanitizeForAvailability(s, availableFiles = setOf("geoip.dat", "geosite.dat"))
+        assertEquals(RoutingMode.PROXY_ALL, sane.mode)
+    }
 }
