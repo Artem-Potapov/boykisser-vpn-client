@@ -19,4 +19,20 @@ class PingTargetValidationTest {
         assertFalse(PingPreferences.isValidTarget("http://   "))
         assertTrue(PingPreferences.isValidTarget("  HTTP://example.com  "))
     }
+
+    /**
+     * Pins the deliberately permissive boundary of the scheme-only gate (Plan-3 R7, Option A):
+     * these inputs a stricter validator would reject, but [PingPreferences.isValidTarget] accepts
+     * them BY DESIGN because it only checks the `http://` scheme and a non-empty remainder — never
+     * host, port range, embedded credentials, or path. If this test goes red, the gate's contract
+     * changed and the KDoc on isValidTarget needs a matching update (or the tightening needs a new
+     * maintainer decision).
+     */
+    @Test
+    fun accepts_malformed_targets_scheme_gate_is_deliberately_minimal() {
+        assertTrue(PingPreferences.isValidTarget("http://user:pass@example.com/"))
+        assertTrue(PingPreferences.isValidTarget("http://example.com:99999/"))
+        assertTrue(PingPreferences.isValidTarget("http://exa mple.com"))
+        assertTrue(PingPreferences.isValidTarget("http://???"))
+    }
 }

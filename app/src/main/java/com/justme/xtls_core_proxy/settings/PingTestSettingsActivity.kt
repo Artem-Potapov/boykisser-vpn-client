@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,14 +53,16 @@ private fun PingTestScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val initial = remember { PingPreferences.load(context) }
 
-    var target by remember { mutableStateOf(initial.targetUrl) }
-    var timeout by remember { mutableStateOf(initial.timeoutMs.toString()) }
-    var concurrency by remember { mutableStateOf(initial.concurrency.toString()) }
-    var auto by remember { mutableStateOf(initial.autoOnOpen) }
+    var target by rememberSaveable { mutableStateOf(initial.targetUrl) }
+    var timeout by rememberSaveable { mutableStateOf(initial.timeoutMs.toString()) }
+    var concurrency by rememberSaveable { mutableStateOf(initial.concurrency.toString()) }
+    var auto by rememberSaveable { mutableStateOf(initial.autoOnOpen) }
 
     val targetValid = PingPreferences.isValidTarget(target)
-    val timeoutValid = timeout.trim().toLongOrNull()?.let { it in 1000L..30000L } == true
-    val concurrencyValid = concurrency.trim().toIntOrNull()?.let { it in 1..5 } == true
+    val timeoutValid = timeout.trim().toLongOrNull()
+        ?.let { it in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX } == true
+    val concurrencyValid = concurrency.trim().toIntOrNull()
+        ?.let { it in PingPreferences.CONCURRENCY_MIN..PingPreferences.CONCURRENCY_MAX } == true
     val inputsValid = targetValid && timeoutValid && concurrencyValid
 
     Scaffold(
