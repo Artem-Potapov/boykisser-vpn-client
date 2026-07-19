@@ -23,7 +23,9 @@ import com.justme.xtls_core_proxy.config.DnsPreferences
 import com.justme.xtls_core_proxy.config.FragmentationPreferences
 import com.justme.xtls_core_proxy.config.LogSettings
 import com.justme.xtls_core_proxy.config.MuxPreferences
+import com.justme.xtls_core_proxy.config.RoutingPreferences
 import com.justme.xtls_core_proxy.config.TuningSettings
+import com.justme.xtls_core_proxy.config.XrayCorePreferences
 import com.justme.xtls_core_proxy.config.XrayLogLevel
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
@@ -314,6 +316,8 @@ class XrayVpnService : VpnService() {
                             fragmentation = FragmentationPreferences.load(this@XrayVpnService),
                             mux = MuxPreferences.load(this@XrayVpnService),
                             dns = DnsPreferences.load(this@XrayVpnService),
+                            routing = RoutingPreferences.load(this@XrayVpnService),
+                            core = XrayCorePreferences.load(this@XrayVpnService),
                         )
                         sessionLog = initialLog
                         true
@@ -413,13 +417,13 @@ class XrayVpnService : VpnService() {
 
             val builder = Builder()
                 .setSession(localizedString(R.string.app_name))
-                .setMtu(ConfigBuilder.TUN_MTU)
+                .setMtu(sessionTuning.core.mtu)
                 .addAddress("10.7.0.1", 32)
                 .addAddress("fd00:1:fd00:1::1", 128)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
                 .addDnsServer("1.1.1.1")
-                .addDnsServer("2606:4700:4700::1111")
+                .also { if (sessionTuning.core.ipv6) it.addDnsServer("2606:4700:4700::1111") }
 
             val splitPrefs = SplitTunnelRepository.load(this@XrayVpnService)
             if (splitPrefs.mode == SplitTunnelMode.ALLOW_ONLY && splitPrefs.packages.isEmpty()) {
