@@ -9,29 +9,39 @@ import org.json.JSONObject
  * path, and delegates normalization and proxy selection to [ConfigBuilder].
  */
 object ConfigSanitizer {
+    // Defense-in-depth backstop over the primary structural allowlist (safe scheme+host labels and a
+    // generic failure reason). All finding details are structural, so this can only fire on an
+    // unexpected credential-bearing string. Prefer NOT exposing raw fields over widening this further.
     private val sensitiveIdentifier = Regex(
-        """(?i)(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|publickey|shortid)""",
+        """(?i)(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}""" +
+            """|publickey|shortid|password|secret|token|\bpbk\b|\bsid\b|\bauth\b)""",
     )
+
+    private const val GENERIC_FAILURE = "Config could not be processed"
 
     fun analyze(
         stored: String,
         log: LogSettings,
         tuning: TuningSettings,
     ): SanitizationReport {
+        // Fail-closed: never surface a parser exception message — it can echo the submitted URI/JSON
+        // (user-info, pbk/sid, tokens). A generic, known-safe reason is always returned instead.
         val finalJson = runCatching { ConfigBuilder.buildRuntimeConfig(stored, log, tuning) }
-            .getOrElse {
-                return SanitizationReport.Failure(
-                    redactText(it.message ?: "Config could not be processed"),
-                )
-            }
+            .getOrNull()
+            ?: return SanitizationReport.Failure(GENERIC_FAILURE)
         val original = runCatching { JSONObject(stored) }.getOrNull() ?: JSONObject()
         val final = JSONObject(finalJson)
 
-        val findings = securityFindings(original, final) + globalFindings(final, tuning)
+        val findings = securityFindings(stored, original, final, log) + globalFindings(final, tuning)
         return SanitizationReport.Success(findings.map(::redactFinding))
     }
 
-    private fun securityFindings(original: JSONObject, final: JSONObject): List<Finding> {
+    private fun securityFindings(
+        stored: String,
+        original: JSONObject,
+        final: JSONObject,
+        log: LogSettings,
+    ): List<Finding> {
         val findings = mutableListOf<Finding>()
 
         val originalProtocols = protocolsOf(original.optJSONArray("inbounds"))
@@ -51,30 +61,25 @@ object ConfigSanitizer {
             )
         }
 
-        val originalServers = original.optJSONObject("dns")?.optJSONArray("servers")
         val finalServers = final.optJSONObject("dns")?.optJSONArray("servers")
-        val allSecure = originalServers != null && originalServers.length() > 0 &&
-            (0 until originalServers.length()).all { originalServer ->
-                isSecureResolver(originalServers.opt(originalServer)) ||
-                    isPipelineBootstrap(originalServers.opt(originalServer), finalServers)
-            }
+        // AlreadyCompliant only when the stored DNS already matches the full secure-enforcement shape
+        // the pipeline requires for THIS proxy — including the complete hostname bootstrap pair. Delegate
+        // that classification to ConfigBuilder rather than re-deriving makeSecureDns here.
+        val dnsCompliant = ConfigBuilder.storedDnsMatchesSecureEnforcement(stored)
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.DNS_DOH,
-            if (allSecure) Status.AlreadyCompliant else Status.Rewrote,
-            serverAddresses(finalServers).joinToString(", "),
+            if (dnsCompliant) Status.AlreadyCompliant else Status.Rewrote,
+            safeResolverSummary(finalServers),
         )
 
-        findings += Finding(
-            FindingCategory.SECURITY_ENFORCEMENT,
-            FindingId.FORCED_LOG,
-            Status.Applied,
-            "access: none, app-private error log",
-        )
+        findings += forcedLogFinding(original, final, log)
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.PORT53_DNSOUT,
-            Status.Applied,
+            // Added when the stored config had no port-53 rule (the pipeline injected one); Applied when
+            // an existing port-53 rule was enforced/redirected to dns-out.
+            if (originalHasPort53Rule(original)) Status.Applied else Status.Added,
             "port 53 → dns-out",
         )
         val forceIp = firstProxySockoptStrategy(final) == "ForceIP"
@@ -85,6 +90,51 @@ object ConfigSanitizer {
             "domainStrategy=ForceIP",
         )
         return findings
+    }
+
+    /**
+     * Derives the forced-log finding structurally from the FINAL `log` object (never a hard-coded
+     * status). The app-private posture is confirmed only when access is forced off, the level matches
+     * the requested one, and an error path is present; otherwise it is NOT claimed applied. The absolute
+     * path is never echoed — only the safe `"access: none, app-private error log"` label. Added when the
+     * stored config had no `log` object, Applied when an existing one was overwritten.
+     */
+    private fun forcedLogFinding(original: JSONObject, final: JSONObject, log: LogSettings): Finding {
+        val logObj = final.optJSONObject("log")
+        val access = logObj?.optString("access")
+        val loglevel = logObj?.optString("loglevel")
+        val error = logObj?.optString("error").orEmpty()
+        val conforms = logObj != null &&
+            access == "none" &&
+            loglevel == log.level.wire &&
+            error.isNotBlank()
+        if (!conforms) {
+            return Finding(
+                FindingCategory.SECURITY_ENFORCEMENT,
+                FindingId.FORCED_LOG,
+                Status.NotApplicable("log not enforced"),
+                "",
+            )
+        }
+        val added = original.optJSONObject("log") == null
+        return Finding(
+            FindingCategory.SECURITY_ENFORCEMENT,
+            FindingId.FORCED_LOG,
+            if (added) Status.Added else Status.Applied,
+            "access: none, app-private error log",
+        )
+    }
+
+    private fun originalHasPort53Rule(original: JSONObject): Boolean {
+        val rules = original.optJSONObject("routing")?.optJSONArray("rules") ?: return false
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            when (val port = rule.opt("port")) {
+                is Int -> if (port == 53) return true
+                is String -> if (port.split(",").any { it.trim() == "53" }) return true
+            }
+        }
+        return false
     }
 
     private fun globalFindings(final: JSONObject, tuning: TuningSettings): List<Finding> {
@@ -246,32 +296,32 @@ object ConfigSanitizer {
         }
     }
 
-    private fun isSecureResolver(entry: Any?): Boolean {
-        val address = when (entry) {
-            is String -> entry
-            is JSONObject -> entry.optString("address")
-            else -> ""
-        }
-        return ConfigBuilder.SECURE_DNS_PREFIXES.any { address.startsWith(it, ignoreCase = true) }
-    }
+    /** Comma-joined safe structural labels for the effective resolver list — no full URLs. */
+    private fun safeResolverSummary(finalServers: JSONArray?): String =
+        serverAddresses(finalServers).map(::safeResolverLabel).distinct().joinToString(", ")
 
-    private fun isPipelineBootstrap(entry: Any?, finalServers: JSONArray?): Boolean {
-        val original = entry as? JSONObject ?: return false
-        val originalAddress = original.optString("address")
-        val originalDomains = original.optJSONArray("domains") ?: return false
-        if (!originalAddress.startsWith("https+local://", ignoreCase = true)) return false
-        finalServers ?: return false
-
-        return (0 until finalServers.length()).any { index ->
-            val final = finalServers.optJSONObject(index) ?: return@any false
-            final.optString("address").equals(originalAddress, ignoreCase = true) &&
-                jsonStrings(final.optJSONArray("domains")) == jsonStrings(originalDomains)
-        }
-    }
-
-    private fun jsonStrings(array: JSONArray?): List<String> {
-        array ?: return emptyList()
-        return (0 until array.length()).map { array.optString(it) }
+    /**
+     * Reduces a resolver address to a safe `scheme://host` label, stripping user-info, port, path,
+     * query, and fragment (all of which can carry credentials/tokens). Bracket-aware for IPv6 literals.
+     * Falls back to a generic `"configured resolver"` when parsing is uncertain.
+     */
+    private fun safeResolverLabel(address: String): String {
+        val trimmed = address.trim()
+        val schemeIdx = trimmed.indexOf("://")
+        if (schemeIdx <= 0) return "configured resolver"
+        val scheme = trimmed.substring(0, schemeIdx).lowercase()
+        var authority = trimmed.substring(schemeIdx + 3)
+            .substringBefore("/")
+            .substringBefore("?")
+            .substringBefore("#")
+        if (authority.contains("@")) authority = authority.substringAfterLast("@")
+        val host = if (authority.startsWith("[")) {
+            authority.substring(1).substringBefore("]")
+        } else {
+            authority.substringBefore(":")
+        }.trim()
+        if (scheme.isBlank() || host.isBlank()) return "configured resolver"
+        return "$scheme://$host"
     }
 
     private fun effectiveDnsResolver(final: JSONObject, settings: DnsSettings): String {

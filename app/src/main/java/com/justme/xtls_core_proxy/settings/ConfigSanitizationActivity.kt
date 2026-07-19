@@ -58,6 +58,7 @@ import com.justme.xtls_core_proxy.ui.SettingsSectionHeader
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Read-only report of how [ConfigSanitizer] rewrites the active profile under the current global
@@ -103,7 +104,13 @@ private fun ConfigSanitizationScreen(onBack: () -> Unit) {
         val result = withContext(Dispatchers.Default) {
             val id = ActiveProfileRepository.getActiveProfileId(context) ?: return@withContext null
             val profile = AppDatabase.get(context).profileDao().getById(id) ?: return@withContext null
-            val log = LogSettings(LogPreferences.getLogLevel(context), null)
+            // Analyze the SAME log posture a real session builds: the app-private error-log path
+            // (see XrayVpnService). Read-only — this only forms the path string; unlike the service it
+            // never creates the logs/ directory or file (the sanitizer must not touch the filesystem).
+            val log = LogSettings(
+                LogPreferences.getLogLevel(context),
+                File(context.filesDir, "logs/xray-core.log").absolutePath,
+            )
             val tuning = TuningSettings(
                 fragmentation = FragmentationPreferences.load(context),
                 mux = MuxPreferences.load(context),

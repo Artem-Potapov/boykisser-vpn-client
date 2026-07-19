@@ -281,6 +281,48 @@ object ConfigBuilder {
         else -> null
     }
 
+    /**
+     * Read-only diagnostic helper (never mutates state): true when [configJson]'s stored `dns.servers`
+     * array already equals the secure-DNS enforcement shape [makeSecureDns] would produce for it — i.e.
+     * the pipeline would change nothing. That includes, for a hostname-addressed proxy, the COMPLETE
+     * scoped `https+local://` bootstrap PAIR; a missing or partial pair is not compliant. Consumed by
+     * `ConfigSanitizer` to decide DNS_DOH AlreadyCompliant vs Rewrote without re-deriving makeSecureDns's
+     * rules. Returns false for non-JSON input or an absent/empty stored server list (the pipeline injects
+     * a resolver, so that is a rewrite).
+     */
+    internal fun storedDnsMatchesSecureEnforcement(configJson: String): Boolean {
+        val original = runCatching { JSONObject(configJson) }.getOrNull() ?: return false
+        val storedServers = original.optJSONObject("dns")?.optJSONArray("servers") ?: return false
+        if (storedServers.length() == 0) return false
+        val secured = runCatching { JSONObject(makeSecureDns(configJson)) }.getOrNull() ?: return false
+        val securedServers = secured.optJSONObject("dns")?.optJSONArray("servers") ?: return false
+        return dnsServerListsEqual(storedServers, securedServers)
+    }
+
+    private fun dnsServerListsEqual(a: JSONArray, b: JSONArray): Boolean {
+        if (a.length() != b.length()) return false
+        for (i in 0 until a.length()) {
+            if (!dnsServerEntryEquals(a.opt(i), b.opt(i))) return false
+        }
+        return true
+    }
+
+    private fun dnsServerEntryEquals(a: Any?, b: Any?): Boolean {
+        val aObj = a as? JSONObject
+        val bObj = b as? JSONObject
+        // A plain-string entry and a scoped-object entry are never equal (one is unscoped, one carries
+        // a `domains` scope), even when they share an address.
+        if ((aObj == null) != (bObj == null)) return false
+        if (aObj == null || bObj == null) return serverAddress(a) == serverAddress(b)
+        if (aObj.optString("address") != bObj.optString("address")) return false
+        return dnsDomainList(aObj) == dnsDomainList(bObj)
+    }
+
+    private fun dnsDomainList(entry: JSONObject): List<String> {
+        val domains = entry.optJSONArray("domains") ?: return emptyList()
+        return (0 until domains.length()).map { domains.optString(it) }
+    }
+
     // Transports that ride TCP — the only ones sockopt.fragment applies to. Blank network == "tcp".
     private val TCP_NETWORKS = setOf("tcp", "ws", "grpc", "h2", "httpupgrade", "xhttp")
 

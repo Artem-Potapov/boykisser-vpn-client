@@ -279,6 +279,178 @@ class ConfigSanitizerTest {
         assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
     }
 
+    // --- P3-R1: fail-closed redaction (structural labels + generic failure) ---
+
+    @Test
+    fun dns_finding_hides_resolver_userinfo_query_and_fragment() {
+        // A secure (https) resolver whose URL carries user-info, a query credential, and a fragment.
+        // makeSecureDns keeps it (secure prefix); the finding must show only a safe scheme+host label.
+        val sensitiveDns = dirty.replace(
+            "\"8.8.8.8\"",
+            "\"https://LEAKUSER:LEAKPWD@resolver.example/dns-query?apikey=LEAKQUERY#LEAKFRAG\"",
+        )
+
+        val report = ConfigSanitizer.analyze(sensitiveDns, log, TuningSettings.NONE)
+        val detail = byId(report, FindingId.DNS_DOH)!!.detail
+
+        assertFalse(detail.contains("LEAKUSER"))
+        assertFalse(detail.contains("LEAKPWD"))
+        assertFalse(detail.contains("LEAKQUERY"))
+        assertFalse(detail.contains("LEAKFRAG"))
+        // Safe structural representation is retained (scheme + host), not a full URL.
+        assertTrue(detail.contains("resolver.example"))
+    }
+
+    @Test
+    fun malformed_vless_failure_hides_non_literal_pbk_sid() {
+        // Opaque pbk/sid payloads that do NOT contain the literal words publicKey/shortId and are not
+        // UUID-shaped: the old narrow regex would miss them, so passing the parser exception message
+        // through would leak them. A generic failure reason must not echo any input.
+        val pbkValue = "AAAABBBBCCCCDDDDEEEEFFFF00"
+        val sidValue = "1122334455667788"
+        val malformed = "vless://someuser@example.com:443?pbk=$pbkValue&sid=$sidValue xyz"
+
+        val report = ConfigSanitizer.analyze(malformed, log, TuningSettings.NONE)
+        val reason = (report as SanitizationReport.Failure).reason
+
+        assertFalse(reason.contains(pbkValue))
+        assertFalse(reason.contains(sidValue))
+        assertFalse(reason.contains("example.com"))
+    }
+
+    // --- P3-R2: forced-log finding derived from the final JSON, not hard-coded ---
+
+    @Test
+    fun forced_log_added_when_path_present_and_no_original_log() {
+        val logWithPath = LogSettings(
+            XrayLogLevel.WARNING,
+            "/data/user/0/com.justme.xtls_core_proxy/files/logs/xray-core.log",
+        )
+
+        val report = ConfigSanitizer.analyze(dirty, logWithPath, TuningSettings.NONE)
+        val finding = byId(report, FindingId.FORCED_LOG)!!
+
+        // dirty has no `log` object; the pipeline added the forced posture → Added.
+        assertEquals(Status.Added, finding.status)
+        assertEquals("access: none, app-private error log", finding.detail)
+        // The absolute path must never surface in the UI detail.
+        assertFalse(finding.detail.contains("/data/user/0"))
+    }
+
+    @Test
+    fun forced_log_applied_when_original_had_log_object() {
+        val withLog = dirty.replace(
+            "{\"inbounds\"",
+            "{\"log\":{\"access\":\"/sdcard/Download/leak.log\",\"loglevel\":\"debug\"},\"inbounds\"",
+        )
+        val logWithPath = LogSettings(
+            XrayLogLevel.WARNING,
+            "/data/user/0/com.justme.xtls_core_proxy/files/logs/xray-core.log",
+        )
+
+        val report = ConfigSanitizer.analyze(withLog, logWithPath, TuningSettings.NONE)
+        val finding = byId(report, FindingId.FORCED_LOG)!!
+
+        // A caller/config-supplied log object is overwritten (not added) → Applied.
+        assertEquals(Status.Applied, finding.status)
+        assertFalse(finding.detail.contains("/sdcard/Download/leak.log"))
+    }
+
+    @Test
+    fun forced_log_not_claimed_applied_when_final_error_absent() {
+        // A null path yields no `error` key in the forced log object — the app-private log posture
+        // cannot be confirmed and must NOT be reported as successfully applied/added.
+        val report = ConfigSanitizer.analyze(dirty, LogSettings(XrayLogLevel.WARNING, null), TuningSettings.NONE)
+        val finding = byId(report, FindingId.FORCED_LOG)!!
+
+        assertTrue(finding.status is Status.NotApplicable)
+    }
+
+    // --- P3-R3: DNS compliance requires the full hostname bootstrap pair ---
+
+    @Test
+    fun hostname_proxy_without_bootstrap_pair_is_rewritten() {
+        // Hostname proxy + a single secure unscoped resolver but NO scoped +local bootstrap pair.
+        // The pipeline must add the pair, so this is not already-compliant.
+        val hostnameNoBootstrap = dirty
+            .replace("\"1.2.3.4\"", "\"proxy.example.com\"")
+            .replace(
+                "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+                "\"dns\":{\"servers\":[\"https://1.1.1.1/dns-query\"]}",
+            )
+
+        val report = ConfigSanitizer.analyze(hostnameNoBootstrap, log, TuningSettings.NONE)
+
+        assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    @Test
+    fun hostname_proxy_with_partial_bootstrap_pair_is_rewritten() {
+        // Only ONE of the two required scoped +local bootstrap entries is present.
+        val onlyOneBootstrap = dirty
+            .replace("\"1.2.3.4\"", "\"proxy.example.com\"")
+            .replace(
+                "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+                "\"dns\":{\"servers\":[" +
+                    "{\"address\":\"https+local://1.1.1.1/dns-query\",\"domains\":[\"full:proxy.example.com\"]}," +
+                    "\"https://1.1.1.1/dns-query\",\"https://1.0.0.1/dns-query\"]}",
+            )
+
+        val report = ConfigSanitizer.analyze(onlyOneBootstrap, log, TuningSettings.NONE)
+
+        assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    @Test
+    fun ip_literal_proxy_with_secure_unscoped_resolver_needs_no_bootstrap() {
+        // IP-literal proxy → makeSecureDns adds no bootstrap; an already-secure resolver pair complies.
+        val ipProxySecureDns = dirty.replace(
+            "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+            "\"dns\":{\"servers\":[\"https://1.1.1.1/dns-query\",\"https://1.0.0.1/dns-query\"]}",
+        )
+
+        val report = ConfigSanitizer.analyze(ipProxySecureDns, log, TuningSettings.NONE)
+
+        assertEquals(Status.AlreadyCompliant, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    @Test
+    fun config_owned_scoped_secure_resolver_is_preserved_and_compliant() {
+        // A config-owned domain-scoped https resolver (NOT a pipeline https+local bootstrap) is kept
+        // verbatim by makeSecureDns for an IP-literal proxy → already compliant.
+        val scopedSecure = dirty.replace(
+            "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+            "\"dns\":{\"servers\":[{\"address\":\"https://dns.example/dns-query\"," +
+                "\"domains\":[\"geosite:cn\"]}]}",
+        )
+
+        val report = ConfigSanitizer.analyze(scopedSecure, log, TuningSettings.NONE)
+
+        assertEquals(Status.AlreadyCompliant, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    // --- P3-R10: Added vs Applied proven from the final JSON ---
+
+    @Test
+    fun port53_dns_out_added_when_original_had_no_port53_rule() {
+        // dirty has no routing rules → the pipeline adds the port 53 → dns-out rule.
+        val report = ConfigSanitizer.analyze(dirty, log, TuningSettings.NONE)
+
+        assertEquals(Status.Added, byId(report, FindingId.PORT53_DNSOUT)?.status)
+    }
+
+    @Test
+    fun port53_dns_out_applied_when_original_had_port53_rule() {
+        val withPort53 = dirty.replace(
+            "\"outbounds\"",
+            "\"routing\":{\"rules\":[{\"type\":\"field\",\"port\":53,\"outboundTag\":\"proxy\"}]},\"outbounds\"",
+        )
+
+        val report = ConfigSanitizer.analyze(withPort53, log, TuningSettings.NONE)
+
+        assertEquals(Status.Applied, byId(report, FindingId.PORT53_DNSOUT)?.status)
+    }
+
     @Test
     fun unsupported_blocked_only_with_user_direct_catch_all_reports_proxy_everything() {
         val withUserCatchAll = """
