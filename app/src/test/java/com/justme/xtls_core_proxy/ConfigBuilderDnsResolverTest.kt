@@ -62,6 +62,37 @@ class ConfigBuilderDnsResolverTest {
         assertEquals("UseIPv4", dns(out).getString("queryStrategy"))
     }
 
+    @Test fun preset_pairs_bootstrap_failover_not_collapsed() {
+        // F4: a preset swap must map the two scoped +local bootstrap entries PAIRWISE to the preset's
+        // primary/secondary IPs, not collapse both onto the primary — otherwise the failover pair is lost.
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname, tuning = TuningSettings(dns = DnsSettings.FROM_CONFIG.copy(resolver = DnsResolver.QUAD9))
+        )
+        val arr = dns(out).getJSONArray("servers")
+        val scoped = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .filter { it.optString("address").startsWith("https+local://") }
+        val addrs = scoped.map { it.getString("address") }
+        assertTrue("expected primary bootstrap, got $addrs", addrs.any { it == "https+local://9.9.9.9/dns-query" })
+        assertTrue("expected secondary bootstrap, got $addrs", addrs.any { it == "https+local://149.112.112.112/dns-query" })
+        assertTrue("expected two distinct scoped bootstrap entries, got $addrs", addrs.toSet().size == 2)
+    }
+
+    @Test fun custom_bootstrap_preserves_port_and_path() {
+        // F5: a CUSTOM resolver's port + path must survive into the scoped bootstrap rewrite, not be
+        // collapsed to a hardcoded `/dns-query`.
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(
+                dns = DnsSettings(DnsResolver.CUSTOM, "https://doh.example.com:8443/resolve", "1.2.3.4", DnsQueryStrategy.USE_IP)
+            )
+        )
+        val arr = dns(out).getJSONArray("servers")
+        val scoped = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+        assertTrue(scoped.any { it.optString("address") == "https+local://1.2.3.4:8443/resolve" })
+        // The unscoped custom entry (with its original host, port, and path) is still present.
+        assertTrue(serverAddrs(out).any { it == "https://doh.example.com:8443/resolve" })
+    }
+
     @Test fun preset_preserves_config_owned_scoped_server() {
         // makeSecureDns preserves a pasted config's own secure domain-scoped resolver; the overlay
         // must rewrite ONLY the +local proxy-hostname bootstrap entries, not this one.

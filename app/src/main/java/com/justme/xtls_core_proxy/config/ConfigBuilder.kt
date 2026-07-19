@@ -339,12 +339,15 @@ object ConfigBuilder {
     /**
      * Overlays the global DoH resolver choice + query strategy onto the dns block makeSecureDns built.
      * FROM_CONFIG is a no-op. An explicit preset replaces the unscoped resolver pair AND rewrites the
-     * `+local` proxy-hostname bootstrap pair to the chosen resolver (privacy: don't leak the proxy name
-     * to Cloudflare when the user picked another resolver). Config-owned domain-scoped servers are
-     * preserved verbatim. A hostname custom URL is pinned via
-     * `dns.hosts`. queryStrategy is force-overwritten (a global knob must win over makeSecureDns's
-     * set-if-absent). applyDns runs BEFORE applyRouting so routing's mode-3 DoH-guard derives from the
-     * swapped resolver.
+     * `+local` proxy-hostname bootstrap pair to the chosen resolver, PAIRWISE — the first scoped
+     * bootstrap entry gets the preset's primary IP, the second gets its secondary IP, preserving the
+     * primary/secondary failover instead of collapsing both onto the same IP (privacy: don't leak the
+     * proxy name to Cloudflare when the user picked another resolver, either). Config-owned
+     * domain-scoped servers are preserved verbatim. A hostname custom URL is pinned via
+     * `dns.hosts`; its bootstrap rewrite preserves the custom URL's port + path (only the host is
+     * swapped for the pinned/IP-literal IP), matching the unscoped custom entry it stands in for.
+     * queryStrategy is force-overwritten (a global knob must win over makeSecureDns's set-if-absent).
+     * applyDns runs BEFORE applyRouting so routing's mode-3 DoH-guard derives from the swapped resolver.
      */
     private fun applyDns(configJson: String, dns: DnsSettings): String {
         if (dns.resolver == DnsResolver.FROM_CONFIG) return configJson
@@ -364,11 +367,20 @@ object ConfigBuilder {
         val customHost = if (dns.resolver == DnsResolver.CUSTOM) DohUrl.host(dns.customUrl) else null
         val pinnedIp = dns.customPinnedIp.trim()
         val needsPin = customHost != null && !isIpLiteral(customHost) && pinnedIp.isNotBlank()
-        // The IP form used for the +local proxy bootstrap: preset secondary/primary IP, or the pinned IP.
-        val bootstrapIpUrl = when {
-            needsPin -> "https+local://$pinnedIp/dns-query"
-            dns.resolver == DnsResolver.CUSTOM -> customHost?.takeIf { isIpLiteral(it) }?.let { "https+local://$it/dns-query" }
-            else -> primary.replaceFirst("https://", "https+local://")
+        // The +local proxy bootstrap replacement(s), in priority order: a preset supplies BOTH its
+        // primary and secondary IP form (one per scoped bootstrap entry, below), so the failover pair
+        // survives the resolver swap instead of collapsing onto a single IP. CUSTOM supplies at most
+        // one URL (pinned hostname or IP-literal host), preserving that URL's port + path via
+        // customBootstrapUrl rather than hardcoding `/dns-query`. A hostname CUSTOM without a pin
+        // (UI-unreachable, but prefs could be stale/corrupt) yields no replacement.
+        val bootstrapUrls = when {
+            needsPin -> listOf(customBootstrapUrl(dns.customUrl, pinnedIp))
+            dns.resolver == DnsResolver.CUSTOM ->
+                customHost?.takeIf { isIpLiteral(it) }?.let { listOf(customBootstrapUrl(dns.customUrl, it)) } ?: emptyList()
+            else -> listOfNotNull(
+                primary.replaceFirst("https://", "https+local://"),
+                secondary?.replaceFirst("https://", "https+local://"),
+            )
         }
 
         // Rebuild the servers array: rewrite ONLY makeSecureDns's own +local proxy-hostname bootstrap
@@ -379,17 +391,24 @@ object ConfigBuilder {
         // dropped and replaced by the chosen resolver pair below.
         val oldServers = dnsObj.optJSONArray("servers") ?: JSONArray()
         val newServers = JSONArray()
+        var bootstrapIndex = 0
         for (i in 0 until oldServers.length()) {
             val entry = oldServers.opt(i) as? JSONObject ?: continue
             if (!entry.has("domains")) continue
             val isBootstrap = entry.optString("address").startsWith("https+local://", ignoreCase = true)
-            if (isBootstrap && bootstrapIpUrl != null) {
-                // Point the scoped bootstrap at the chosen resolver's IP form. If no IP form exists
-                // (hostname custom without a pin — UI-unreachable, but prefs could be stale/corrupt),
-                // the else-branch keeps the original bootstrap instead of dropping it: losing the
-                // scoped entry would deadlock a hostname-addressed proxy's own name resolution.
-                newServers.put(JSONObject().put("address", bootstrapIpUrl).put("domains", entry.getJSONArray("domains")))
+            if (isBootstrap && bootstrapUrls.isNotEmpty()) {
+                // Point the scoped bootstrap at the chosen resolver's IP form, pairwise: the Nth scoped
+                // bootstrap entry gets bootstrapUrls[N], falling back to the last entry when there are
+                // fewer replacement URLs than scoped entries (e.g. a single-target CUSTOM still fills
+                // both scoped slots with the same URL).
+                val url = bootstrapUrls.getOrElse(bootstrapIndex) { bootstrapUrls.last() }
+                bootstrapIndex++
+                newServers.put(JSONObject().put("address", url).put("domains", entry.getJSONArray("domains")))
             } else {
+                // If no replacement URL exists (hostname custom without a pin — UI-unreachable, but
+                // prefs could be stale/corrupt), keep the original bootstrap instead of dropping it:
+                // losing the scoped entry would deadlock a hostname-addressed proxy's own name
+                // resolution.
                 newServers.put(entry)
             }
         }
@@ -670,6 +689,16 @@ object ConfigBuilder {
         JSONObject()
             .put("address", address)
             .put("domains", JSONArray().put("full:${host.lowercase()}"))
+
+    /**
+     * Rewrites a `https://host[:port]/path` DoH URL to a `https+local://<ip>[:port]/path` bootstrap,
+     * swapping only the host for [ip] and preserving the port + path.
+     */
+    private fun customBootstrapUrl(url: String, ip: String): String {
+        val host = DohUrl.host(url) ?: return "https+local://$ip/dns-query"
+        val rest = url.trim().substringAfter("://").removePrefix(host)  // ":port/path", "/path", or ""
+        return "https+local://$ip$rest"
+    }
 
     /** True for an IPv4/IPv6 literal (needs no DNS resolution), false for a hostname. */
     private fun isIpLiteral(host: String): Boolean {
