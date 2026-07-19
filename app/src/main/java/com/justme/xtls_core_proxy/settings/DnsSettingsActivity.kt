@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.config.DnsPreferences
 import com.justme.xtls_core_proxy.config.DnsQueryStrategy
@@ -61,6 +65,7 @@ class DnsSettingsActivity : LocalizedComponentActivity() {
 private fun DnsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val initial = remember { DnsPreferences.load(context) }
 
     var resolver by remember { mutableStateOf(initial.resolver) }
@@ -70,8 +75,18 @@ private fun DnsScreen(onBack: () -> Unit) {
     var resolveError by remember { mutableStateOf(false) }
 
     // applyCoreSettings force-writes queryStrategy=UseIPv4 as last writer when IPv6 is off, so the
-    // choice here is moot in that case — grey it out and say why.
-    val ipv6On = remember { XrayCorePreferences.load(context).ipv6 }
+    // choice here is moot in that case — grey it out and say why. Re-read on ON_RESUME so an IPv6
+    // change made on the XRAY settings screen (which can sit under this one) is reflected on return.
+    var ipv6On by remember { mutableStateOf(XrayCorePreferences.load(context).ipv6) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ipv6On = XrayCorePreferences.load(context).ipv6
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val isCustom = resolver == DnsResolver.CUSTOM
     val urlValid = !isCustom || DohUrl.isValidHttps(customUrl)
