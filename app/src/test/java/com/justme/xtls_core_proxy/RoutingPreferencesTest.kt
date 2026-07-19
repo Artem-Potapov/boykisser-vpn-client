@@ -7,6 +7,8 @@ import com.justme.xtls_core_proxy.config.RoutingPreferences
 import com.justme.xtls_core_proxy.config.RoutingSettings
 import com.justme.xtls_core_proxy.testutil.InMemorySharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
@@ -31,5 +33,19 @@ class RoutingPreferencesTest {
         val s = RoutingSettings(RoutingMode.EXCEPT_COUNTRY, RoutingCountry.RU, bypassLan = true, blockAds = true)
         RoutingPreferences.save(context, s)
         assertEquals(s.country, RoutingPreferences.load(context).country)
+    }
+
+    // Guards the wire keys: save() must write each field under its exact pref key. load()'s
+    // availability sanitize masks mode/LAN/ads on the asset-less JVM mock (only `country` round-trips),
+    // so we assert the raw writes directly — a typo in KEY_MODE/KEY_LAN/KEY_ADS would slip past load().
+    @Test fun save_writes_each_field_under_its_wire_key() {
+        RoutingPreferences.save(
+            context,
+            RoutingSettings(RoutingMode.BLOCKED_ONLY, RoutingCountry.IR, bypassLan = false, blockAds = true)
+        )
+        assertEquals("BLOCKED_ONLY", prefs.getString("route_mode", null))
+        assertEquals("IR", prefs.getString("route_country", null))
+        assertFalse(prefs.getBoolean("route_bypass_lan", true))
+        assertTrue(prefs.getBoolean("route_block_ads", false))
     }
 }
