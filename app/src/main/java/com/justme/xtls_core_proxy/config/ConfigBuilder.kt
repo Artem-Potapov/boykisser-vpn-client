@@ -340,7 +340,8 @@ object ConfigBuilder {
      * Overlays the global DoH resolver choice + query strategy onto the dns block makeSecureDns built.
      * FROM_CONFIG is a no-op. An explicit preset replaces the unscoped resolver pair AND rewrites the
      * `+local` proxy-hostname bootstrap pair to the chosen resolver (privacy: don't leak the proxy name
-     * to Cloudflare when the user picked another resolver). A hostname custom URL is pinned via
+     * to Cloudflare when the user picked another resolver). Config-owned domain-scoped servers are
+     * preserved verbatim. A hostname custom URL is pinned via
      * `dns.hosts`. queryStrategy is force-overwritten (a global knob must win over makeSecureDns's
      * set-if-absent). applyDns runs BEFORE applyRouting so routing's mode-3 DoH-guard derives from the
      * swapped resolver.
@@ -370,22 +371,26 @@ object ConfigBuilder {
             else -> primary.replaceFirst("https://", "https+local://")
         }
 
-        // Rebuild the servers array: preserve makeSecureDns's structure (scoped bootstrap first, unscoped
-        // after) but swap addresses. We identify scoped bootstrap entries by their `domains` field.
+        // Rebuild the servers array: rewrite ONLY makeSecureDns's own +local proxy-hostname bootstrap
+        // entries (the only `https+local://` servers that can exist here — makeSecureDns strips any
+        // pasted `https+local` entry, its secure-prefix check doesn't match it). A config-owned
+        // domain-scoped DoH server is preserved verbatim: rewriting it would silently swap its
+        // resolver AND pull those queries out of the tunnel via `+local`. Unscoped entries are
+        // dropped and replaced by the chosen resolver pair below.
         val oldServers = dnsObj.optJSONArray("servers") ?: JSONArray()
         val newServers = JSONArray()
         for (i in 0 until oldServers.length()) {
-            val entry = oldServers.opt(i)
-            if (entry is JSONObject && entry.has("domains")) {
-                // Scoped proxy-hostname bootstrap entry → point it at the chosen resolver's IP form.
-                // If no IP form exists (hostname custom without a pin — UI-unreachable, but prefs could
-                // be stale/corrupt), keep the original bootstrap instead of dropping it: losing the
+            val entry = oldServers.opt(i) as? JSONObject ?: continue
+            if (!entry.has("domains")) continue
+            val isBootstrap = entry.optString("address").startsWith("https+local://", ignoreCase = true)
+            if (isBootstrap && bootstrapIpUrl != null) {
+                // Point the scoped bootstrap at the chosen resolver's IP form. If no IP form exists
+                // (hostname custom without a pin — UI-unreachable, but prefs could be stale/corrupt),
+                // the else-branch keeps the original bootstrap instead of dropping it: losing the
                 // scoped entry would deadlock a hostname-addressed proxy's own name resolution.
-                if (bootstrapIpUrl != null) {
-                    newServers.put(JSONObject().put("address", bootstrapIpUrl).put("domains", entry.getJSONArray("domains")))
-                } else {
-                    newServers.put(entry)
-                }
+                newServers.put(JSONObject().put("address", bootstrapIpUrl).put("domains", entry.getJSONArray("domains")))
+            } else {
+                newServers.put(entry)
             }
         }
         // Unscoped resolver entries: the chosen primary (+ secondary if a preset).

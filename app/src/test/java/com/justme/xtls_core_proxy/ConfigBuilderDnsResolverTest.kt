@@ -61,4 +61,32 @@ class ConfigBuilderDnsResolverTest {
         )
         assertEquals("UseIPv4", dns(out).getString("queryStrategy"))
     }
+
+    @Test fun preset_preserves_config_owned_scoped_server() {
+        // makeSecureDns preserves a pasted config's own secure domain-scoped resolver; the overlay
+        // must rewrite ONLY the +local proxy-hostname bootstrap entries, not this one.
+        val withScopedServer = """
+            {"dns":{"servers":[
+                "https://1.1.1.1/dns-query",
+                {"address":"https://dns.corp.example/dns-query","domains":["corp.internal"]}
+            ]},
+            "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"proxy.example.com",
+            "port":443,"users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(
+            withScopedServer, tuning = TuningSettings(dns = DnsSettings.FROM_CONFIG.copy(resolver = DnsResolver.QUAD9))
+        )
+        val arr = dns(out).getJSONArray("servers")
+        val scoped = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+        // Config-owned scoped entry survives with its own address and scope.
+        assertTrue(scoped.any {
+            it.optString("address") == "https://dns.corp.example/dns-query" &&
+                it.getJSONArray("domains").toString() == """["corp.internal"]"""
+        })
+        // The proxy-hostname bootstrap IS rewritten to the chosen resolver's +local IP form.
+        assertTrue(scoped.any {
+            it.optString("address") == "https+local://9.9.9.9/dns-query" &&
+                it.getJSONArray("domains").toString().contains("full:proxy.example.com")
+        })
+    }
 }
