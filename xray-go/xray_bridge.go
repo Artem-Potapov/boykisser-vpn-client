@@ -211,3 +211,8 @@ func MeasureLatency(configJson string, targetURL string, timeoutMs int) string {
 	}
 	return fmt.Sprintf(`{"latencyMs":%d}`, time.Since(start).Milliseconds())
 }
+
+// XrayVersion returns the linked xray-core version. Pure: no lock, no instance.
+func XrayVersion() string {
+	return core.Version()
+}

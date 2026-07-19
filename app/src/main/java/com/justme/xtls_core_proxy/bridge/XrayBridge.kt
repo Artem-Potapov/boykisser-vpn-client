@@ -44,6 +44,17 @@ object XrayBridge {
     }
 
     /**
+     * Linked xray-core version via the Go bridge. Read-only: touches no lock and no running
+     * instance, so it is safe to call regardless of tunnel state. Returns Result.failure on a
+     * stale AAR that predates the Go-side `XrayVersion` (callers render that as "unknown").
+     */
+    fun xrayVersion(): Result<String> = runCatching {
+        val clazz = bridgeClass()
+        val method = findMethod(clazz, listOf("XrayVersion", "xrayVersion"), 0)
+        method.invoke(null) as String
+    }
+
+    /**
      * Runs a one-shot latency probe in a throwaway xray-core instance (NOT the running
      * tunnel): dials [targetUrl] through the config's outbound and times a clean HTTP 204.
      * Returns the latency in ms on success, or a failure carrying the Go-side reason.
