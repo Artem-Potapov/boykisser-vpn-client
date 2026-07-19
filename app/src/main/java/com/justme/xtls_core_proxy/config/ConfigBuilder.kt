@@ -23,7 +23,9 @@ object ConfigBuilder {
         val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
         val withMux = applyMux(withFragmentation, tuning.mux)
         val withDns = applyDns(withMux, tuning.dns)
-        return applyRouting(withDns, tuning.routing)
+        val withRouting = applyRouting(withDns, tuning.routing)
+        val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        return applyCoreSettings(withRouting, tuning.core, forceSniffing)
     }
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
@@ -458,6 +460,54 @@ object ConfigBuilder {
             out.put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", directTag))
         }
         routingObj.put("rules", out)
+        return root.toString()
+    }
+
+    /**
+     * Last overlay. Each sub-action is guarded so DEFAULT + no forced sniffing is a byte-identical
+     * no-op (probes stay clean). MTU rewrites the tun inbound; IPv6-off injects ::/0->block at index 1
+     * (after the forced port-53 rule) and force-overwrites queryStrategy=UseIPv4 (last-writer over
+     * applyDns); sniffing writes the single OR-ed block; domainStrategy overwrites routing.domainStrategy
+     * for explicit values only.
+     */
+    private fun applyCoreSettings(configJson: String, core: XrayCoreSettings, forceSniffing: Boolean): String {
+        val root = JSONObject(configJson)
+
+        if (core.mtu != TUN_MTU) {
+            root.optJSONArray("inbounds")?.optJSONObject(0)?.optJSONObject("settings")?.put("MTU", core.mtu)
+        }
+
+        if (!core.ipv6) {
+            val dns = root.optJSONObject("dns") ?: JSONObject().also { root.put("dns", it) }
+            dns.put("queryStrategy", "UseIPv4")
+            val routing = root.optJSONObject("routing") ?: JSONObject().also { root.put("routing", it) }
+            val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
+            // Ensure a blackhole exists, then insert ::/0 -> block at index 1 (after port-53).
+            val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also { root.put("outbounds", it) }
+            val blockTag = ensureHelperOutbound(outbounds, "blackhole", "block")
+            val v6Block = fieldRule("ip", listOf("::/0"), blockTag)
+            val rebuilt = JSONArray()
+            if (rules.length() > 0) rebuilt.put(rules.get(0)) // port-53 stays first
+            rebuilt.put(v6Block)
+            for (i in 1 until rules.length()) rebuilt.put(rules.get(i))
+            routing.put("rules", rebuilt)
+        }
+
+        if (forceSniffing) {
+            root.optJSONArray("inbounds")?.optJSONObject(0)?.put(
+                "sniffing",
+                JSONObject()
+                    .put("enabled", true)
+                    .put("destOverride", JSONArray(listOf("http", "tls", "quic")))
+                    .put("routeOnly", true)
+            )
+        }
+
+        core.domainStrategy.wire?.let { strategy ->
+            val routing = root.optJSONObject("routing") ?: JSONObject().also { root.put("routing", it) }
+            routing.put("domainStrategy", strategy)
+        }
+
         return root.toString()
     }
 

@@ -10,6 +10,7 @@ data class TuningSettings(
     val mux: MuxSettings = MuxSettings.OFF,
     val dns: DnsSettings = DnsSettings.FROM_CONFIG,
     val routing: RoutingSettings? = null,
+    val core: XrayCoreSettings = XrayCoreSettings.DEFAULT,
 ) {
     companion object {
         val NONE = TuningSettings()
