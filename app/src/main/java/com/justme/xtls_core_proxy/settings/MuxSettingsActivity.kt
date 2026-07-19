@@ -84,9 +84,16 @@ private fun MuxScreen(onBack: () -> Unit) {
                     TextButton(
                         enabled = !enabled || inputsValid,
                         onClick = {
+                            // Save is reachable with invalid number fields when the switch is off —
+                            // fall back to the last-saved values rather than crash on parse.
                             MuxPreferences.save(
                                 context,
-                                MuxSettings(enabled, concurrency.trim().toInt(), xudp.trim().toInt(), quic)
+                                MuxSettings(
+                                    enabled,
+                                    concurrency.trim().toIntOrNull()?.coerceIn(1, 1024) ?: initial.concurrency,
+                                    xudp.trim().toIntOrNull()?.coerceAtLeast(0) ?: initial.xudpConcurrency,
+                                    quic
+                                )
                             )
                             onBack()
                         }
