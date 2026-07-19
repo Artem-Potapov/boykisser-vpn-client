@@ -95,8 +95,10 @@ import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
+import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
+import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
 import com.justme.xtls_core_proxy.subs.PromotedSubscription
@@ -455,6 +457,19 @@ private fun MainScreen(
     var promoGate by rememberSaveable { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) {
         if (promoGate == null) promoGate = PromoGate.resolve(mainContext, LocalDate.now())
+    }
+    // Auto-ping on open. NOT LaunchedEffect(Unit): the Room-backed profile list is empty on first
+    // composition, so a Unit-keyed effect would fire against nothing. Keyed on list-nonempty, it
+    // re-runs when profiles first load; the latch is consumed only when a ping actually launches,
+    // and stays consumed for the rest of the process (once per app launch).
+    val allProfiles = view.manual + view.groups.flatMap { it.profiles }
+    LaunchedEffect(allProfiles.isNotEmpty()) {
+        if (allProfiles.isNotEmpty() &&
+            shouldAutoPing(PingPreferences.load(mainContext).autoOnOpen, viewModel.autoPingConsumed)
+        ) {
+            viewModel.consumeAutoPing()
+            viewModel.pingTestGroup(allProfiles)
+        }
     }
     val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
