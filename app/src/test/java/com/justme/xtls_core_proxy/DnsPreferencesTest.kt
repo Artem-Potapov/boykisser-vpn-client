@@ -47,4 +47,21 @@ class DnsPreferencesTest {
         assertEquals(DnsResolver.FROM_CONFIG, loaded.resolver)
         assertEquals(DnsQueryStrategy.USE_IP, loaded.queryStrategy)
     }
+
+    @Test
+    fun save_writes_each_field_under_its_wire_key() {
+        DnsPreferences.save(
+            context,
+            DnsSettings(
+                resolver = DnsResolver.CUSTOM,
+                customUrl = "https://dns.ex.com/dns-query",
+                customPinnedIp = "1.2.3.4",
+                queryStrategy = DnsQueryStrategy.USE_IPV4,
+            )
+        )
+        assertEquals("CUSTOM", prefs.getString("dns_resolver", null))
+        assertEquals("https://dns.ex.com/dns-query", prefs.getString("dns_custom_url", null))
+        assertEquals("1.2.3.4", prefs.getString("dns_custom_pinned_ip", null))
+        assertEquals("USE_IPV4", prefs.getString("dns_query_strategy", null))
+    }
 }

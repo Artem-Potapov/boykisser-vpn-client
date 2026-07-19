@@ -6,6 +6,7 @@ import com.justme.xtls_core_proxy.config.MuxSettings
 import com.justme.xtls_core_proxy.config.QuicHandling
 import com.justme.xtls_core_proxy.testutil.InMemorySharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
@@ -59,5 +60,17 @@ class MuxPreferencesTest {
         prefs.edit().putInt("mux_xudp_concurrency", -5).apply()
 
         assertEquals(0, MuxPreferences.load(context).xudpConcurrency)
+    }
+
+    @Test
+    fun save_writes_each_field_under_its_wire_key() {
+        MuxPreferences.save(
+            context,
+            MuxSettings(enabled = true, concurrency = 4, xudpConcurrency = 8, quicHandling = QuicHandling.SKIP)
+        )
+        assertTrue(prefs.getBoolean("mux_enabled", false))
+        assertEquals(4, prefs.getInt("mux_concurrency", -1))
+        assertEquals(8, prefs.getInt("mux_xudp_concurrency", -1))
+        assertEquals("SKIP", prefs.getString("mux_quic_handling", null))
     }
 }
