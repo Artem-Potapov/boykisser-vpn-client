@@ -23,9 +23,8 @@ object ConfigSanitizer {
         val original = runCatching { JSONObject(stored) }.getOrNull() ?: JSONObject()
         val final = JSONObject(finalJson)
 
-        return SanitizationReport.Success(
-            securityFindings(original, final) + globalFindings(final, tuning),
-        )
+        val findings = securityFindings(original, final) + globalFindings(final, tuning)
+        return SanitizationReport.Success(findings.map(::redactFinding))
     }
 
     private fun securityFindings(original: JSONObject, final: JSONObject): List<Finding> {
@@ -40,28 +39,23 @@ object ConfigSanitizer {
                 "tun",
             )
         } else {
-            val from = originalProtocols.ifEmpty { listOf("(none)") }.joinToString(", ")
             Finding(
                 FindingCategory.SECURITY_ENFORCEMENT,
                 FindingId.INBOUNDS_TUN,
                 Status.Rewrote,
-                "$from → tun",
+                "non-tun inbound → tun",
             )
         }
 
-        val originalServers = serverAddresses(original.optJSONObject("dns")?.optJSONArray("servers"))
-        val allSecure = originalServers.isNotEmpty() &&
-            originalServers.all { server ->
-                ConfigBuilder.SECURE_DNS_PREFIXES.any { prefix ->
-                    server.startsWith(prefix, ignoreCase = true)
-                }
-            }
+        val originalServers = original.optJSONObject("dns")?.optJSONArray("servers")
+        val allSecure = originalServers != null && originalServers.length() > 0 &&
+            (0 until originalServers.length()).all { isCanonicalSecureResolver(originalServers.opt(it)) }
         val finalServers = serverAddresses(final.optJSONObject("dns")?.optJSONArray("servers"))
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.DNS_DOH,
             if (allSecure) Status.AlreadyCompliant else Status.Rewrote,
-            dnsDetail(finalServers),
+            finalServers.joinToString(", "),
         )
 
         findings += Finding(
@@ -91,10 +85,7 @@ object ConfigSanitizer {
         val proxy = firstProxyOutbound(final)
 
         if (tuning.fragmentation.enabled) {
-            val applied = proxy
-                ?.optJSONObject("streamSettings")
-                ?.optJSONObject("sockopt")
-                ?.has("fragment") == true
+            val applied = proxy?.let(ConfigBuilder::isTcpBasedOutbound) == true
             findings += if (applied) {
                 Finding(
                     FindingCategory.GLOBAL_SETTING,
@@ -115,7 +106,7 @@ object ConfigSanitizer {
         }
 
         if (tuning.mux.enabled) {
-            val applied = proxy?.has("mux") == true
+            val applied = proxy?.let(ConfigBuilder::isMuxEligible) == true
             findings += if (applied) {
                 Finding(
                     FindingCategory.GLOBAL_SETTING,
@@ -133,11 +124,8 @@ object ConfigSanitizer {
             }
         }
 
-        val sniffing = final.optJSONArray("inbounds")
-            ?.optJSONObject(0)
-            ?.optJSONObject("sniffing")
-            ?.optBoolean("enabled") == true
-        if (sniffing) {
+        val sniffingEnabled = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        if (sniffingEnabled) {
             findings += Finding(
                 FindingCategory.GLOBAL_SETTING,
                 FindingId.SNIFFING,
@@ -167,17 +155,20 @@ object ConfigSanitizer {
             FindingCategory.GLOBAL_SETTING,
             FindingId.DNS_RESOLVER,
             Status.Applied,
-            if (tuning.dns.resolver == DnsResolver.FROM_CONFIG) {
-                "From config"
-            } else {
-                tuning.dns.resolver.name.lowercase().replaceFirstChar { it.uppercase() }
-            },
+            effectiveDnsResolver(final, tuning.dns),
         )
+        val effectiveRouting = tuning.routing?.let { routing ->
+            if (routing.mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(routing.country)) {
+                routing.copy(mode = RoutingMode.PROXY_ALL)
+            } else {
+                routing
+            }
+        }
         findings += Finding(
             FindingCategory.GLOBAL_SETTING,
             FindingId.ROUTING,
             Status.Applied,
-            routingSummary(tuning.routing),
+            routingSummary(effectiveRouting),
         )
         findings += Finding(
             FindingCategory.GLOBAL_SETTING,
@@ -253,10 +244,59 @@ object ConfigSanitizer {
         }
     }
 
-    private fun dnsDetail(servers: List<String>): String =
-        servers.joinToString(", ") { server ->
-            if (sensitiveIdentifier.containsMatchIn(server)) "configured DoH resolver" else server
+    private fun isCanonicalSecureResolver(entry: Any?): Boolean {
+        val address = when (entry) {
+            is String -> entry
+            is JSONObject -> entry.optString("address")
+            else -> ""
         }
+        if (ConfigBuilder.SECURE_DNS_PREFIXES.any { address.startsWith(it, ignoreCase = true) }) return true
+        return entry is JSONObject &&
+            entry.optJSONArray("domains")?.length()?.let { it > 0 } == true &&
+            address.startsWith("https+local://", ignoreCase = true)
+    }
+
+    private fun effectiveDnsResolver(final: JSONObject, settings: DnsSettings): String {
+        val servers = final.optJSONObject("dns")?.optJSONArray("servers")
+        val unscoped = buildList {
+            servers ?: return@buildList
+            for (i in 0 until servers.length()) {
+                val entry = servers.opt(i)
+                if (entry is JSONObject && entry.has("domains")) continue
+                val address = when (entry) {
+                    is String -> entry
+                    is JSONObject -> entry.optString("address")
+                    else -> ""
+                }
+                if (address.isNotBlank()) add(address)
+            }
+        }
+        DnsResolver.entries.firstOrNull { resolver ->
+            resolver.presetPair()?.let { (primary, secondary) ->
+                primary in unscoped && secondary in unscoped
+            } == true
+        }?.let { return it.displayName() }
+        if (settings.resolver == DnsResolver.CUSTOM &&
+            settings.customUrl.trim() in unscoped
+        ) {
+            return "Custom"
+        }
+        return "From config"
+    }
+
+    private fun DnsResolver.displayName(): String =
+        name.lowercase().replaceFirstChar { it.uppercase() }
+
+    private fun redactFinding(finding: Finding): Finding {
+        val status = when (val status = finding.status) {
+            is Status.NotApplicable -> Status.NotApplicable(redactText(status.reason))
+            else -> status
+        }
+        return finding.copy(status = status, detail = redactText(finding.detail))
+    }
+
+    private fun redactText(value: String): String =
+        if (sensitiveIdentifier.containsMatchIn(value)) "redacted configuration value" else value
 
     private fun firstProxyOutbound(root: JSONObject): JSONObject? =
         root.optJSONArray("outbounds")?.let(ConfigBuilder::firstProxyOutbound)

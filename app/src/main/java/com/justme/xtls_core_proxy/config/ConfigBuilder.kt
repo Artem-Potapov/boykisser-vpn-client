@@ -622,7 +622,7 @@ object ConfigBuilder {
         return "$preferred-$n"
     }
 
-    private fun isMuxEligible(outbound: JSONObject): Boolean {
+    internal fun isMuxEligible(outbound: JSONObject): Boolean {
         if (!outbound.optString("protocol").equals("vless", ignoreCase = true)) return false
         if (vlessFlow(outbound).isNotBlank()) return false
         val network = outbound.optJSONObject("streamSettings")?.optString("network")?.lowercase().orEmpty()
@@ -637,7 +637,7 @@ object ConfigBuilder {
             ?.optJSONArray("users")?.optJSONObject(0)
             ?.optString("flow").orEmpty()
 
-    private fun isTcpBasedOutbound(outbound: JSONObject): Boolean {
+    internal fun isTcpBasedOutbound(outbound: JSONObject): Boolean {
         if (outbound.optString("protocol").lowercase().startsWith("hysteria")) return false
         val ss = outbound.optJSONObject("streamSettings")
         val network = ss?.optString("network")?.lowercase().orEmpty()

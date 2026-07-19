@@ -145,4 +145,111 @@ class ConfigSanitizerTest {
         assertFalse(detail.contains("publicKey", ignoreCase = true))
         assertFalse(detail.contains("shortId", ignoreCase = true))
     }
+
+    @Test
+    fun fragmentation_on_quic_with_stored_fragment_is_not_applicable() {
+        val quicWithFragment = dirty.replace(
+            "\"streamSettings\":{\"network\":\"tcp\",\"security\":\"reality\"}",
+            "\"streamSettings\":{\"network\":\"quic\",\"security\":\"reality\"," +
+                "\"sockopt\":{\"fragment\":{\"packets\":\"tlshello\"}}}",
+        )
+        val tuning = TuningSettings(fragmentation = FragmentationSettings.DISABLED.copy(enabled = true))
+
+        val report = ConfigSanitizer.analyze(quicWithFragment, log, tuning)
+
+        assertEquals(
+            Status.NotApplicable("UDP-based transport (quic)"),
+            byId(report, FindingId.FRAGMENTATION)?.status,
+        )
+    }
+
+    @Test
+    fun mux_on_vision_with_stored_mux_is_not_applicable() {
+        val visionWithMux = dirty
+            .replace(
+                "\"protocol\":\"vless\"",
+                "\"protocol\":\"vless\",\"mux\":{\"enabled\":true}",
+            )
+            .replace(
+                "\"users\":[{\"id\":\"u\"}]",
+                "\"users\":[{\"id\":\"u\",\"flow\":\"xtls-rprx-vision\"}]",
+            )
+        val tuning = TuningSettings(mux = MuxSettings.OFF.copy(enabled = true))
+
+        val report = ConfigSanitizer.analyze(visionWithMux, log, tuning)
+
+        assertEquals(Status.NotApplicable("XTLS Vision flow"), byId(report, FindingId.MUX)?.status)
+    }
+
+    @Test
+    fun canonical_hostname_proxy_dns_with_local_bootstraps_is_already_compliant() {
+        val hostnameProxy = dirty.replace("\"1.2.3.4\"", "\"proxy.example.com\"")
+        val canonical = ConfigBuilder.buildRuntimeConfig(hostnameProxy, log, TuningSettings.NONE)
+
+        val report = ConfigSanitizer.analyze(canonical, log, TuningSettings.NONE)
+
+        assertEquals(Status.AlreadyCompliant, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    @Test
+    fun inbound_finding_redacts_untrusted_protocol_identifiers() {
+        val uuid = "123e4567-e89b-12d3-a456-426614174000"
+        val identifierBearingInbound = dirty.replace(
+            "\"protocol\":\"socks\"",
+            "\"protocol\":\"$uuid-publicKey-secret-shortId-secret\"",
+        )
+
+        val report = ConfigSanitizer.analyze(identifierBearingInbound, log, TuningSettings.NONE)
+        val output = findings(report).flatMap { finding ->
+            listOf(finding.detail) + listOfNotNull((finding.status as? Status.NotApplicable)?.reason)
+        }.joinToString()
+
+        assertFalse(output.contains(uuid))
+        assertFalse(output.contains("publicKey", ignoreCase = true))
+        assertFalse(output.contains("shortId", ignoreCase = true))
+    }
+
+    @Test
+    fun unsupported_blocked_only_country_reports_effective_proxy_all_routing() {
+        val tuning = TuningSettings(
+            routing = RoutingSettings(
+                mode = RoutingMode.BLOCKED_ONLY,
+                country = RoutingCountry.IR,
+                bypassLan = true,
+                blockAds = false,
+            ),
+        )
+
+        val report = ConfigSanitizer.analyze(dirty, log, tuning)
+
+        assertEquals("Proxy everything; LAN bypass on", byId(report, FindingId.ROUTING)?.detail)
+    }
+
+    @Test
+    fun invalid_custom_dns_reports_final_cloudflare_resolver() {
+        val tuning = TuningSettings(
+            dns = DnsSettings(
+                resolver = DnsResolver.CUSTOM,
+                customUrl = "not-a-doh-url",
+                customPinnedIp = "1.2.3.4",
+                queryStrategy = DnsQueryStrategy.USE_IP,
+            ),
+        )
+
+        val report = ConfigSanitizer.analyze(dirty, log, tuning)
+
+        assertEquals("Cloudflare", byId(report, FindingId.DNS_RESOLVER)?.detail)
+    }
+
+    @Test
+    fun stored_sniffing_does_not_report_when_no_global_overlay_is_active() {
+        val withStoredSniffing = dirty.replace(
+            "\"port\":1080}",
+            "\"port\":1080,\"sniffing\":{\"enabled\":true}}",
+        )
+
+        val report = ConfigSanitizer.analyze(withStoredSniffing, log, TuningSettings.NONE)
+
+        assertNull(byId(report, FindingId.SNIFFING))
+    }
 }
