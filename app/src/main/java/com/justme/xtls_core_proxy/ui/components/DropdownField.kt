@@ -45,7 +45,9 @@ fun DropdownField(
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                 .fillMaxWidth()
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        // `expanded && enabled` here too (not just on the Box): a caller whose `enabled` flips
+        // true -> false while the menu is open would otherwise leave it floating over a disabled anchor.
+        ExposedDropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
             options.forEach { (key, display) ->
                 DropdownMenuItem(
                     text = { Text(display) },
