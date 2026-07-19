@@ -95,6 +95,7 @@ import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
 import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
+import com.justme.xtls_core_proxy.state.AutoPingLatch
 import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
@@ -460,15 +461,16 @@ private fun MainScreen(
     }
     // Auto-ping on open. NOT LaunchedEffect(Unit): the Room-backed profile list is empty on first
     // composition, so a Unit-keyed effect would fire against nothing. Keyed on list-nonempty, it
-    // re-runs when profiles first load; the latch is consumed only when a ping actually launches,
-    // and stays consumed for the rest of the process (once per app launch).
+    // re-runs when profiles first load. The consumed bit lives in the process-scoped AutoPingLatch
+    // (NOT the Activity-scoped ViewModel), so it survives an Activity/ViewModel relaunch within the
+    // same process and re-arms only on process death — once per app launch. AutoPingLatch.consume()
+    // is atomic, so two overlapping consumers can't both fire.
     val allProfiles = view.manual + view.groups.flatMap { it.profiles }
     LaunchedEffect(allProfiles.isNotEmpty()) {
         if (allProfiles.isNotEmpty() &&
-            shouldAutoPing(PingPreferences.load(mainContext).autoOnOpen, viewModel.autoPingConsumed)
+            shouldAutoPing(PingPreferences.load(mainContext).autoOnOpen, AutoPingLatch.isConsumed)
         ) {
-            viewModel.consumeAutoPing()
-            viewModel.pingTestGroup(allProfiles)
+            if (AutoPingLatch.consume()) viewModel.pingTestGroup(allProfiles)
         }
     }
     val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
