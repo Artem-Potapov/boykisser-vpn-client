@@ -110,6 +110,36 @@ class ConfigBuilderRoutingTest {
         )
     }
 
+    // M2 — a bracketed IPv6 custom DoH resolver must be guarded as an ip rule, not a broken domain rule.
+    @Test fun doh_guard_handles_bracketed_ipv6_custom_resolver() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless,
+            tuning = TuningSettings(
+                dns = DnsSettings(
+                    resolver = DnsResolver.CUSTOM,
+                    customUrl = "https://[2606:4700:4700::1111]/dns-query",
+                    customPinnedIp = "",
+                    queryStrategy = DnsQueryStrategy.USE_IP,
+                ),
+                routing = RoutingSettings(RoutingMode.BLOCKED_ONLY, RoutingCountry.RU, bypassLan = false, blockAds = false)
+            )
+        )
+        val items = ruleItems(out)
+        // Order-independent: BLOCKED_ONLY also emits blocked-geoip ip+proxy rules, so search all of them.
+        val hasGuardIpRule = items.any {
+            val o = JSONObject(it)
+            o.has("ip") && o.optString("outboundTag") == "proxy" && it.contains("2606:4700:4700::1111")
+        }
+        assertTrue(
+            "DoH-guard must emit an ip rule covering the bracketed IPv6 resolver; rules=$items",
+            hasGuardIpRule
+        )
+        assertFalse(
+            "DoH-guard must not fall back to a broken 'full:[2606' domain rule; rules=$items",
+            items.any { it.contains("full:[2606") }
+        )
+    }
+
     // FIX 3 — a redirecting freedom outbound must not be adopted as the "direct" helper.
     @Test fun redirecting_freedom_outbound_is_not_adopted_as_direct() {
         val withRedirect = """

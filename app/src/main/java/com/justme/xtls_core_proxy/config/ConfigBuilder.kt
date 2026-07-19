@@ -531,7 +531,7 @@ object ConfigBuilder {
             val entry = servers.opt(i)
             if (entry is JSONObject && entry.has("domains")) continue // +local bootstrap, already carved out
             val addr = if (entry is JSONObject) entry.optString("address") else entry?.toString() ?: continue
-            val host = addr.substringAfter("://").substringBefore("/").substringBefore(":").trim()
+            val host = dohResolverHost(addr)
             if (host.isBlank()) continue
             if (isIpLiteral(host)) ips.add(host) else domains.add("full:$host")
         }
@@ -551,6 +551,16 @@ object ConfigBuilder {
         if (ips.isNotEmpty()) rules.add(fieldRule("ip", ips.distinct(), proxyTag))
         if (domains.isNotEmpty()) rules.add(fieldRule("domain", domains.distinct(), proxyTag))
         return rules
+    }
+
+    /** Host of a DoH server address, bracket-aware for IPv6 literals (…//[2606::1]:443/… → 2606::1). */
+    private fun dohResolverHost(addr: String): String {
+        val hostPort = addr.substringAfter("://").substringBefore("/").trim()
+        return if (hostPort.startsWith("[")) {
+            hostPort.substring(1).substringBefore("]")   // bracketed IPv6: drop [ ] and any :port after ]
+        } else {
+            hostPort.substringBefore(":")                // hostname / IPv4: strip :port
+        }.trim()
     }
 
     /** Returns the outbound's tag, assigning [fallback] if it has none. */
