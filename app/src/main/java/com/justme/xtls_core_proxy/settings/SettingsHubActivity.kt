@@ -46,9 +46,9 @@ import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 
 /**
  * Top-level settings hub. Single entry point from MainActivity; a sectioned,
- * single-scroll list of every sub-settings screen. The Advanced section header and its
- * real XRAY, DNS and Routing rows render always; the remaining placeholder rows render
- * only under [BuildConfig.DEBUG].
+ * single-scroll list of every sub-settings screen. The Advanced section shows
+ * real XRAY, DNS, Config sanitization, and Routing rows; remaining placeholder
+ * rows elsewhere render only under [BuildConfig.DEBUG].
  */
 class SettingsHubActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -138,7 +138,7 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 onClick = { open(MuxSettingsActivity::class.java) }
             )
 
-            // Advanced (header + XRAY, DNS and Routing rows always shown; remaining placeholders debug-only)
+            // Advanced (real rows always shown)
             SettingsSectionHeader(stringResource(R.string.settings_section_advanced))
             SettingsRow(
                 title = stringResource(R.string.xray_title),
@@ -150,9 +150,11 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 subtitle = stringResource(R.string.settings_dns_subtitle),
                 onClick = { open(DnsSettingsActivity::class.java) }
             )
-            if (BuildConfig.DEBUG) {
-                SettingsRow(title = stringResource(R.string.settings_ph_sanitization), enabled = false, badge = badge)
-            }
+            SettingsRow(
+                title = stringResource(R.string.sanitization_title),
+                subtitle = stringResource(R.string.settings_sanitization_subtitle),
+                onClick = { open(ConfigSanitizationActivity::class.java) }
+            )
             SettingsRow(
                 title = stringResource(R.string.routing_title),
                 subtitle = stringResource(R.string.settings_routing_subtitle),

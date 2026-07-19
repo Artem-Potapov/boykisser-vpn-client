@@ -88,6 +88,33 @@
     <string name="settings_ph_ping">Настройки пинг-теста</string>
     <string name="settings_ph_check_update">Проверить обновления</string>
 
+    <!-- Экран санитизации конфига -->
+    <string name="sanitization_title">Санитизация конфига</string>
+    <string name="settings_sanitization_subtitle">Как переписывается активный профиль</string>
+    <string name="sanitization_group_security">Принудительная безопасность</string>
+    <string name="sanitization_group_global">Ваши глобальные настройки</string>
+    <string name="sanitization_empty">Выберите профиль, чтобы увидеть санитизацию.</string>
+    <string name="sanitization_failure">Конфиг этого профиля не удалось обработать: %1$s</string>
+    <string name="sanitization_status_rewrote">Переписано</string>
+    <string name="sanitization_status_added">Добавлено</string>
+    <string name="sanitization_status_compliant">Уже соответствует</string>
+    <string name="sanitization_status_applied">Применено</string>
+    <string name="sanitization_status_na">Не применено</string>
+    <string name="san_inbounds_tun">Inbounds → tun</string>
+    <string name="san_dns_doh">DNS → DoH</string>
+    <string name="san_forced_log">Принудительный лог</string>
+    <string name="san_port53">Порт 53 → dns-out</string>
+    <string name="san_force_ip">ForceIP на прокси</string>
+    <string name="san_fragmentation">Фрагментация</string>
+    <string name="san_mux">Мультиплексирование</string>
+    <string name="san_sniffing">Определение домена</string>
+    <string name="san_mtu">TUN MTU</string>
+    <string name="san_ipv6">IPv6</string>
+    <string name="san_dns_resolver">DNS-резолвер</string>
+    <string name="san_routing">Маршрутизация</string>
+    <string name="san_domain_strategy">Разрешение доменов</string>
+    <string name="sanitization_cd_back">Назад</string>
+
     <!-- Экран настроек DNS -->
     <string name="dns_title">DNS</string>
     <string name="settings_dns_subtitle">Выберите защищённый DoH-резолвер</string>

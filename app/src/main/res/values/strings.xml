@@ -87,6 +87,33 @@
     <string name="settings_ph_ping">Ping test settings</string>
     <string name="settings_ph_check_update">Check for updates</string>
 
+    <!-- Config sanitization screen -->
+    <string name="sanitization_title">Config sanitization</string>
+    <string name="settings_sanitization_subtitle">See how your active profile is rewritten</string>
+    <string name="sanitization_group_security">Security enforcement</string>
+    <string name="sanitization_group_global">Your global settings</string>
+    <string name="sanitization_empty">Select a profile to see how it\'ll be sanitized.</string>
+    <string name="sanitization_failure">This profile\'s config couldn\'t be processed: %1$s</string>
+    <string name="sanitization_status_rewrote">Rewrote</string>
+    <string name="sanitization_status_added">Added</string>
+    <string name="sanitization_status_compliant">Already compliant</string>
+    <string name="sanitization_status_applied">Applied</string>
+    <string name="sanitization_status_na">Not applied</string>
+    <string name="san_inbounds_tun">Inbounds → tun</string>
+    <string name="san_dns_doh">DNS → DoH</string>
+    <string name="san_forced_log">Forced log</string>
+    <string name="san_port53">Port 53 → dns-out</string>
+    <string name="san_force_ip">ForceIP on proxy</string>
+    <string name="san_fragmentation">Fragmentation</string>
+    <string name="san_mux">Multiplexing</string>
+    <string name="san_sniffing">Domain sniffing</string>
+    <string name="san_mtu">TUN MTU</string>
+    <string name="san_ipv6">IPv6</string>
+    <string name="san_dns_resolver">DNS resolver</string>
+    <string name="san_routing">Routing</string>
+    <string name="san_domain_strategy">Domain resolution</string>
+    <string name="sanitization_cd_back">Back</string>
+
     <!-- DNS settings screen -->
     <string name="dns_title">DNS</string>
     <string name="settings_dns_subtitle">Choose a secure DoH resolver</string>
