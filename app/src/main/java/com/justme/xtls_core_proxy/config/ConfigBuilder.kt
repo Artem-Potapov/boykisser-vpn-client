@@ -162,7 +162,7 @@ object ConfigBuilder {
     const val CLOUDFLARE_DOH_LOCAL = "https+local://1.1.1.1/dns-query"
     const val CLOUDFLARE_DOH_LOCAL_SECONDARY = "https+local://1.0.0.1/dns-query"
     private const val DNS_OUT_TAG = "dns-out"
-    private val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
+    internal val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
     private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
 
     /**
@@ -663,7 +663,7 @@ object ConfigBuilder {
     }
 
     /** First outbound that isn't a `freedom`/`blackhole`/`dns` helper — the actual proxy. */
-    private fun firstProxyOutbound(outbounds: JSONArray): JSONObject? {
+    internal fun firstProxyOutbound(outbounds: JSONArray): JSONObject? {
         for (i in 0 until outbounds.length()) {
             val ob = outbounds.optJSONObject(i) ?: continue
             if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
