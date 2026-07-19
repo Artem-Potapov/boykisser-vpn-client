@@ -38,6 +38,15 @@ data class ProfilesView(val manual: List<Profile>, val groups: List<SubGroup>) {
     }
 }
 
+/** Auto-ping fires once per app launch: only when enabled and not yet consumed this process. */
+fun shouldAutoPing(autoOnOpen: Boolean, alreadyConsumed: Boolean): Boolean =
+    autoOnOpen && !alreadyConsumed
+
+internal fun shouldRebuildPingTester(
+    previousConcurrency: Int,
+    requestedConcurrency: Int,
+): Boolean = requestedConcurrency != previousConcurrency
+
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.get(application)
@@ -74,7 +83,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _dnsWarning = MutableStateFlow<DnsWarning?>(null)
     val dnsWarning: StateFlow<DnsWarning?> = _dnsWarning.asStateFlow()
 
-    private val pingTester = PingTester()
+    private var pingTester = PingTester(PingTester.DEFAULT_PING_CONCURRENCY)
+    private var pingConcurrency = PingTester.DEFAULT_PING_CONCURRENCY
+
+    // Once-per-launch latch for auto-ping-on-open (AndroidViewModel lives for the process).
+    var autoPingConsumed: Boolean = false
+        private set
+
     private val _pingStates = MutableStateFlow<Map<Long, PingState>>(emptyMap())
     val pingStates: StateFlow<Map<Long, PingState>> = _pingStates.asStateFlow()
 
@@ -286,8 +301,21 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         ActiveProfileRepository.setActiveProfileId(context, null)
     }
 
+    fun consumeAutoPing() {
+        autoPingConsumed = true
+    }
+
+    private fun ensurePingTester(concurrency: Int) {
+        if (shouldRebuildPingTester(pingConcurrency, concurrency)) {
+            pingConcurrency = concurrency
+            pingTester = PingTester(concurrency)
+        }
+    }
+
     fun pingTestGroup(profiles: List<Profile>) {
         if (profiles.isEmpty()) return
+        val prefs = PingPreferences.load(getApplication())
+        ensurePingTester(prefs.concurrency)
         val byId = profiles.associateBy { it.id }
         viewModelScope.launch {
             pingTester.testAll(
@@ -296,14 +324,20 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 // byId.getValue is safe: PingTester only invokes probe with ids from the list we
                 // passed (byId.keys). Even a contract violation is caught by testAll (Throwable ->
                 // Unavailable), so a missing key cannot leave a row stuck on Testing.
-                probe = { id -> probeProfile(byId.getValue(id)) }
+                probe = { id ->
+                    probeProfile(byId.getValue(id), prefs.targetUrl, prefs.timeoutMs)
+                }
             )
         }
     }
 
     fun pingTestProfile(profile: Profile) = pingTestGroup(listOf(profile))
 
-    private suspend fun probeProfile(profile: Profile): PingState {
+    private suspend fun probeProfile(
+        profile: Profile,
+        targetUrl: String,
+        timeoutMs: Long,
+    ): PingState {
         val config = runCatching { ConfigBuilder.toPingTestConfig(profile.config) }.getOrElse {
             LogRepository.append("ping: config build failed for ${profile.name}: ${it.message}")
             return PingState.Unavailable
@@ -311,15 +345,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         // Run the blocking JNI probe as a viewModelScope child (NOT a child of this call), so the
         // backstop stops WAITING on it without blocking on the uninterruptible native call:
         // await() is the suspension point withTimeoutOrNull can cancel. Go already bounds the dial
-        // at PING_TIMEOUT_MS; PING_BACKSTOP_MS guards the unbounded setup path (core.New/Start) so a
-        // row can't hang on Testing forever. On backstop the probe is orphaned (finishes on its own,
+        // at timeoutMs; the derived backstop guards the unbounded setup path (core.New/Start) so a row
+        // can't hang on Testing forever. On backstop the probe is orphaned (finishes on its own,
         // result discarded) rather than cancelled, since the native call ignores cancellation.
         val probe = viewModelScope.async(Dispatchers.IO) {
-            XrayBridge.measureLatency(config, PingTester.PING_TEST_TARGET, PingTester.PING_TIMEOUT_MS)
+            XrayBridge.measureLatency(config, targetUrl, timeoutMs)
         }
-        val result = withTimeoutOrNull(PingTester.PING_BACKSTOP_MS) { probe.await() }
+        val backstop = PingTester.backstopFor(timeoutMs)
+        val result = withTimeoutOrNull(backstop) { probe.await() }
         if (result == null) {
-            LogRepository.append("ping: probe exceeded ${PingTester.PING_BACKSTOP_MS}ms backstop for ${profile.name}")
+            LogRepository.append("ping: probe exceeded ${backstop}ms backstop for ${profile.name}")
             return PingState.Unavailable
         }
         return PingState.fromResult(result)
