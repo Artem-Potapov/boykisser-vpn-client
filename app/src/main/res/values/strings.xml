@@ -108,6 +108,7 @@
     <string name="dns_strategy_use_ipv4">IPv4 only</string>
     <string name="dns_strategy_use_ipv6">IPv6 only</string>
     <string name="dns_strategy_ipv6_off">IPv6 is off (XRAY settings) — queries are IPv4-only</string>
+    <string name="dns_strategy_from_config">Query strategy applies only when you pick a resolver above. \"From config\" leaves your config\'s own DNS untouched.</string>
     <string name="dns_hint">Takes effect on the next connect. Plaintext DNS is never used.</string>
     <string name="dns_cd_back">Back</string>
     <string name="dns_save">Save</string>

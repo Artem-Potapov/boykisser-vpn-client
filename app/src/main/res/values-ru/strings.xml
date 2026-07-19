@@ -109,6 +109,7 @@
     <string name="dns_strategy_use_ipv4">Только IPv4</string>
     <string name="dns_strategy_use_ipv6">Только IPv6</string>
     <string name="dns_strategy_ipv6_off">IPv6 отключён (настройки XRAY) — запросы только по IPv4</string>
+    <string name="dns_strategy_from_config">Стратегия запросов применяется, только если выше выбран резолвер. «Из конфига» оставляет DNS из вашего конфига без изменений.</string>
     <string name="dns_hint">Вступает в силу при следующем подключении. Открытый DNS не используется.</string>
     <string name="dns_cd_back">Назад</string>
     <string name="dns_save">Сохранить</string>

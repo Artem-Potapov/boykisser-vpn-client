@@ -94,6 +94,7 @@ private fun DnsScreen(onBack: () -> Unit) {
     val needsPin = customHost != null && !isIpLiteralClient(customHost)
     val pinValid = !needsPin || isIpLiteralClient(pinnedIp.trim())
     val canSave = urlValid && pinValid
+    val strategyActive = ipv6On && resolver != DnsResolver.FROM_CONFIG
 
     // DropdownField is String-keyed (see Task 5) — options map via enum name.
     val resolverOptions = listOf(
@@ -176,10 +177,13 @@ private fun DnsScreen(onBack: () -> Unit) {
             DropdownField(
                 value = strategy.name, onValueChange = { strategy = DnsQueryStrategy.valueOf(it) },
                 label = stringResource(R.string.dns_query_strategy_label), options = strategyOptions,
-                modifier = Modifier.fillMaxWidth(), enabled = ipv6On
+                modifier = Modifier.fillMaxWidth(), enabled = strategyActive
             )
-            if (!ipv6On) {
-                Text(stringResource(R.string.dns_strategy_ipv6_off), style = MaterialTheme.typography.bodySmall)
+            when {
+                resolver == DnsResolver.FROM_CONFIG ->
+                    Text(stringResource(R.string.dns_strategy_from_config), style = MaterialTheme.typography.bodySmall)
+                !ipv6On ->
+                    Text(stringResource(R.string.dns_strategy_ipv6_off), style = MaterialTheme.typography.bodySmall)
             }
             Text(stringResource(R.string.dns_hint), style = MaterialTheme.typography.bodySmall)
         }
