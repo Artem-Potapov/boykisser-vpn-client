@@ -441,14 +441,7 @@ object ConfigBuilder {
         val proxy = firstProxyOutbound(outbounds) ?: return configJson
         val proxyTag = ensureTag(proxy, "proxy")
         val directTag = ensureHelperOutbound(outbounds, "freedom", "direct")
-        // Fail-closed: a BLOCKED_ONLY value whose country has no blocked dataset would emit a catch-all
-        // direct with nothing routed to proxy — 100% of traffic egressing direct while the UI says
-        // "connected". Degrade to PROXY_ALL here at the chokepoint so no caller can construct that config.
-        val effectiveMode = if (routing.mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(routing.country)) {
-            RoutingMode.PROXY_ALL
-        } else {
-            routing.mode
-        }
+        val effectiveMode = effectiveRoutingMode(routing)
         val blockTag = if (routing.blockAds || effectiveMode == RoutingMode.BLOCKED_ONLY) {
             ensureHelperOutbound(outbounds, "blackhole", "block")
         } else null
@@ -486,6 +479,18 @@ object ConfigBuilder {
         routingObj.put("rules", out)
         return root.toString()
     }
+
+    /**
+     * Fail-closed routing decision shared by runtime shaping and read-only diagnostics. A
+     * BLOCKED_ONLY country without a blocked dataset must degrade to PROXY_ALL rather than install
+     * a direct catch-all with no traffic routed to the proxy.
+     */
+    internal fun effectiveRoutingMode(routing: RoutingSettings): RoutingMode =
+        if (routing.mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(routing.country)) {
+            RoutingMode.PROXY_ALL
+        } else {
+            routing.mode
+        }
 
     /**
      * Last overlay. Each sub-action is guarded so DEFAULT + no forced sniffing is a byte-identical

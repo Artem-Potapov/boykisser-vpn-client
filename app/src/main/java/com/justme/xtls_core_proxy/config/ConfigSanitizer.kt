@@ -168,7 +168,7 @@ object ConfigSanitizer {
             FindingCategory.GLOBAL_SETTING,
             FindingId.ROUTING,
             Status.Applied,
-            routingSummary(final, tuning.routing),
+            routingSummary(tuning.routing),
         )
         findings += Finding(
             FindingCategory.GLOBAL_SETTING,
@@ -179,13 +179,9 @@ object ConfigSanitizer {
         return findings
     }
 
-    private fun routingSummary(final: JSONObject, routing: RoutingSettings?): String {
+    private fun routingSummary(routing: RoutingSettings?): String {
         val configured = routing ?: return "Proxy everything"
-        val effectiveMode = when {
-            configured.mode != RoutingMode.BLOCKED_ONLY -> configured.mode
-            hasDirectCatchAll(final) -> RoutingMode.BLOCKED_ONLY
-            else -> RoutingMode.PROXY_ALL
-        }
+        val effectiveMode = ConfigBuilder.effectiveRoutingMode(configured)
         if (effectiveMode == RoutingMode.PROXY_ALL) {
             return buildList {
                 add("Proxy everything")
@@ -203,23 +199,6 @@ object ConfigSanitizer {
             if (configured.bypassLan) add("LAN bypass on")
             if (configured.blockAds) add("ads blocked")
         }.joinToString("; ")
-    }
-
-    private fun hasDirectCatchAll(final: JSONObject): Boolean {
-        val outbounds = final.optJSONArray("outbounds") ?: return false
-        val directTags = (0 until outbounds.length()).mapNotNull { index ->
-            outbounds.optJSONObject(index)
-                ?.takeIf { it.optString("protocol").equals("freedom", ignoreCase = true) }
-                ?.optString("tag")
-                ?.ifBlank { null }
-        }.toSet()
-        if (directTags.isEmpty()) return false
-
-        val rules = final.optJSONObject("routing")?.optJSONArray("rules") ?: return false
-        return (0 until rules.length()).any { index ->
-            val rule = rules.optJSONObject(index) ?: return@any false
-            rule.optString("network") == "tcp,udp" && rule.optString("outboundTag") in directTags
-        }
     }
 
     private fun fragmentationSkipReason(proxy: JSONObject?): String {

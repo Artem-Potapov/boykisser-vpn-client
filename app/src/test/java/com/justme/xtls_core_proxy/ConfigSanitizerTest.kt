@@ -278,4 +278,27 @@ class ConfigSanitizerTest {
 
         assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
     }
+
+    @Test
+    fun unsupported_blocked_only_with_user_direct_catch_all_reports_proxy_everything() {
+        val withUserCatchAll = """
+            {"outbounds":[
+            {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,
+            "users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+            {"tag":"user-direct","protocol":"freedom"}],
+            "routing":{"rules":[{"type":"field","network":"tcp,udp","outboundTag":"user-direct"}]}}
+        """.trimIndent()
+        val tuning = TuningSettings(
+            routing = RoutingSettings(
+                mode = RoutingMode.BLOCKED_ONLY,
+                country = RoutingCountry.IR,
+                bypassLan = false,
+                blockAds = false,
+            ),
+        )
+
+        val report = ConfigSanitizer.analyze(withUserCatchAll, log, tuning)
+
+        assertEquals("Proxy everything", byId(report, FindingId.ROUTING)?.detail)
+    }
 }
