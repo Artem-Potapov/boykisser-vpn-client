@@ -1,6 +1,8 @@
 package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.RoutingCountry
+import com.justme.xtls_core_proxy.config.RoutingMode
 import com.justme.xtls_core_proxy.config.RoutingSettings
 import com.justme.xtls_core_proxy.config.TuningSettings
 import com.justme.xtls_core_proxy.config.XrayCoreSettings
@@ -65,5 +67,39 @@ class ConfigBuilderCoreTest {
         val withStrategy = JSONObject(vless).put("routing", JSONObject().put("domainStrategy", "IPIfNonMatch")).toString()
         val out = ConfigBuilder.buildRuntimeConfig(withStrategy, tuning = TuningSettings(core = XrayCoreSettings.DEFAULT))
         assertEquals("IPIfNonMatch", root(out).getJSONObject("routing").getString("domainStrategy"))
+    }
+
+    /**
+     * ipv6-off × BLOCKED_ONLY is the most load-bearing overlay interaction: the ::/0 block must land
+     * right after port-53 (index 1) WITHOUT shadowing the BLOCKED_ONLY DoH-guard (IPv4-literal resolver
+     * IPs → proxy) or displacing the catch-all direct from last. Pins the fail-closed ordering the T7
+     * reviewer verified only analytically.
+     */
+    @Test fun ipv6_off_with_blocked_only_preserves_doh_guard_and_catch_all() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless,
+            tuning = TuningSettings(
+                core = XrayCoreSettings.DEFAULT.copy(ipv6 = false),
+                routing = RoutingSettings.USER_DEFAULT.copy(mode = RoutingMode.BLOCKED_ONLY, country = RoutingCountry.RU),
+            ),
+        )
+        val rules = root(out).getJSONObject("routing").getJSONArray("rules")
+        // port-53 stays index 0; ::/0 -> block inserted at index 1.
+        assertEquals(53, rules.getJSONObject(0).getInt("port"))
+        assertEquals("::/0", rules.getJSONObject(1).getJSONArray("ip").getString(0))
+        // The DoH-guard (resolver IPv4 literals -> proxy) survives at index >= 2 (not shadowed by ::/0).
+        var dohGuardIdx = -1
+        for (i in 2 until rules.length()) {
+            val r = rules.getJSONObject(i)
+            if (r.optString("outboundTag") == "proxy" && (r.optJSONArray("ip")?.toString()?.contains("1.1.1.1") == true)) {
+                dohGuardIdx = i
+                break
+            }
+        }
+        assertTrue("BLOCKED_ONLY DoH-guard proxy rule must survive at index >= 2", dohGuardIdx >= 2)
+        // Catch-all direct remains last.
+        val last = rules.getJSONObject(rules.length() - 1)
+        assertEquals("tcp,udp", last.getString("network"))
+        assertEquals("direct", last.getString("outboundTag"))
     }
 }
