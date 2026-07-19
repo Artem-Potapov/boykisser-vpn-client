@@ -44,14 +44,26 @@ object XrayBridge {
     }
 
     /**
-     * Linked xray-core version via the Go bridge. Read-only: touches no lock and no running
-     * instance, so it is safe to call regardless of tunnel state. Returns Result.failure on a
-     * stale AAR that predates the Go-side `XrayVersion` (callers render that as "unknown").
+     * Linked xray-core version via the Go bridge. Read-only on the Go side: touches neither `mu`
+     * nor `instance`, so it cannot deadlock against StartXray/StopXray and is safe at any tunnel
+     * state. Returns Result.failure on a stale AAR that predates the Go-side `XrayVersion`
+     * (callers render that as "unknown").
+     *
+     * CALL OFF THE MAIN THREAD. This is a blocking JNI call, and the FIRST bridge touch in a
+     * process triggers `Xraybridge`'s static init -> `go.Seq` -> `System.loadLibrary("gojni")`
+     * (a ~50 MB .so) plus full Go runtime init, which stalls the caller for hundreds of ms.
+     * Unlike the other accessors this one is reachable from a settings screen rather than only
+     * from a connect action, so it may well BE that first touch — dispatch it on Dispatchers.IO
+     * (see VpnViewModel's measureLatency usage).
      */
     fun xrayVersion(): Result<String> = runCatching {
         val clazz = bridgeClass()
         val method = findMethod(clazz, listOf("XrayVersion", "xrayVersion"), 0)
         method.invoke(null) as String
+    }.onFailure {
+        // Breadcrumb so a rendered "unknown" can be told apart from an R8-stripped method, a stale
+        // AAR, or an UnsatisfiedLinkError — the release-build check relies on this distinction.
+        LogRepository.append("xrayVersion failed: ${it.message}")
     }
 
     /**
