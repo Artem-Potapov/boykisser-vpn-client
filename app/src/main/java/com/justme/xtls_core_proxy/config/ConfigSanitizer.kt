@@ -19,7 +19,11 @@ object ConfigSanitizer {
         tuning: TuningSettings,
     ): SanitizationReport {
         val finalJson = runCatching { ConfigBuilder.buildRuntimeConfig(stored, log, tuning) }
-            .getOrElse { return SanitizationReport.Failure(it.message ?: "Config could not be processed") }
+            .getOrElse {
+                return SanitizationReport.Failure(
+                    redactText(it.message ?: "Config could not be processed"),
+                )
+            }
         val original = runCatching { JSONObject(stored) }.getOrNull() ?: JSONObject()
         val final = JSONObject(finalJson)
 
@@ -48,14 +52,17 @@ object ConfigSanitizer {
         }
 
         val originalServers = original.optJSONObject("dns")?.optJSONArray("servers")
+        val finalServers = final.optJSONObject("dns")?.optJSONArray("servers")
         val allSecure = originalServers != null && originalServers.length() > 0 &&
-            (0 until originalServers.length()).all { isCanonicalSecureResolver(originalServers.opt(it)) }
-        val finalServers = serverAddresses(final.optJSONObject("dns")?.optJSONArray("servers"))
+            (0 until originalServers.length()).all { originalServer ->
+                isSecureResolver(originalServers.opt(originalServer)) ||
+                    isPipelineBootstrap(originalServers.opt(originalServer), finalServers)
+            }
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.DNS_DOH,
             if (allSecure) Status.AlreadyCompliant else Status.Rewrote,
-            finalServers.joinToString(", "),
+            serverAddresses(finalServers).joinToString(", "),
         )
 
         findings += Finding(
@@ -157,18 +164,11 @@ object ConfigSanitizer {
             Status.Applied,
             effectiveDnsResolver(final, tuning.dns),
         )
-        val effectiveRouting = tuning.routing?.let { routing ->
-            if (routing.mode == RoutingMode.BLOCKED_ONLY && !blockedSupported(routing.country)) {
-                routing.copy(mode = RoutingMode.PROXY_ALL)
-            } else {
-                routing
-            }
-        }
         findings += Finding(
             FindingCategory.GLOBAL_SETTING,
             FindingId.ROUTING,
             Status.Applied,
-            routingSummary(effectiveRouting),
+            routingSummary(final, tuning.routing),
         )
         findings += Finding(
             FindingCategory.GLOBAL_SETTING,
@@ -179,24 +179,47 @@ object ConfigSanitizer {
         return findings
     }
 
-    private fun routingSummary(routing: RoutingSettings?): String {
-        if (routing == null || routing.mode == RoutingMode.PROXY_ALL) {
+    private fun routingSummary(final: JSONObject, routing: RoutingSettings?): String {
+        val configured = routing ?: return "Proxy everything"
+        val effectiveMode = when {
+            configured.mode != RoutingMode.BLOCKED_ONLY -> configured.mode
+            hasDirectCatchAll(final) -> RoutingMode.BLOCKED_ONLY
+            else -> RoutingMode.PROXY_ALL
+        }
+        if (effectiveMode == RoutingMode.PROXY_ALL) {
             return buildList {
                 add("Proxy everything")
-                if (routing?.bypassLan == true) add("LAN bypass on")
-                if (routing?.blockAds == true) add("ads blocked")
+                if (configured.bypassLan) add("LAN bypass on")
+                if (configured.blockAds) add("ads blocked")
             }.joinToString("; ")
         }
-        val mode = when (routing.mode) {
-            RoutingMode.EXCEPT_COUNTRY -> "Proxy all except ${routing.country}"
-            RoutingMode.BLOCKED_ONLY -> "Proxy only blocked (${routing.country})"
+        val mode = when (effectiveMode) {
+            RoutingMode.EXCEPT_COUNTRY -> "Proxy all except ${configured.country}"
+            RoutingMode.BLOCKED_ONLY -> "Proxy only blocked (${configured.country})"
             RoutingMode.PROXY_ALL -> error("Handled above")
         }
         return buildList {
             add(mode)
-            if (routing.bypassLan) add("LAN bypass on")
-            if (routing.blockAds) add("ads blocked")
+            if (configured.bypassLan) add("LAN bypass on")
+            if (configured.blockAds) add("ads blocked")
         }.joinToString("; ")
+    }
+
+    private fun hasDirectCatchAll(final: JSONObject): Boolean {
+        val outbounds = final.optJSONArray("outbounds") ?: return false
+        val directTags = (0 until outbounds.length()).mapNotNull { index ->
+            outbounds.optJSONObject(index)
+                ?.takeIf { it.optString("protocol").equals("freedom", ignoreCase = true) }
+                ?.optString("tag")
+                ?.ifBlank { null }
+        }.toSet()
+        if (directTags.isEmpty()) return false
+
+        val rules = final.optJSONObject("routing")?.optJSONArray("rules") ?: return false
+        return (0 until rules.length()).any { index ->
+            val rule = rules.optJSONObject(index) ?: return@any false
+            rule.optString("network") == "tcp,udp" && rule.optString("outboundTag") in directTags
+        }
     }
 
     private fun fragmentationSkipReason(proxy: JSONObject?): String {
@@ -244,16 +267,32 @@ object ConfigSanitizer {
         }
     }
 
-    private fun isCanonicalSecureResolver(entry: Any?): Boolean {
+    private fun isSecureResolver(entry: Any?): Boolean {
         val address = when (entry) {
             is String -> entry
             is JSONObject -> entry.optString("address")
             else -> ""
         }
-        if (ConfigBuilder.SECURE_DNS_PREFIXES.any { address.startsWith(it, ignoreCase = true) }) return true
-        return entry is JSONObject &&
-            entry.optJSONArray("domains")?.length()?.let { it > 0 } == true &&
-            address.startsWith("https+local://", ignoreCase = true)
+        return ConfigBuilder.SECURE_DNS_PREFIXES.any { address.startsWith(it, ignoreCase = true) }
+    }
+
+    private fun isPipelineBootstrap(entry: Any?, finalServers: JSONArray?): Boolean {
+        val original = entry as? JSONObject ?: return false
+        val originalAddress = original.optString("address")
+        val originalDomains = original.optJSONArray("domains") ?: return false
+        if (!originalAddress.startsWith("https+local://", ignoreCase = true)) return false
+        finalServers ?: return false
+
+        return (0 until finalServers.length()).any { index ->
+            val final = finalServers.optJSONObject(index) ?: return@any false
+            final.optString("address").equals(originalAddress, ignoreCase = true) &&
+                jsonStrings(final.optJSONArray("domains")) == jsonStrings(originalDomains)
+        }
+    }
+
+    private fun jsonStrings(array: JSONArray?): List<String> {
+        array ?: return emptyList()
+        return (0 until array.length()).map { array.optString(it) }
     }
 
     private fun effectiveDnsResolver(final: JSONObject, settings: DnsSettings): String {

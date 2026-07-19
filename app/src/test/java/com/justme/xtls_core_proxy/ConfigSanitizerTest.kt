@@ -252,4 +252,30 @@ class ConfigSanitizerTest {
 
         assertNull(byId(report, FindingId.SNIFFING))
     }
+
+    @Test
+    fun malformed_sensitive_vless_failure_reason_is_redacted() {
+        val uuid = "123e4567-e89b-12d3-a456-426614174000"
+        val malformed = "vless://$uuid@example.com:443?pbk=publicKey-secret&sid=shortId-secret bad"
+
+        val report = ConfigSanitizer.analyze(malformed, log, TuningSettings.NONE)
+        val reason = (report as SanitizationReport.Failure).reason
+
+        assertFalse(reason.contains(uuid))
+        assertFalse(reason.contains("publicKey", ignoreCase = true))
+        assertFalse(reason.contains("shortId", ignoreCase = true))
+    }
+
+    @Test
+    fun arbitrary_scoped_local_resolver_is_rewritten_not_canonical() {
+        val arbitraryScopedLocal = dirty.replace(
+            "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+            "\"dns\":{\"servers\":[{\"address\":\"https+local://203.0.113.1/dns-query\"," +
+                "\"domains\":[\"full:arbitrary.example\"]}]}",
+        )
+
+        val report = ConfigSanitizer.analyze(arbitraryScopedLocal, log, TuningSettings.NONE)
+
+        assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
+    }
 }
