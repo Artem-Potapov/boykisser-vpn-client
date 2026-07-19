@@ -31,6 +31,12 @@ every config ─────► makeSecureDns(config)  ─► canonical secure s
 user*. Splitting them is what lets the policy be both safe (the fix always runs) and quiet (a config
 that's merely missing DoH is fixed silently, with no nag).
 
+The guarantee covers DNS handled by Xray's DNS module and all app traffic aimed at port 53. Under the
+global routing overlay's direct-by-default `BLOCKED_ONLY` mode, non-matching encrypted DNS initiated by
+an app itself (for example browser-owned DoH on 443 or DoT on 853) follows the mode's normal direct
+catch-all. That traffic remains encrypted, but is not forced through Xray's selected resolver; see
+[`routing-rules.md`](routing-rules.md).
+
 ## The canonical secure shape
 
 `makeSecureDns` rewrites any config to:

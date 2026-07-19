@@ -36,9 +36,11 @@ LogsScreen (Compose) / Copy / Share / Export
 
 [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt)'s
 `buildRuntimeConfig(input, log = LogSettings(XrayLogLevel.WARNING, null))` runs `forceLog(base, log)` as
-the last step, after the protocol-specific builder (`fromVlessUri` / `fromHysteria2Uri` / `fromJson`) has
-already produced a config. `forceLog` is private and **overwrites** the `log` object outright — it does
-not merge — specifically so a pasted/imported config cannot redirect Xray's own log writes elsewhere:
+the first global shaping step after the protocol-specific builder (`fromVlessUri` /
+`fromHysteria2Uri` / `fromJson`) has produced a secure base config. Fragmentation, Mux, DNS, routing,
+and core overlays run afterward and do not own the log object. `forceLog` is private and **overwrites**
+the `log` object outright — it does not merge — specifically so a pasted/imported config cannot
+redirect Xray's own log writes elsewhere:
 
 ```kotlin
 private fun forceLog(configJson: String, log: LogSettings): String {
@@ -355,7 +357,7 @@ fact about this screen:
 | File | Role |
 |---|---|
 | [`config/LogSettings.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/LogSettings.kt) | `XrayLogLevel` enum (`wire` strings, `fromName` fallback to `WARNING`); `LogSettings(level, errorFilePath)`. |
-| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | `buildRuntimeConfig(input, log = LogSettings(WARNING, null))` ends with private `forceLog`, which overwrites (not merges) the config's `log` object; `toPingTestConfig` forces `LogSettings(NONE, null)`. |
+| [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | `buildRuntimeConfig(input, log = LogSettings(WARNING, null))` applies private `forceLog` before the optional connection overlays; it overwrites (not merges) the config's `log` object. `toPingTestConfig` forces `LogSettings(NONE, null)`. |
 | [`log/LogPreferences.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogPreferences.kt) | `xray_prefs`-backed `getLogLevel`/`setLogLevel`, `getBufferLines`/`setBufferLines`, `BUFFER_PRESETS`, `DEFAULT_BUFFER`. |
 | [`log/XrayCoreLogTailer.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/XrayCoreLogTailer.kt) | Polls the log file every 400 ms (≤64 KiB/poll fixed buffer), tracks byte offset, resets on shrink, strips Xray's own timestamp, feeds `LogRepository.append`. The **file read** catches only `IOException` (rethrows `CancellationException`) and retries. The **per-line handoff** to `append`/`sanitize` is separately guarded so a non-IOException bug there leaves a breadcrumb and the loop survives instead of silently killing the tailer coroutine. |
 | [`log/BoundedLogLineAccumulator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/BoundedLogLineAccumulator.kt) | Byte-oriented complete-line splitter; UTF-8 decode only after `\n`; discard-until-newline on pending overflow (>64 KiB). |

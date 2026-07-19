@@ -1,9 +1,8 @@
-# Settings Hub: Sectioned Structure, Reusable Components, Debug Placeholders
+# Settings Hub: Sectioned Structure and Promoted Settings
 
 Maintainer reference for `SettingsHubActivity`: the sectioned single-scroll settings screen, the
-reusable `SettingsSectionHeader`/`SettingsRow` components it (and `LogsActivity`) are built from, and
-the `BuildConfig.DEBUG` placeholder-row convention that stakes out where real settings will eventually
-land.
+reusable `SettingsSectionHeader`/`SettingsRow` components it (and `LogsActivity`) are built from, the
+six promoted settings destinations, and the remaining debug-placeholder convention.
 
 ## Why this exists
 
@@ -20,10 +19,10 @@ per-section sub-screens. Sections appear in this fixed order:
 
 | Section | String resource | Real rows today |
 |---|---|---|
-| UI | `settings_section_ui` | App appearance (→ `AppearanceSettingsActivity`), Language (→ `LanguageSettingsActivity`) |
-| Tunnel | `settings_section_tunnel` | Split tunnel (→ `SplitTunnelSettingsActivity`), Kill switch (→ `KillSwitchSettingsActivity`), Auto-connect on boot (opens `AutoConnectInfoDialog` in-place), Fragmentation (→ `FragmentationSettingsActivity`) |
-| Advanced | `settings_section_advanced` | none — **the whole section is debug-only** (see below) |
-| Diagnostics | `settings_section_diagnostics` | Logs (→ `LogsActivity`) |
+| UI | `settings_section_ui` | Language (→ `LanguageSettingsActivity`), App appearance (→ `AppearanceSettingsActivity`) |
+| Tunnel | `settings_section_tunnel` | Split tunnel, Kill switch, Auto-connect on boot, Fragmentation, Mux.Cool |
+| Advanced | `settings_section_advanced` | XRAY, DNS, Config sanitization, Routing rules |
+| Diagnostics | `settings_section_diagnostics` | Logs, Ping test |
 | About | `settings_section_about` | Sideload warning (opens `SideloadWarningDialog` in-place), About (→ `AboutActivity`) |
 
 Each real, navigable row calls a local `open(cls: Class<*>)` helper
@@ -73,43 +72,41 @@ fun SettingsRow(
   `KeyboardArrowRight` chevron; a row with `onClick = null` (or `enabled = false`) renders with no
   chevron and no click affordance.
 
-## The `BuildConfig.DEBUG` placeholder convention
+## The six promoted rows
 
-Several rows across the Tunnel, Advanced, Diagnostics, and About sections exist only to show where a
-not-yet-implemented setting will eventually live. Every one of them follows the same shape:
+Plans 1–3 promoted all former Tunnel/Advanced/Diagnostics placeholders to real destinations:
+
+- Tunnel → Mux.Cool (`MuxSettingsActivity`; [mux.md](mux.md))
+- Advanced → XRAY (`XraySettingsActivity`; [xray-settings.md](xray-settings.md))
+- Advanced → DNS (`DnsSettingsActivity`; [dns.md](dns.md))
+- Advanced → Config sanitization (`ConfigSanitizationActivity`;
+  [config-sanitization.md](config-sanitization.md))
+- Advanced → Routing rules (`RoutingSettingsActivity`; [routing-rules.md](routing-rules.md))
+- Diagnostics → Ping test (`PingTestSettingsActivity`; [ping-test.md](ping-test.md))
+
+These rows are always enabled and visible in both debug and release. Because Advanced now contains
+four real rows, its header and contents are no longer wrapped in `BuildConfig.DEBUG`; the complete
+Advanced section ships in release.
+
+## The remaining `BuildConfig.DEBUG` placeholder convention
+
+Rows that stake out not-yet-implemented settings follow this shape:
 
 ```kotlin
 if (BuildConfig.DEBUG) SettingsRow(
-    title = stringResource(R.string.settings_ph_mux),
+    title = stringResource(R.string.settings_ph_check_update),
     enabled = false, badge = badge
 )
 ```
 
 i.e. `enabled = false` (greyed out, unclickable, no chevron), `badge = badge` (the shared
 `stringResource(R.string.settings_badge_debug)` value computed once at the top of
-`SettingsHubScreen`), and the whole row wrapped in `if (BuildConfig.DEBUG)`. Current placeholder rows:
+`SettingsHubScreen`), and the whole row wrapped in `if (BuildConfig.DEBUG)`. The only remaining
+placeholder is About → `settings_ph_check_update`.
 
-| Section | Placeholder string resource |
-|---|---|
-| Tunnel | `settings_ph_mux` |
-| Advanced | `settings_ph_xray`, `settings_ph_dns`, `settings_ph_sanitization`, `settings_ph_routing` |
-| Diagnostics | `settings_ph_ping` |
-| About | `settings_ph_check_update` |
-
-The former UI `settings_ph_appearance` and the Tunnel `settings_ph_autoconnect` / `settings_ph_fragmentation`
-placeholders have since been **promoted to real rows** — see [`app-appearance.md`](app-appearance.md),
-[`auto-connect-boot.md`](auto-connect-boot.md), and [`fragmentation.md`](fragmentation.md). The UI section
-therefore no longer carries any placeholder.
-
-**The entire Advanced section header + all four of its rows are wrapped in one `if (BuildConfig.DEBUG)`**
-— unlike the other sections (which are always visible with individual placeholder rows debug-gated
-inside them), Advanced has no shipped real row yet, so the section itself disappears in release builds.
-
-Because these are gated on `BuildConfig.DEBUG` (not a runtime flag), a **release build renders none of
-them** — `isMinifyEnabled`/R8 aside, the `if (BuildConfig.DEBUG)` branches are dead code the compiler
-can constant-fold away in release, so there is no user-visible trace of the placeholders outside debug
-builds. This is a maintainer-facing roadmap of *not-yet-built* settings, not a beta/experimental toggle
-the app ships to users.
+Earlier promoted rows also include App appearance, Auto-connect, and Fragmentation. Because the sole
+remaining placeholder is gated on `BuildConfig.DEBUG`, release builds omit only Check for updates;
+all five section headers and every real row remain visible.
 
 **Do not re-enable (flip to always-visible) or delete a placeholder row without maintainer approval** —
 same spirit as the Dormant/Temporarily-Disabled Features convention in `AGENTS.md`: a placeholder marks
@@ -144,7 +141,7 @@ To promote a placeholder (or add a wholly new setting) to a real row:
 
 | File | Role |
 |---|---|
-| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: `LocalizedComponentActivity` + `SettingsHubScreen` composable; single scrolling `Column`, five fixed sections, `open(cls)` navigation helper, debug placeholder rows. |
+| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: five fixed sections, six promoted rows, `open(cls)` navigation helper, and the one remaining debug placeholder. |
 | [`ui/SettingsComponents.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/ui/SettingsComponents.kt) | `SettingsSectionHeader`, `SettingsRow` — the shared primitives (also used by `LogsActivity`). |
 | [`settings/AboutActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/AboutActivity.kt) | App name, `BuildConfig.VERSION_NAME`, purpose blurb, GitHub link button (placeholder URL `https://github.com/` — flagged as a known follow-up, not yet the real repo URL), license line. Destination of the About row. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Destination of the Diagnostics → Logs row; see [`logs-screen.md`](logs-screen.md). |
@@ -157,16 +154,14 @@ To promote a placeholder (or add a wholly new setting) to a real row:
   "helpfully" fix by guessing a URL.
 - **No search/filter** across settings — with five sections and a handful of rows this hasn't been
   needed yet; revisit if the hub grows substantially.
-- **Debug placeholders carry no persisted state** — they are static, disabled rows; there's nothing to
-  migrate when one is promoted to a real setting.
+- **The remaining Check for updates placeholder carries no persisted state** — it is a static,
+  disabled debug row.
 
 ## Testing
 
 - No dedicated JUnit4 suite — `SettingsHubActivity`/`SettingsComponents.kt` are Compose UI with no
   extracted pure decision logic (the `BuildConfig.DEBUG` gating is a compile-time constant, not runtime
   logic to unit test).
-- **On-device (manual)**: confirm the hub renders all five sections in a debug build with placeholder
-  rows visible (greyed out, "DEBUG" badge, no chevron, unclickable); confirm a release build
-  (`assembleRelease`) shows only the real rows (App appearance, Language, Split tunnel, Kill switch,
-  Auto-connect on boot, Fragmentation, Logs, Sideload warning, About) with the Advanced section absent
-  entirely.
+- **On-device (manual)**: confirm debug shows the disabled Check for updates row with a DEBUG badge;
+  confirm release omits that row but shows all five sections, including Advanced, and opens all six
+  promoted destinations.

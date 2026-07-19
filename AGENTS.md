@@ -33,17 +33,17 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── add/            Paste/clipboard/subscription routing into Add UI
 │       │   │   ├── apps/           Installed-app picker (kill-switch / split-tunnel)
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
-│       │   │   ├── config/         ConfigBuilder (secure-DNS chokepoint + inbound sanitization + forced log posture + fragmentation overlay → docs/features), LogSettings (XrayLogLevel + errorFilePath), TuningSettings/FragmentationSettings + FragmentationPreferences (global fragmentation → docs/features/fragmentation.md), ProfileConfigCodec, Hysteria2ConfigCodec, ProfileShareLink (stored-JSON → share link), JsonFormatter
+│       │   │   ├── config/         ConfigBuilder (mandatory normalization + fragmentation→mux→DNS→routing→core overlays), ConfigSanitizer (read-only inverse diagnostic), overlay models/preferences, LogSettings, profile codecs/share links, JsonFormatter → docs/features/
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
 │       │   │   ├── log/            LogRepository (sanitized state/log surface), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
-│       │   │   ├── settings/       Per-server + settings hub screens (SettingsHubActivity, AboutActivity, AppearanceSettingsActivity, FragmentationSettingsActivity, AutoConnectInfoDialog → docs/features)
+│       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
-│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester
+│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState/PingTester, PingPreferences (fresh per-probe settings + Activity/ViewModel-lifetime auto-ping)
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
@@ -61,6 +61,8 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── auto-connect-boot.md     Stateless explainer + deep-link to OS Always-on VPN (no boot receiver, no local state)
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
+│   │   ├── config-sanitization.md  Read-only inverse diagnostic over the effective runtime pipeline
+│   │   ├── dns.md                  Global secure-resolver + query-strategy overlay
 │   │   ├── dns-leak-enforcement.md  2B: ConfigBuilder secure-DNS chokepoint
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
 │   │   ├── fragmentation.md         Global anti-DPI sockopt.fragment overlay (TCP-only; xhttp-over-h3 skipped); ConfigBuilder merge + XrayVpnService session capture
@@ -68,12 +70,15 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── logs-screen.md           File+tail log pipeline, session-stable level, redaction boundary
+│   │   ├── mux.md                   Global Mux.Cool VLESS overlay and applicability rules
 │   │   ├── name-theft-warning.md
-│   │   ├── ping-test.md             Per-server / per-group handshake-latency probe → docs/features/
+│   │   ├── ping-test.md             Per-server/group probe, fresh preferences, derived backstop, Activity/ViewModel-lifetime auto-ping
 │   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── qs-tile-vpn-toggle.md
+│   │   ├── routing-rules.md         Geo/LAN/ads routing overlay and fail-closed availability handling
 │   │   ├── settings-hub.md          Sectioned hub, SettingsSectionHeader/SettingsRow, BuildConfig.DEBUG placeholders
-│   │   └── sideloading-warning.md
+│   │   ├── sideloading-warning.md
+│   │   └── xray-settings.md         MTU/IPv6/sniffing/domain strategy overlay + linked core version
 │   ├── play-policy-declarations.md Play Console policy declaration answers
 │   ├── qa/                         QA scenarios
 │   └── superpowers/                Working artifacts (plans/specs); specs not committed
@@ -86,7 +91,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   └── generate-agent-bundles.sh
 ├── xray-go/
 │   ├── go.mod (tracked), go.sum (gitignored)
-│   └── xray_bridge.go              Go entry points: StartXray, StopXray, RegisterProtector (protect() dial controller)
+│   └── xray_bridge.go              Go entry points: StartXray/StopXray, RegisterProtector, MeasureLatency, XrayVersion
 ├── build.gradle.kts                Root Gradle config
 ├── settings.gradle.kts
 ├── gradle.properties
@@ -221,9 +226,13 @@ Why (optional):
 ```mermaid
 flowchart LR
     UI[MainActivity + Compose UI] --> VM[VpnViewModel]
+    SETTINGS[Settings screens] --> PREFS[Global overlay preferences]
+    PREFS --> SVC
+    PREFS --> SAN[ConfigSanitizer inverse diagnostic]
     VM --> CFG[ConfigBuilder]
     VM --> SVC[XrayVpnService]
     CFG --> SVC
+    SAN --> CFG
     SVC --> TUN[Android VpnService TUN fd]
     SVC --> KBRIDGE[Kotlin XrayBridge reflection]
     KBRIDGE --> AAR[app/libs/xray.aar gomobile output]
@@ -238,6 +247,23 @@ The UI collects user input (a `vless://` or `hysteria2://`/`hy2://` share link, 
 `ConfigBuilder` and starts `XrayVpnService`. The service creates a TUN interface, passes its fd into
 `XrayBridge`, and starts/stops Xray-core through the Go mobile bridge. Connection state and sanitized
 logs flow through `LogRepository` back to the UI.
+
+Global connection settings are persisted independently of profiles. `XrayVpnService` captures
+fragmentation, Mux, DNS, routing, and XRAY-core preferences once per full connection and reuses that
+immutable `TuningSettings` snapshot for kill-switch revives. `ConfigBuilder` applies the snapshot in
+the load-bearing order `applyFragmentation → applyMux → applyDns → applyRouting →
+applyCoreSettings`; DNS must precede routing so the `BLOCKED_ONLY` DoH guard sees the effective
+resolver, and core settings run last for IPv6/query-strategy and forced-sniffing resolution.
+`ConfigSanitizer` runs the same pipeline without saving or connecting, then presents an inverse,
+policy-level explanation of its effective result. See
+[`docs/features/config-sanitization.md`](docs/features/config-sanitization.md).
+
+Ping probes are deliberately outside the connection snapshot. `VpnViewModel` loads
+`PingPreferences` fresh when accepting each probe, rebuilds `PingTester` only when concurrency
+changes, and derives the Kotlin wall-clock backstop from the selected Go timeout. Optional auto-ping
+waits for the Room-backed profile union and is consumed once per surviving
+`MainActivity`/Activity-scoped `VpnViewModel` lifetime; a new instance can reset the latch. See
+[`docs/features/ping-test.md`](docs/features/ping-test.md).
 
 Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
 together — change them as a pair), plus a third normalization on the same chokepoint:
@@ -254,6 +280,12 @@ together — change them as a pair), plus a third normalization on the same chok
   app-private error-file path via `LogSettings`), overwriting rather than merging so a pasted config
   can't redirect Xray's own log writes elsewhere. See
   [`docs/features/logs-screen.md`](docs/features/logs-screen.md).
+- **Global settings compose after those mandatory normalizations; they do not replace them.**
+  Routing's derived `effectiveRoutingMode` is a second fail-closed backstop: an unsupported
+  `BLOCKED_ONLY` country degrades to proxy-all before a direct catch-all can be emitted. XRAY
+  IPv6-off keeps IPv6 captured by the Android VPN and inserts an in-tunnel `::/0 → block` rule.
+  See [`docs/features/routing-rules.md`](docs/features/routing-rules.md) and
+  [`docs/features/xray-settings.md`](docs/features/xray-settings.md).
 
 ## Dormant / Temporarily-Disabled Features
 These feature **entry points** are intentionally switched off in the working tree. The disabling is
@@ -321,6 +353,15 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   rewrites them, so real-world panel configs import) and **enforces a fail-closed secure-DNS posture**
   on every config (DoH-only resolver, port-53 → `dns-out`, `ForceIP` server-name bootstrap). See
   `docs/features/dns-leak-enforcement.md`.
+- Optional global overlays compose only after inbound/DNS/log enforcement. In particular,
+  `BLOCKED_ONLY` emits its final direct catch-all only for a country with a real blocked dataset;
+  `ConfigBuilder.effectiveRoutingMode` repeats that unsupported-country backstop at the runtime
+  chokepoint. The mode intentionally permits non-matching encrypted DNS such as app-owned DoH/DoT
+  to follow its direct-by-default policy; Xray's intercepted port-53 DNS remains on the enforced
+  resolver.
+- `ConfigSanitizer` is diagnostic-only: it builds through the real runtime pipeline, reports effective
+  policy rather than exposing full JSON, conservatively redacts UUID/`publicKey`/`shortId`-bearing
+  details, and has no profile/settings write or reconnect path.
 - Loop-avoidance is socket-level via `VpnService.protect()` (a global Xray dial controller in the Go
   bridge), not app-exclusion, so the whole app is tunneled and only Xray's own sockets bypass — no
   app traffic leaks around the tun. See `docs/features/failclosed-startup.md`.
@@ -366,16 +407,26 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Runtime config extension point:
   `app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt`
   (`fromVlessUri`, `fromHysteria2Uri`, `fromJson`, outbound/routing builders;
-  `buildRuntimeConfig(input, log = LogSettings(WARNING, null), tuning = TuningSettings.NONE)` ends with
-  private `forceLog`, which overwrites (not merges) the config's `log` object with the caller-supplied
-  `LogSettings` — see `config/LogSettings.kt` (`XrayLogLevel` + `errorFilePath`) and
-  `docs/features/logs-screen.md` — then private `applyFragmentation`, which MERGES `sockopt.fragment`
-  onto the proxy outbound when `tuning.fragmentation.enabled` and the outbound is TCP-based (skips
-  QUIC/Hysteria2/kcp and xhttp-over-HTTP/3; preserves the `makeSecureDns` `ForceIP` in the same sockopt)
-  — see `config/TuningSettings.kt`, `config/FragmentationPreferences.kt`, `docs/features/fragmentation.md`;
+  `buildRuntimeConfig(input, log = LogSettings(WARNING, null), tuning = TuningSettings.NONE)` first
+  obtains the protocol-specific secure base, then runs `forceLog → applyFragmentation → applyMux →
+  applyDns → applyRouting → applyCoreSettings`. `forceLog` overwrites (not merges) the config's log
+  object; fragmentation merges beside `ForceIP`; DNS precedes routing so its effective resolver feeds
+  the `BLOCKED_ONLY` guard; core is last so IPv6-off and forced sniffing win. Extend
+  `config/TuningSettings.kt` plus the matching immutable model/preferences and preserve this order.
+  See `docs/features/{fragmentation,mux,dns,routing-rules,xray-settings}.md`.
+- Runtime diagnostic extension point:
+  `config/ConfigSanitizer.kt` is the read-only inverse view of that real pipeline. It must continue to
+  delegate proxy selection/applicability/effective routing to `ConfigBuilder` helpers rather than
+  reimplementing forward rules; add a `FindingId`, presentation mapping, and JVM coverage together.
+- Ping extension points:
   `toPingTestConfig` — dialer-only probe config: full runtime config minus the tun inbound **and**
-  minus `geoip:`/`geosite:` routing rules, which fail to build in the probe's geo-asset-less
-  throwaway core instance, and forces `LogSettings(NONE, null)`) and the
+  minus `geoip:`/`geosite:`/`ext:` routing rules, which fail to build in the probe's geo-asset-less
+  throwaway core instance, and forces `LogSettings(NONE, null)`. `state/PingPreferences.kt` is loaded
+  fresh at probe admission (not session-captured); `PingTester.backstopFor(timeoutMs)` must remain
+  strictly above the Go timeout; the Activity-scoped `VpnViewModel` owns tester reconstruction and
+  an instance-lifetime auto-ping latch, while `MainActivity` waits for the manual+grouped profile
+  union before consuming it. A new Activity/ViewModel instance can reset that latch.
+- Profile config extension points:
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
   `config/ProfileShareLink.kt` (`fromStoredConfig` — reconstructs a shareable link from any stored JSON config by dispatching to the per-protocol codec; returns `null` for configs with no vless/hysteria outbound).
@@ -387,12 +438,15 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Bridge extension points:
   - Kotlin reflection candidates in
     `app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt` (`classNames` list).
-  - Go lifecycle surface in `xray-go/xray_bridge.go` (`StartXray`, `StopXray`, `RegisterProtector` —
-    the `protect()` dial controller; `MeasureLatency` — throwaway-instance latency probe, never
-    touches `mu`/`instance`; the `Protector` reverse-binding interface is keep-ruled via
+  - Go surface in `xray-go/xray_bridge.go` (`StartXray`, `StopXray`, `RegisterProtector` — the
+    `protect()` dial controller; `MeasureLatency` — throwaway-instance latency probe; `XrayVersion` —
+    read-only linked-core version; the latter two never touch `mu`/`instance`; the `Protector`
+    reverse-binding interface is keep-ruled via
     `-keep class xraybridge.**`).
   - Kotlin reflection surface in `bridge/XrayBridge.kt`: `startXray`, `stopXray`, `registerProtector`,
-    `measureLatency` (3-param: configJson, targetUrl, timeoutMs).
+    `measureLatency` (3-param: configJson, targetUrl, timeoutMs), and `xrayVersion` (zero-arg,
+    call off-main because first bridge touch loads gojni). `XrayVersion`/`xrayVersion` is covered by
+    the existing `xraybridge.**` keep rule but still requires release-device verification.
 - Environment variables and script knobs:
 
 | Variable | Where used | Purpose |

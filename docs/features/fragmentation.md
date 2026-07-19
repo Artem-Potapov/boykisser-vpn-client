@@ -20,11 +20,15 @@ is applied only to TCP-based outbounds — see the gate below.
 ## The tuning model
 
 [`config/TuningSettings.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/TuningSettings.kt)
-holds the overlay inputs. It deliberately mirrors `LogSettings`: a small immutable value captured once
-per session and threaded into `ConfigBuilder`, never re-read mid-session.
+holds all connection overlay inputs. It deliberately mirrors `LogSettings`: one immutable value
+captured once per session and threaded into `ConfigBuilder`, never re-read mid-session. In addition to
+fragmentation it now carries Mux, DNS, routing, and XRAY-core settings.
 
 ```kotlin
-data class TuningSettings(val fragmentation: FragmentationSettings = FragmentationSettings.DISABLED) {
+data class TuningSettings(
+    val fragmentation: FragmentationSettings = FragmentationSettings.DISABLED,
+    // mux, dns, routing, core ...
+) {
     companion object { val NONE = TuningSettings() }
 }
 
@@ -54,17 +58,23 @@ fun buildRuntimeConfig(
 ): String {
     ...
     val withLog = forceLog(base, log)
-    return applyFragmentation(withLog, tuning.fragmentation)
+    val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
+    val withMux = applyMux(withFragmentation, tuning.mux)
+    val withDns = applyDns(withMux, tuning.dns)
+    val withRouting = applyRouting(withDns, tuning.routing)
+    val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+    return applyCoreSettings(withRouting, tuning.core, forceSniffing)
 }
 ```
 
 Two invariants make this safe to add to the fail-closed chokepoint (see
 [`dns-leak-enforcement.md`](dns-leak-enforcement.md)):
 
-1. **It runs last, and only adds.** `applyFragmentation` runs *after* the secure-DNS shaping (each
-   `from*` builder ends in `makeSecureDns`) and *after* `forceLog`. It touches only the first proxy
-   outbound's `streamSettings.sockopt`, and only ever adds a `fragment` sub-object — it never edits the
-   `dns` block, the port-53→`dns-out` routing rule, the tun inbound, or the `log` object.
+1. **It runs after mandatory shaping, and only adds.** `applyFragmentation` runs *after* the
+   secure-DNS shaping (each `from*` builder ends in `makeSecureDns`) and *after* `forceLog`, but before
+   the Mux/DNS/routing/core overlays. It touches only the first proxy outbound's
+   `streamSettings.sockopt`, and only ever adds a `fragment` sub-object — it never edits the `dns`
+   block, the port-53→`dns-out` routing rule, the tun inbound, or the `log` object.
 2. **It MERGES, never overwrites, the sockopt.** `makeSecureDns` already wrote
    `sockopt.domainStrategy = "ForceIP"` (the server-name-bootstrap that stops the proxy's own hostname
    leaking to a plaintext resolver) onto that same outbound. `applyFragmentation` fetches the existing
@@ -137,8 +147,8 @@ the **exact same once-per-session discipline** to tuning that it already applies
 @Volatile private var sessionTuning: TuningSettings = TuningSettings.NONE
 ```
 
-- **Captured once**, under `lock`, in the connect path next to `sessionLog = initialLog`:
-  `sessionTuning = TuningSettings(FragmentationPreferences.load(this@XrayVpnService))`.
+- **Captured once**, under `lock`, in the connect path next to `sessionLog = initialLog`; the
+  `TuningSettings` snapshot loads fragmentation together with Mux, DNS, routing, and core preferences.
 - **Read as a field** by `bringUpTunnel` — `buildRuntimeConfig(profile.config, log, sessionTuning)` — so
   both the initial connect **and** the kill-switch revive path (which also calls `bringUpTunnel`) use the
   value captured at connect time. It is never re-read from `FragmentationPreferences` mid-session.
