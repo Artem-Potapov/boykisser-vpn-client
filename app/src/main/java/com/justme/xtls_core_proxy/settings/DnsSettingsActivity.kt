@@ -92,7 +92,7 @@ private fun DnsScreen(onBack: () -> Unit) {
     val urlValid = !isCustom || DohUrl.isValidHttps(customUrl)
     val customHost = if (isCustom) DohUrl.host(customUrl) else null
     val needsPin = customHost != null && !isIpLiteralClient(customHost)
-    val pinValid = !needsPin || pinnedIp.trim().isNotBlank()
+    val pinValid = !needsPin || isIpLiteralClient(pinnedIp.trim())
     val canSave = urlValid && pinValid
 
     // DropdownField is String-keyed (see Task 5) — options map via enum name.
