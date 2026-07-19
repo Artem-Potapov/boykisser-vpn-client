@@ -107,6 +107,7 @@
     <string name="dns_strategy_use_ip">Auto (IPv4 + IPv6)</string>
     <string name="dns_strategy_use_ipv4">IPv4 only</string>
     <string name="dns_strategy_use_ipv6">IPv6 only</string>
+    <string name="dns_strategy_ipv6_off">IPv6 is off (XRAY settings) — queries are IPv4-only</string>
     <string name="dns_hint">Takes effect on the next connect. Plaintext DNS is never used.</string>
     <string name="dns_cd_back">Back</string>
     <string name="dns_save">Save</string>
@@ -129,6 +130,26 @@
     <string name="routing_hint">Takes effect on the next connect.</string>
     <string name="routing_cd_back">Back</string>
     <string name="routing_save">Save</string>
+
+    <!-- XRAY core settings -->
+    <string name="xray_title">XRAY settings</string>
+    <string name="settings_xray_subtitle">Core-level network options</string>
+    <string name="xray_mtu">TUN MTU (1280–1500)</string>
+    <string name="xray_mtu_error">Enter a number from 1280 to 1500</string>
+    <string name="xray_ipv6">IPv6</string>
+    <string name="xray_ipv6_hint">When off, IPv6 is blocked inside the tunnel — not released outside it</string>
+    <string name="xray_sniffing">Domain sniffing</string>
+    <string name="xray_sniffing_forced">Required by your routing settings</string>
+    <string name="xray_domain_strategy_label">Destination-domain resolution</string>
+    <string name="xray_ds_from_config">From config</string>
+    <string name="xray_ds_as_is">AsIs</string>
+    <string name="xray_ds_ip_if_non_match">IPIfNonMatch</string>
+    <string name="xray_ds_ip_on_demand">IPOnDemand</string>
+    <string name="xray_core_version">Core version</string>
+    <string name="xray_core_version_unknown">unknown</string>
+    <string name="xray_hint">Takes effect on the next connect.</string>
+    <string name="xray_cd_back">Back</string>
+    <string name="xray_save">Save</string>
 
     <!-- Auto-connect on boot dialog -->
     <string name="autoconnect_dialog_title">Auto-connect on boot</string>

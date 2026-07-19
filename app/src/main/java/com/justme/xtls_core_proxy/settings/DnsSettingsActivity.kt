@@ -40,6 +40,7 @@ import com.justme.xtls_core_proxy.config.DnsQueryStrategy
 import com.justme.xtls_core_proxy.config.DnsResolver
 import com.justme.xtls_core_proxy.config.DnsSettings
 import com.justme.xtls_core_proxy.config.DohUrl
+import com.justme.xtls_core_proxy.config.XrayCorePreferences
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
@@ -67,6 +68,10 @@ private fun DnsScreen(onBack: () -> Unit) {
     var pinnedIp by remember { mutableStateOf(initial.customPinnedIp) }
     var strategy by remember { mutableStateOf(initial.queryStrategy) }
     var resolveError by remember { mutableStateOf(false) }
+
+    // applyCoreSettings force-writes queryStrategy=UseIPv4 as last writer when IPv6 is off, so the
+    // choice here is moot in that case — grey it out and say why.
+    val ipv6On = remember { XrayCorePreferences.load(context).ipv6 }
 
     val isCustom = resolver == DnsResolver.CUSTOM
     val urlValid = !isCustom || DohUrl.isValidHttps(customUrl)
@@ -156,8 +161,11 @@ private fun DnsScreen(onBack: () -> Unit) {
             DropdownField(
                 value = strategy.name, onValueChange = { strategy = DnsQueryStrategy.valueOf(it) },
                 label = stringResource(R.string.dns_query_strategy_label), options = strategyOptions,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(), enabled = ipv6On
             )
+            if (!ipv6On) {
+                Text(stringResource(R.string.dns_strategy_ipv6_off), style = MaterialTheme.typography.bodySmall)
+            }
             Text(stringResource(R.string.dns_hint), style = MaterialTheme.typography.bodySmall)
         }
     }

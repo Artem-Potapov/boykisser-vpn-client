@@ -47,8 +47,8 @@ import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 /**
  * Top-level settings hub. Single entry point from MainActivity; a sectioned,
  * single-scroll list of every sub-settings screen. The Advanced section header and its
- * real DNS and Routing rows render always; the remaining placeholder rows render only
- * under [BuildConfig.DEBUG].
+ * real XRAY, DNS and Routing rows render always; the remaining placeholder rows render
+ * only under [BuildConfig.DEBUG].
  */
 class SettingsHubActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -138,11 +138,13 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 onClick = { open(MuxSettingsActivity::class.java) }
             )
 
-            // Advanced (header + DNS and Routing rows always shown; remaining placeholders debug-only)
+            // Advanced (header + XRAY, DNS and Routing rows always shown; remaining placeholders debug-only)
             SettingsSectionHeader(stringResource(R.string.settings_section_advanced))
-            if (BuildConfig.DEBUG) {
-                SettingsRow(title = stringResource(R.string.settings_ph_xray), enabled = false, badge = badge)
-            }
+            SettingsRow(
+                title = stringResource(R.string.xray_title),
+                subtitle = stringResource(R.string.settings_xray_subtitle),
+                onClick = { open(XraySettingsActivity::class.java) }
+            )
             SettingsRow(
                 title = stringResource(R.string.dns_title),
                 subtitle = stringResource(R.string.settings_dns_subtitle),

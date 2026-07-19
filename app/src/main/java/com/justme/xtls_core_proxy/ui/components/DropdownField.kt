@@ -22,19 +22,21 @@ fun DropdownField(
     onValueChange: (String) -> Unit,
     label: String,
     options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayText = options.firstOrNull { it.first == value }?.second ?: value
 
     ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
+        expanded = expanded && enabled,
+        onExpandedChange = { if (enabled) expanded = it },
         modifier = modifier
     ) {
         OutlinedTextField(
             value = displayText,
             onValueChange = {},
+            enabled = enabled,
             readOnly = true,
             singleLine = true,
             label = { Text(label) },

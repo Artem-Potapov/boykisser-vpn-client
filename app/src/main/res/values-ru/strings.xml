@@ -108,6 +108,7 @@
     <string name="dns_strategy_use_ip">Авто (IPv4 + IPv6)</string>
     <string name="dns_strategy_use_ipv4">Только IPv4</string>
     <string name="dns_strategy_use_ipv6">Только IPv6</string>
+    <string name="dns_strategy_ipv6_off">IPv6 отключён (настройки XRAY) — запросы только по IPv4</string>
     <string name="dns_hint">Вступает в силу при следующем подключении. Открытый DNS не используется.</string>
     <string name="dns_cd_back">Назад</string>
     <string name="dns_save">Сохранить</string>
@@ -130,6 +131,26 @@
     <string name="routing_hint">Вступает в силу при следующем подключении.</string>
     <string name="routing_cd_back">Назад</string>
     <string name="routing_save">Сохранить</string>
+
+    <!-- Настройки ядра XRAY -->
+    <string name="xray_title">Настройки XRAY</string>
+    <string name="settings_xray_subtitle">Сетевые параметры уровня ядра</string>
+    <string name="xray_mtu">MTU туннеля (1280–1500)</string>
+    <string name="xray_mtu_error">Введите число от 1280 до 1500</string>
+    <string name="xray_ipv6">IPv6</string>
+    <string name="xray_ipv6_hint">Когда выключено, IPv6 блокируется внутри туннеля, а не выпускается мимо него</string>
+    <string name="xray_sniffing">Определение доменов</string>
+    <string name="xray_sniffing_forced">Требуется вашими настройками маршрутизации</string>
+    <string name="xray_domain_strategy_label">Разрешение доменов назначения</string>
+    <string name="xray_ds_from_config">Из конфигурации</string>
+    <string name="xray_ds_as_is">AsIs</string>
+    <string name="xray_ds_ip_if_non_match">IPIfNonMatch</string>
+    <string name="xray_ds_ip_on_demand">IPOnDemand</string>
+    <string name="xray_core_version">Версия ядра</string>
+    <string name="xray_core_version_unknown">неизвестна</string>
+    <string name="xray_hint">Вступает в силу при следующем подключении.</string>
+    <string name="xray_cd_back">Назад</string>
+    <string name="xray_save">Сохранить</string>
 
     <!-- Диалог автоподключения при запуске -->
     <string name="autoconnect_dialog_title">Автоподключение при запуске</string>
