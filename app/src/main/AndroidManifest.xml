@@ -124,6 +124,11 @@
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
         <activity
+            android:name=".settings.PingTestSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.XTLS_CORE_PROXY" />
+
+        <activity
             android:name=".subs.SubscriptionsActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />

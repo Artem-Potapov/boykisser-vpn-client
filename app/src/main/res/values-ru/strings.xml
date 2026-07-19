@@ -55,6 +55,7 @@
     <string name="settings_fragmentation_title">Фрагментация</string>
     <string name="settings_fragmentation_subtitle">Разбивать TLS-рукопожатие для обхода DPI</string>
     <string name="settings_mux_subtitle">Объединять соединения в один канал (только VLESS/TCP)</string>
+    <string name="settings_ping_subtitle">Параметры проверки задержки</string>
 
     <!-- Mux settings screen -->
     <string name="mux_title">Мультиплексирование</string>
@@ -69,6 +70,19 @@
     <string name="mux_error_concurrency">Введите число от 1 до 1024</string>
     <string name="mux_cd_back">Назад</string>
     <string name="mux_save">Сохранить</string>
+
+    <!-- Экран настроек пинг-теста -->
+    <string name="ping_title">Пинг-тест</string>
+    <string name="ping_target">URL цели (http://…, ответ 204)</string>
+    <string name="ping_target_error">Должен быть URL вида http://</string>
+    <string name="ping_timeout">Таймаут (1000–30000 мс)</string>
+    <string name="ping_timeout_error">Введите 1000–30000</string>
+    <string name="ping_concurrency">Параллельные пробы (1–5)</string>
+    <string name="ping_concurrency_error">Введите 1–5</string>
+    <string name="ping_auto">Автопинг при открытии</string>
+    <string name="ping_hint">Применяется к следующему пингу. Цель должна быть HTTP-эндпоинтом без TLS, возвращающим 204.</string>
+    <string name="ping_cd_back">Назад</string>
+    <string name="ping_save">Сохранить</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">Интерфейс</string>

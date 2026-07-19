@@ -54,6 +54,7 @@
     <string name="settings_fragmentation_title">Fragmentation</string>
     <string name="settings_fragmentation_subtitle">Split the TLS handshake to bypass DPI</string>
     <string name="settings_mux_subtitle">Combine connections over one link (VLESS/TCP only)</string>
+    <string name="settings_ping_subtitle">Latency probe options</string>
 
     <!-- Mux settings screen -->
     <string name="mux_title">Multiplexing</string>
@@ -68,6 +69,19 @@
     <string name="mux_error_concurrency">Enter a number from 1 to 1024</string>
     <string name="mux_cd_back">Back</string>
     <string name="mux_save">Save</string>
+
+    <!-- Ping test settings screen -->
+    <string name="ping_title">Ping test</string>
+    <string name="ping_target">Target URL (http://…, returns 204)</string>
+    <string name="ping_target_error">Must be an http:// URL</string>
+    <string name="ping_timeout">Timeout (1000–30000 ms)</string>
+    <string name="ping_timeout_error">Enter 1000–30000</string>
+    <string name="ping_concurrency">Concurrent probes (1–5)</string>
+    <string name="ping_concurrency_error">Enter 1–5</string>
+    <string name="ping_auto">Auto-ping on open</string>
+    <string name="ping_hint">Applies to the next ping. The target must be a plaintext HTTP endpoint returning 204.</string>
+    <string name="ping_cd_back">Back</string>
+    <string name="ping_save">Save</string>
 
     <!-- Settings hub sections -->
     <string name="settings_section_ui">UI</string>

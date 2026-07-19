@@ -168,8 +168,10 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 leadingIcon = Icons.AutoMirrored.Filled.List,
                 onClick = { open(LogsActivity::class.java) }
             )
-            if (BuildConfig.DEBUG) SettingsRow(
-                title = stringResource(R.string.settings_ph_ping), enabled = false, badge = badge
+            SettingsRow(
+                title = stringResource(R.string.ping_title),
+                subtitle = stringResource(R.string.settings_ping_subtitle),
+                onClick = { open(PingTestSettingsActivity::class.java) }
             )
 
             // About
