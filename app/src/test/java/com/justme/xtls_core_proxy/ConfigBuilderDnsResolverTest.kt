@@ -136,4 +136,62 @@ class ConfigBuilderDnsResolverTest {
                 it.getJSONArray("domains").toString().contains("full:proxy.example.com")
         })
     }
+
+    // --- IPv6-off degrade (design 2026-07-20): a v6-only CUSTOM resolver is unusable while IPv6 is
+    // off (applyCoreSettings' ::/0->block kills its dial), so applyDns degrades it to Cloudflare v4. ---
+
+    private val ipv6Off = com.justme.xtls_core_proxy.config.XrayCoreSettings.DEFAULT.copy(ipv6 = false)
+
+    @Test fun ipv6_off_degrades_bracketed_v6_custom_resolver_to_cloudflare_v4() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(
+                dns = DnsSettings(DnsResolver.CUSTOM, "https://[2606:4700:4700::1111]/dns-query", "", DnsQueryStrategy.USE_IP),
+                core = ipv6Off,
+            )
+        )
+        val addrs = serverAddrs(out)
+        assertTrue("degraded resolver must be Cloudflare v4; addrs=$addrs", addrs.any { it == "https://1.1.1.1/dns-query" })
+        assertTrue("no v6 literal survives the degrade; addrs=$addrs", addrs.none { it.contains("2606:") })
+    }
+
+    @Test fun ipv6_off_degrades_hostname_with_v6_pin_to_cloudflare_v4() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(
+                dns = DnsSettings(DnsResolver.CUSTOM, "https://doh.example.com/dns-query", "2606:4700:4700::1111", DnsQueryStrategy.USE_IP),
+                core = ipv6Off,
+            )
+        )
+        val addrs = serverAddrs(out)
+        assertTrue("degraded to Cloudflare v4; addrs=$addrs", addrs.any { it == "https://1.1.1.1/dns-query" })
+        assertTrue("no v6 pin/host survives; addrs=$addrs", addrs.none { it.contains("2606:") })
+        // Degraded to a preset -> no custom hostname pin remains.
+        assertTrue("no hosts pin for the dropped hostname", !dns(out).has("hosts") || !dns(out).getJSONObject("hosts").has("doh.example.com"))
+    }
+
+    @Test fun ipv6_on_preserves_v6_custom_resolver() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(
+                dns = DnsSettings(DnsResolver.CUSTOM, "https://[2606:4700:4700::1111]/dns-query", "", DnsQueryStrategy.USE_IP),
+                core = com.justme.xtls_core_proxy.config.XrayCoreSettings.DEFAULT, // ipv6 = true
+            )
+        )
+        val addrs = serverAddrs(out)
+        assertTrue("v6 resolver preserved when IPv6 on; addrs=$addrs", addrs.any { it == "https://[2606:4700:4700::1111]/dns-query" })
+    }
+
+    @Test fun ipv6_off_preserves_v4_custom_resolver() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(
+                dns = DnsSettings(DnsResolver.CUSTOM, "https://1.2.3.4/dns-query", "", DnsQueryStrategy.USE_IP),
+                core = ipv6Off,
+            )
+        )
+        val addrs = serverAddrs(out)
+        assertTrue("v4 custom must NOT be degraded; addrs=$addrs", addrs.any { it == "https://1.2.3.4/dns-query" })
+        assertTrue("no false Cloudflare fallback; addrs=$addrs", addrs.none { it == "https://1.1.1.1/dns-query" })
+    }
 }

@@ -22,7 +22,7 @@ object ConfigBuilder {
         val withLog = forceLog(base, log)
         val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
         val withMux = applyMux(withFragmentation, tuning.mux)
-        val withDns = applyDns(withMux, tuning.dns)
+        val withDns = applyDns(withMux, tuning.dns, tuning.core.ipv6)
         val withRouting = applyRouting(withDns, tuning.routing)
         val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
         return applyCoreSettings(withRouting, tuning.core, forceSniffing)
@@ -391,11 +391,20 @@ object ConfigBuilder {
      * queryStrategy is force-overwritten (a global knob must win over makeSecureDns's set-if-absent).
      * applyDns runs BEFORE applyRouting so routing's mode-3 DoH-guard derives from the swapped resolver.
      */
-    private fun applyDns(configJson: String, dns: DnsSettings): String {
-        if (dns.resolver == DnsResolver.FROM_CONFIG) return configJson
+    private fun applyDns(configJson: String, dns0: DnsSettings, ipv6On: Boolean): String {
+        if (dns0.resolver == DnsResolver.FROM_CONFIG) return configJson
         // Fail-closed: a corrupt/blank CUSTOM url must not re-introduce a plaintext/empty resolver
         // past makeSecureDns's plaintext strip — no-op keeps the secure Cloudflare DoH posture.
-        if (dns.resolver == DnsResolver.CUSTOM && !DohUrl.isValidHttps(dns.customUrl)) return configJson
+        if (dns0.resolver == DnsResolver.CUSTOM && !DohUrl.isValidHttps(dns0.customUrl)) return configJson
+        // IPv6-off degrade (third fail-closed backstop, parallel to effectiveRoutingMode): a v6-only
+        // CUSTOM resolver is unusable while IPv6 is off. Fall back to the Cloudflare v4 preset —
+        // preserving BOTH secure DoH and the user's IPv6-off promise — by running the existing preset
+        // path unchanged.
+        val dns = if (!ipv6On && dns0.resolver == DnsResolver.CUSTOM && customBootstrapIsV6Only(dns0)) {
+            dns0.copy(resolver = DnsResolver.CLOUDFLARE)
+        } else {
+            dns0
+        }
         val root = JSONObject(configJson)
         val dnsObj = root.optJSONObject("dns") ?: JSONObject().also { root.put("dns", it) }
 
@@ -767,6 +776,24 @@ object ConfigBuilder {
         val parts = host.split(".")
         if (parts.size != 4) return false
         return parts.all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }
+    }
+
+    // A bare IPv6 literal (DohUrl.host strips brackets; a pin is typed bare) contains ':'; hostnames
+    // and IPv4 literals never do.
+    private fun isIpv6Literal(s: String): Boolean = s.trim().contains(":")
+
+    /**
+     * True when a CUSTOM resolver's only bootstrap path is IPv6: the URL host is a v6 literal, or the
+     * URL host is a hostname pinned to a v6-literal IP. Presets are all IPv4, so this is only ever
+     * asked of CUSTOM. applyDns uses it to degrade such a resolver to the Cloudflare v4 preset when
+     * IPv6 is off — its dial would otherwise be swallowed by applyCoreSettings' `::/0 -> block` rule
+     * and strand all DNS.
+     */
+    private fun customBootstrapIsV6Only(dns: DnsSettings): Boolean {
+        val host = DohUrl.host(dns.customUrl) ?: return false
+        if (isIpv6Literal(host)) return true
+        val pin = dns.customPinnedIp.trim()
+        return !isIpLiteral(host) && pin.isNotEmpty() && isIpv6Literal(pin)
     }
 
     private fun outboundTagProtocolMap(root: JSONObject): Map<String, String> {
