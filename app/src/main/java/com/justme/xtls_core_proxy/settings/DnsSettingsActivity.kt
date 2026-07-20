@@ -93,7 +93,12 @@ private fun DnsScreen(onBack: () -> Unit) {
     val customHost = if (isCustom) DohUrl.host(customUrl) else null
     val needsPin = customHost != null && !isIpLiteralClient(customHost)
     val pinValid = !needsPin || isIpLiteralClient(pinnedIp.trim())
-    val canSave = urlValid && pinValid
+    // Spec (xray-settings §1 decision 2 corollary): an IPv6-literal resolver/pin is unusable while
+    // IPv6 is off — applyCoreSettings' in-tunnel `::/0 → block` rule swallows its dial and kills all
+    // DNS. Block saving one (mirrors the greyed strategy picker) so DNS can't be stranded.
+    val urlV6Blocked = !ipv6On && isCustom && customHost?.let { isIpv6Literal(it) } == true
+    val pinV6Blocked = !ipv6On && needsPin && isIpv6Literal(pinnedIp)
+    val canSave = urlValid && pinValid && !urlV6Blocked && !pinV6Blocked
     val strategyActive = ipv6On && resolver != DnsResolver.FROM_CONFIG
 
     // DropdownField is String-keyed (see Task 5) — options map via enum name.
@@ -145,8 +150,11 @@ private fun DnsScreen(onBack: () -> Unit) {
                 OutlinedTextField(
                     value = customUrl, onValueChange = { customUrl = it; resolveError = false },
                     label = { Text(stringResource(R.string.dns_custom_url)) },
-                    isError = !urlValid,
-                    supportingText = { if (!urlValid) Text(stringResource(R.string.dns_custom_url_error)) },
+                    isError = !urlValid || urlV6Blocked,
+                    supportingText = {
+                        if (!urlValid) Text(stringResource(R.string.dns_custom_url_error))
+                        else if (urlV6Blocked) Text(stringResource(R.string.dns_resolver_ipv6_off))
+                    },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 if (needsPin) {
@@ -154,10 +162,11 @@ private fun DnsScreen(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = pinnedIp, onValueChange = { pinnedIp = it },
                             label = { Text(stringResource(R.string.dns_pinned_ip)) },
-                            isError = !pinValid || resolveError,
+                            isError = !pinValid || resolveError || pinV6Blocked,
                             supportingText = {
                                 if (resolveError) Text(stringResource(R.string.dns_resolve_failed))
                                 else if (!pinValid) Text(stringResource(R.string.dns_pinned_ip_error))
+                                else if (pinV6Blocked) Text(stringResource(R.string.dns_resolver_ipv6_off))
                             },
                             singleLine = true, modifier = Modifier.weight(1f)
                         )
@@ -196,3 +205,7 @@ private fun isIpLiteralClient(host: String): Boolean {
     val parts = host.split(".")
     return parts.size == 4 && parts.all { p -> p.toIntOrNull()?.let { it in 0..255 } == true }
 }
+
+// A bare IPv6 literal (DohUrl.host returns brackets stripped, and a pin is typed bare) contains ':';
+// hostnames and IPv4 addresses never do. Used to block an IPv6 resolver/pin while IPv6 is off.
+internal fun isIpv6Literal(host: String): Boolean = host.trim().contains(":")

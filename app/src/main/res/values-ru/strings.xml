@@ -143,6 +143,7 @@
     <string name="dns_custom_url_error">Требуется URL https://</string>
     <string name="dns_pinned_ip">IP сервера (для доменных URL)</string>
     <string name="dns_pinned_ip_error">Укажите IP резолвера</string>
+    <string name="dns_resolver_ipv6_off">IPv6 отключён — резолвер IPv6 будет заблокирован. Выберите резолвер IPv4 или включите IPv6 в настройках XRAY.</string>
     <string name="dns_resolve">Определить</string>
     <string name="dns_resolve_failed">Не удалось определить — введите IP вручную</string>
     <string name="dns_query_strategy_label">Стратегия запросов</string>
