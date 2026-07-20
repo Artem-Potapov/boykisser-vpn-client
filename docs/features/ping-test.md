@@ -31,6 +31,15 @@ requires a 204 response. There is no TLS layer on the target connection, so `htt
 the preference layer. The proxy outbound itself may be TLS/QUIC; the final hop to the configured
 HTTP/204 endpoint is plaintext on purpose.
 
+`PingPreferences.isValidTarget` is deliberately **minimal by design** (Plan-3 R7, Option A — locked):
+after trimming, it accepts any string starting with `http://` (case-insensitive) with a non-empty
+remainder, and validates nothing else — not host, port range, embedded credentials, or path. So
+`http://user:pass@example.com/`, `http://example.com:99999/`, and `http://???` all pass the UI gate and
+fail harmlessly downstream in Go as `N/A` (never a crash or leak). The permissive boundary is pinned by
+`PingTargetValidationTest.accepts_malformed_targets_scheme_gate_is_deliberately_minimal`; tightening it
+needs a new maintainer decision, and the optional Go port range-check (R7 Option B) was deliberately not
+taken.
+
 ## Transient instance and global `protect()` interaction
 
 `MeasureLatency` in [`xray-go/xray_bridge.go`](../../xray-go/xray_bridge.go) builds a throwaway
@@ -60,16 +69,19 @@ probes return results without disturbing the live tunnel (see Testing below).
 ```
 User taps speedometer on group header  (or "Ping test" in long-press island dialog — see [profile-actions-menu.md](profile-actions-menu.md))
         │
-VpnViewModel.pingTestGroup(profiles)  /  pingTestProfile(profile)
+VpnViewModel.pingTestGroup(profiles)  /  pingTestProfile(profile) = pingTestGroup(listOf(profile))
   ├─ loads PingPreferences fresh at probe admission
-  ├─ rebuilds PingTester only when requested concurrency changed
+  ├─ captures the stable pingCoordinator (a val — never swapped) and passes this run's concurrency in
   ├─ emits PingState.Testing for each freshly-accepted id → rows show a spinner
-  └─ launches on viewModelScope; launches PingTester.testAll(...)
+  └─ launches on viewModelScope; calls pingCoordinator.runGroup(ids, concurrency, onUpdate, probe)
         │
-PingTester  (bounded parallel, Semaphore(freshly loaded concurrency))
-  ├─ de-duplicates ids already in flight
-  └─ for each id: calls injected probe: suspend (Long) -> PingState; streams result back via onUpdate immediately
-     (PingTester never calls ConfigBuilder directly — the probe lambda is probeProfile in VpnViewModel)
+PingCoordinator.runGroup  (single stable admission owner)
+  ├─ cross-run de-dup: gate.withLock { ids.filter { inFlight.add(it) } } — an id admitted by ANY
+  │  active run is not re-admitted, even across a concurrency change
+  ├─ per-run limit: a LOCAL Semaphore(concurrency) built inside this run (a concurrency change cannot
+  │  reset the shared inFlight set or spawn a second ceiling)
+  └─ for each fresh id: calls injected probe: suspend (Long) -> PingState; streams via onUpdate immediately
+     (PingCoordinator never calls ConfigBuilder directly — the probe lambda is probeProfile in VpnViewModel)
         │
 ConfigBuilder.toPingTestConfig(storedConfig): String  ← called by probeProfile in VpnViewModel
   └─ calls buildRuntimeConfig (DoH, ForceIP, outbounds preserved)
@@ -77,8 +89,11 @@ ConfigBuilder.toPingTestConfig(storedConfig): String  ← called by probeProfile
      then stripGeoRoutingRules  ← drops geoip:/geosite:/ext: rules (probe has no geo assets)
         port-53 → dns-out and other non-geo routing rules are kept
         │
-probeProfile: viewModelScope.async(Dispatchers.IO) { measureLatency(config, target, timeout) }
-  └─ withTimeoutOrNull(backstopFor(timeout)) { await() }  ← configured timeout + 5 s
+probeProfile → pingCoordinator.probeWithBackstop(scope, backstopMs, ctx, onAdmissionRejected, onBackstop, nativeCall)
+  ├─ tryAcquire a fixed native slot (ceiling = PingPreferences.CONCURRENCY_MAX); saturated → Unavailable now
+  ├─ launches the JNI child on scope; releases the native slot in the child's finally AFTER nativeCall returns
+  └─ caller: withTimeoutOrNull(backstopFor(timeout)) — at the backstop returns Unavailable WITHOUT
+     freeing the slot (the orphaned native call keeps it until it actually returns)  ← timeout + 5 s
         │
 XrayBridge.measureLatency(configJson, targetUrl, timeoutMs): Result<Long>
   └─ reflection facade, same pattern as startXray; parses {"latencyMs":N} | {"error":"..."}
@@ -119,11 +134,12 @@ housekeeping rather than user-visible behavior.
   testable exactly like a real subscription group.
 - **Auto-ping on open:** after the asynchronous profile lists become non-empty, `MainActivity` builds
   the same manual + subscription-profile union the render loop uses. If the fresh preference enables
-  auto-ping and its Activity-scoped `VpnViewModel` has not consumed the latch, it consumes the latch
-  and probes the union. The effect is keyed on list non-emptiness so it does not race the initial Room
-  load. It runs at most once during the surviving `MainActivity`/`VpnViewModel` lifetime, so ordinary
-  navigation, resume, and recomposition do not repeat it. A new Activity/ViewModel instance can reset
-  the latch; it is not process-scoped.
+  auto-ping and the process-scoped `AutoPingLatch` is unconsumed, `AutoPingLatch.consume()` (an atomic
+  compare-and-set) claims the latch and only the winner probes the union. The effect is keyed on list
+  non-emptiness so it does not race the initial Room load. Because the latch is a top-level `object`
+  (JVM process lifetime), it runs **once per app launch**: Activity recreation (rotation/theme), a new
+  `VpnViewModel`, ordinary navigation, resume, and recomposition all observe the consumed bit and do
+  not repeat it. Only process death re-arms it.
 
 ## Preferences and bounds
 
@@ -135,21 +151,26 @@ accepted**; unlike VPN connection tuning, ping settings have no session-capture 
 | Target URL | `http://cp.cloudflare.com/generate_204` | Must start with `http://` and contain a value after the scheme. It is a plaintext HTTP 204 target by design; `https://` is invalid. |
 | Timeout | `10_000 ms` | Clamped and UI-validated to `1_000..30_000 ms`; passed to Go for dial + request. |
 | Concurrency | `3` | Clamped and UI-validated to `1..5`; maximum simultaneous group probes. |
-| Auto-ping on open | off | Once per surviving `MainActivity`/`VpnViewModel` lifetime, after profiles load; a new instance resets the latch. |
+| Auto-ping on open | off | Once per app launch (process-scoped `AutoPingLatch`), after profiles load; re-arms only on process death. |
 
 `PingTester.backstopFor(timeoutMs)` derives the Kotlin wall-clock backstop as the selected timeout plus
 `BACKSTOP_MARGIN_MS` (5 seconds), preserving the invariant that the backstop is strictly above the Go
-deadline. `VpnViewModel` retains the existing `PingTester`/Semaphore while concurrency is unchanged and
-reconstructs it only when the freshly-loaded concurrency value changes.
+deadline. `VpnViewModel` holds one `PingCoordinator` as a stable `val` and **never** reconstructs it:
+each run passes its freshly-loaded concurrency into `runGroup`, so the coordinator's cross-run dedup set
+and its fixed native-slot ceiling survive concurrency changes. `PingTester` itself is now just a
+constants/`backstopFor` holder (`object`); the old `PING_BACKSTOP_MS` constant was removed once the live
+caller migrated to `backstopFor`.
 
 ## Components
 
 | File | Responsibility |
 |---|---|
 | [`state/PingState.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingState.kt) | Sealed UI state: `Idle`, `Testing`, `Success(latencyMs: Long)`, `Unavailable`. `fromResult(Result<Long>)` maps `runCatching` outcomes. |
-| [`state/PingTester.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingTester.kt) | Pure orchestrator: bounded-parallel `testAll` via `Semaphore`; in-flight de-dup; streams results via `onUpdate`; `CancellationException` propagates, all other `Throwable` → `Unavailable`. Companion owns defaults and `backstopFor(timeoutMs)`. |
+| [`state/PingTester.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingTester.kt) | Constants/`backstopFor` holder (`object`): `DEFAULT_PING_CONCURRENCY`, `PING_TIMEOUT_MS`, `PING_TEST_TARGET`, `BACKSTOP_MARGIN_MS`, and `backstopFor(timeoutMs)`. Orchestration moved to `PingCoordinator`; the obsolete `PING_BACKSTOP_MS` was removed. |
+| [`state/PingCoordinator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingCoordinator.kt) | Single stable admission owner: `runGroup(ids, concurrency, onUpdate, probe)` with a `Mutex`-guarded cross-run `inFlight` de-dup set + a per-run local `Semaphore`; `probeWithBackstop(...)` bounds orphaned JNI probes with a fixed `nativeSlots` ceiling (`= PingPreferences.CONCURRENCY_MAX`) released only in the child's `finally` after the native call returns. `CancellationException` propagates; other `Throwable` → `Unavailable`. |
+| [`state/AutoPingLatch.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/AutoPingLatch.kt) | Process-scoped once-per-launch latch (`object` + `AtomicBoolean`): `consume()` = atomic compare-and-set, `isConsumed`, non-persisted `resetForTest()`. Re-arms only on process death. |
 | [`state/PingPreferences.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingPreferences.kt) | `xray_prefs` persistence, `http://` target validation, timeout/concurrency bounds, and defaults tied to `PingTester`. |
-| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `pingStates` (ephemeral); fresh-at-probe preferences; reconstruct-on-concurrency-change tester; `probeProfile(profile, targetUrl, timeoutMs)` with derived backstop; auto-ping latch scoped to this ViewModel instance. |
+| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `pingStates` (ephemeral); fresh-at-probe preferences; one stable `pingCoordinator` `val`; `pingTestGroup`/`pingTestProfile` → `runGroup`; `probeProfile(...)` → `probeWithBackstop` with the derived backstop. Auto-ping is gated by the process-scoped `AutoPingLatch`, not a ViewModel field. |
 | [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | `toPingTestConfig(stored: String): String` — calls `buildRuntimeConfig` (DoH, ForceIP, outbounds preserved) then removes the `inbounds` array and `stripGeoRoutingRules` (drops `geoip:`/`geosite:`/`ext:` rules that fail in the geo-asset-less throwaway instance; keeps port-53 → `dns-out` and other non-geo rules). |
 | [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) | Owns `VpnViewModel` through Activity `viewModels()`, renders speedometer/results, wires manual probes, and triggers auto-ping after manual + grouped profiles load. |
 | [`ProfileActionsDialog.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/ProfileActionsDialog.kt) | Long-press island menu (`BasicAlertDialog`) with a "Ping test" row (`ic_speedometer`); see [profile-actions-menu.md](profile-actions-menu.md). |
@@ -182,14 +203,18 @@ build does not prove the release path.
 
 ## Testing
 
-- **`PingTesterTest`** (JVM, `kotlinx-coroutines-test`): at most `DEFAULT_PING_CONCURRENCY` dials in
-  flight at once; results stream regardless of completion order; `Success` outcome → `PingState.Success`;
-  thrown exception → `PingState.Unavailable`; id already in-flight is skipped; `backstopFor` is
-  configured timeout + margin.
-- **`PingPreferencesTest` / `AutoPingTest`** (JVM): defaults match live constants; persistence keys
-  round-trip; invalid target fallback; timeout `1_000..30_000` and concurrency `1..5` clamp on
-  load/save; auto-ping requires enabled + unconsumed; tester reconstruction occurs only when
-  concurrency changes.
+- **`PingCoordinatorTest`** (JVM, `kotlinx-coroutines-test`): per-run concurrency bound; cross-run
+  de-dup survives a concurrency change (no re-admit of an in-flight id, no second ceiling); a completed
+  id becomes re-eligible; `probeWithBackstop` holds the native slot past the backstop and releases it
+  only when the fake native call returns; a saturated ceiling returns `Unavailable`; cancellation does
+  not leak a slot. Subsumes the deleted `PingTesterTest`/`PingTesterRebuildDecisionTest`.
+- **`PingTesterBackstopTest`** (JVM): `backstopFor` is the configured timeout + `BACKSTOP_MARGIN_MS`.
+- **`AutoPingLatchTest`** (JVM): `consume()` wins exactly once; a fresh facade still sees `isConsumed`;
+  `resetForTest()` persists nothing.
+- **`PingPreferencesTest` / `AutoPingTest` / `PingTargetValidationTest`** (JVM): defaults match live
+  constants; persistence keys round-trip; invalid target fallback; timeout `1_000..30_000` and
+  concurrency `1..5` clamp on load/save; the `shouldAutoPing` truth table (enabled + unconsumed → run);
+  and the deliberately-permissive `http://` target boundary.
 - **`ConfigBuilderPingTest`** (JVM): `toPingTestConfig_fromVless_hasOutboundsAndNoInbounds` and
   `toPingTestConfig_fromJson_stripsInbounds` (no `inbounds`, outbounds + DNS kept);
   `toPingTestConfig_stripsGeoRoutingRulesButKeepsDnsRoute` (no `geoip:`/`geosite:`/`ext:` rules, port-53 →
@@ -206,6 +231,6 @@ build does not prove the release path.
   5. Test **while disconnected** → probes return (direct dial).
   6. Whole subscription group → results stream in, no more than the configured `1..5` concurrent dials.
   7. "My profiles" group expands/collapses and runs its group test.
-  8. Enable auto-ping and confirm one union probe starts only after profiles load; navigation/resume
-     within the surviving Activity/ViewModel must not trigger a second run. Creating a new
-     MainActivity/ViewModel may reset the latch and permit another automatic run.
+  8. Enable auto-ping and confirm one union probe starts only after profiles load; navigation, resume,
+     and Activity recreation (rotation/theme) must **not** trigger a second run in the same process.
+     Only a full process death + relaunch re-arms the latch and permits another automatic run.

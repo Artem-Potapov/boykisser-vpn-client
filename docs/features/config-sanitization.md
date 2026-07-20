@@ -15,11 +15,18 @@ rules.
 This is not a JSON diff. Findings describe policy:
 
 - `Rewrote` — a non-canonical stored value was normalized (currently inbounds or DNS).
-- `AlreadyCompliant` — the sanitizer's limited structural checks pass: the stored inbound protocol
-  list is exactly one `tun`, or the stored DNS server list is nonempty and every entry is a recognized
-  secure resolver/pipeline bootstrap. It does not compare all inbound fields, the complete DNS
-  object, or canonical JSON equality.
-- `Applied` — an unconditional security rule or effective global setting is present.
+- `AlreadyCompliant` — the stored value already matches what the pipeline would produce. For inbounds
+  this means the stored inbound protocol list is exactly one `tun`. For DNS it means the stored
+  `dns.servers` list positionally equals what the real `makeSecureDns` emits for this exact config
+  (`ConfigBuilder.storedDnsMatchesSecureEnforcement`) — so a hostname-addressed proxy must already
+  carry the **complete** `https+local://` bootstrap pair; a missing or partial pair reports `Rewrote`,
+  not `AlreadyCompliant`. The DNS comparison is by address + `domains` scope, not by every server field
+  (see the precision boundaries below) or by canonical JSON equality.
+- `Added` — the pipeline inserted a missing security object or rule the stored config lacked (e.g. the
+  forced app-private `log` object, or the port-53 → `dns-out` route when the stored config had none).
+- `Applied` — an unconditional security rule or effective global setting is present and enforced, as
+  opposed to newly `Added`: the stored config already carried the rule, or the pipeline overwrote a
+  value in place.
 - `NotApplicable(reason)` — an enabled overlay cannot apply to this profile, such as fragmentation on
   QUIC or Mux.Cool on XTLS Vision.
 
@@ -49,6 +56,11 @@ config, or the running VPN session.
 Security findings cover the single tun inbound, DoH-only resolver shape, forced app-private log
 posture, port 53 → `dns-out`, and proxy-outbound `ForceIP`. Global findings cover enabled
 fragmentation/Mux.Cool, effective sniffing, MTU, IPv6, resolver, routing, and domain strategy.
+The forced-log and port-53 findings are derived from the **final JSON structure** (log `access=none`,
+a matching level, and an app-private `error` path; a present port-53 → `dns-out` rule) and report
+`Added` vs `Applied` from that structure — a non-conforming final shape yields `NotApplicable`, never
+a false success. The expected log path is passed to the pipeline as a plain string; the diagnostic
+never creates the log directory or file.
 
 The diagnostic determines applicability from the selected proxy outbound, not from a stale object
 already present in the stored JSON. Thus an enabled fragmentation setting on QUIC remains
@@ -58,8 +70,30 @@ Summaries also use effective pipeline outcomes rather than merely echoing prefer
 custom DNS URL that makes `applyDns` return unchanged is reported as the retained Cloudflare resolver,
 and unsupported `BLOCKED_ONLY + IR` is reported as the runtime backstop's Proxy everything result.
 
-Output details and failure messages pass through a conservative redactor for UUID, `publicKey`, and
-`shortId` identifiers. The screen never displays the full runtime JSON.
+Output is **structural by construction, not redaction-by-blacklist**. Every finding detail is built
+from an allowlist of safe structural facts — protocol category, a `scheme://host` resolver label (with
+user-info, port, path, query, and fragment stripped; bracket-aware for IPv6), rule presence, and
+effective policy — so arbitrary input strings, full URLs, and credentials have no path to the screen.
+The failure path never surfaces a parser exception (which can echo the submitted URI/JSON): it always
+returns one generic, known-safe reason, rendered from a fully-localized string with no interpolation.
+A widened identifier regex (UUID, `publicKey`, `shortId`, `pbk`, `sid`, and password/secret/token/auth
+keywords) remains only as a defense-in-depth backstop over that allowlist, never as the primary guard.
+The screen never displays the full runtime JSON.
+
+### Diagnostic-precision boundaries
+
+Two deliberate imprecisions affect only the *label*, never runtime enforcement or credential safety:
+
+- **DNS_DOH status vs. detail split.** The `AlreadyCompliant`/`Rewrote` *status* is decided against the
+  `makeSecureDns` security shape, while the displayed resolver *detail* reflects the post-`applyDns`
+  effective resolver (which a global resolver overlay may have changed). A stored-compliant config can
+  therefore read `AlreadyCompliant` beside an overlay resolver label it never itself carried; the
+  separate DNS_RESOLVER finding explains the overlay. No leak.
+- **DNS entry comparison granularity.** `storedDnsMatchesSecureEnforcement` compares server entries by
+  address + `domains` scope only. A stored bootstrap-position entry carrying extra fields (e.g.
+  `expectIPs`) that `makeSecureDns` would drop at runtime still compares equal, so `AlreadyCompliant`
+  can be marginally optimistic. The effective runtime shape is still the enforced secure shape on every
+  path — this is label precision, not a safety gap.
 
 ## Components
 
@@ -69,12 +103,17 @@ Output details and failure messages pass through a conservative redactor for UUI
   resume-triggered refresh.
 - `settings/SanitizationPresentation.kt` — pure grouping, title mapping, warning-chip decision, and UI
   state resolution.
-- `config/ConfigBuilder.kt` — source of truth for normalization and the complete overlay chain.
+- `config/ConfigBuilder.kt` — source of truth for normalization and the complete overlay chain; its
+  read-only `internal storedDnsMatchesSecureEnforcement(configJson)` is the DNS-compliance classifier
+  the sanitizer consumes (it runs the real `makeSecureDns` and structurally compares the two server
+  lists) instead of re-deriving DoH rules. **Gated file** — changes need maintainer review.
 
 ## Testing and manual gate
 
-`ConfigSanitizerTest` covers rewritten and already-compliant input, malformed failure, omitted disabled
-settings, default always-visible values, effective DNS/routing/IPv6 summaries, redaction, and
+`ConfigSanitizerTest` covers rewritten and already-compliant input (including hostname-proxy bootstrap
+pair present/partial/absent), malformed failure, omitted disabled settings, default always-visible
+values, effective DNS/routing/IPv6 summaries, `Added` vs `Applied` from final JSON, credential-safety
+regressions (`pbk`/`sid`/user-info/query values absent from both failure and success output), and
 `NotApplicable` cases. `SanitizationPresentationTest` covers grouping and loading/empty/failure/ready
 states.
 

@@ -43,7 +43,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
-│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState/PingTester, PingPreferences (fresh per-probe settings + Activity/ViewModel-lifetime auto-ping)
+│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
@@ -72,7 +72,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── logs-screen.md           File+tail log pipeline, session-stable level, redaction boundary
 │   │   ├── mux.md                   Global Mux.Cool VLESS overlay and applicability rules
 │   │   ├── name-theft-warning.md
-│   │   ├── ping-test.md             Per-server/group probe, fresh preferences, derived backstop, Activity/ViewModel-lifetime auto-ping
+│   │   ├── ping-test.md             Per-server/group probe, fresh preferences, derived backstop, stable PingCoordinator (cross-run dedup + bounded native cap), process-scoped auto-ping latch
 │   │   ├── profile-actions-menu.md   Long-press island menu (BasicAlertDialog), share-link reconstruction, clipboard sensitivity
 │   │   ├── qs-tile-vpn-toggle.md
 │   │   ├── routing-rules.md         Geo/LAN/ads routing overlay and fail-closed availability handling
@@ -259,10 +259,14 @@ policy-level explanation of its effective result. See
 [`docs/features/config-sanitization.md`](docs/features/config-sanitization.md).
 
 Ping probes are deliberately outside the connection snapshot. `VpnViewModel` loads
-`PingPreferences` fresh when accepting each probe, rebuilds `PingTester` only when concurrency
-changes, and derives the Kotlin wall-clock backstop from the selected Go timeout. Optional auto-ping
-waits for the Room-backed profile union and is consumed once per surviving
-`MainActivity`/Activity-scoped `VpnViewModel` lifetime; a new instance can reset the latch. See
+`PingPreferences` fresh when accepting each probe and delegates to one stable `PingCoordinator`
+(`val`, never swapped): per-run concurrency is passed into `runGroup`, while the coordinator's
+cross-run `inFlight` de-dup set and its fixed native-slot ceiling (`= PingPreferences.CONCURRENCY_MAX`)
+persist across concurrency changes; `probeWithBackstop` bounds orphaned JNI probes by holding a native
+slot until the uninterruptible call returns, and the Kotlin wall-clock backstop (derived from the Go
+timeout) abandons only the *await*, not the slot. Optional auto-ping waits for the Room-backed profile
+union and is consumed once per app launch via the process-scoped `AutoPingLatch` (an `object` whose
+atomic consumed bit re-arms only on process death). See
 [`docs/features/ping-test.md`](docs/features/ping-test.md).
 
 Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
@@ -423,9 +427,14 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   minus `geoip:`/`geosite:`/`ext:` routing rules, which fail to build in the probe's geo-asset-less
   throwaway core instance, and forces `LogSettings(NONE, null)`. `state/PingPreferences.kt` is loaded
   fresh at probe admission (not session-captured); `PingTester.backstopFor(timeoutMs)` must remain
-  strictly above the Go timeout; the Activity-scoped `VpnViewModel` owns tester reconstruction and
-  an instance-lifetime auto-ping latch, while `MainActivity` waits for the manual+grouped profile
-  union before consuming it. A new Activity/ViewModel instance can reset that latch.
+  strictly above the Go timeout. `state/PingCoordinator.kt` is the single stable admission owner
+  (`VpnViewModel` holds it as a `val` and never rebuilds it): it owns the cross-run `inFlight` de-dup
+  set and the fixed native-slot ceiling, takes per-run concurrency as a `runGroup` argument, and its
+  `probeWithBackstop` releases the native slot only in the child's `finally` after the JNI call
+  returns (a saturated ceiling returns `Unavailable` promptly). Auto-ping is gated by the
+  process-scoped `state/AutoPingLatch.kt` (`consume()` = atomic compare-and-set, once per app launch),
+  while `MainActivity` waits for the manual+grouped profile union before consuming it. Extend the
+  coordinator/latch rather than reintroducing a per-run tester or a ViewModel-scoped consumed bit.
 - Profile config extension points:
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
