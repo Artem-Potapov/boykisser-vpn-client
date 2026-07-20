@@ -142,7 +142,7 @@
     <string name="dns_custom_url_error">Must be an https:// URL</string>
     <string name="dns_pinned_ip">Server IP (for hostname URLs)</string>
     <string name="dns_pinned_ip_error">Enter the resolver\'s IP</string>
-    <string name="dns_resolver_ipv6_off">IPv6 is off — an IPv6 resolver would be blocked. Use an IPv4 resolver or turn IPv6 on in XRAY settings.</string>
+    <string name="dns_resolver_ipv6_off">IPv6 is off — this IPv6 resolver will fall back to a default IPv4 resolver. Turn IPv6 on in XRAY settings to use it.</string>
     <string name="dns_resolve">Resolve</string>
     <string name="dns_resolve_failed">Couldn\'t resolve — enter the IP manually</string>
     <string name="dns_query_strategy_label">Query strategy</string>

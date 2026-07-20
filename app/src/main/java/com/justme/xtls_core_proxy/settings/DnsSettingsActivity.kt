@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -93,13 +92,15 @@ private fun DnsScreen(onBack: () -> Unit) {
     val customHost = if (isCustom) DohUrl.host(customUrl) else null
     val needsPin = customHost != null && !isIpLiteralClient(customHost)
     val pinValid = !needsPin || isIpLiteralClient(pinnedIp.trim())
-    // Spec (xray-settings §1 decision 2 corollary): an IPv6-literal resolver/pin is unusable while
-    // IPv6 is off — applyCoreSettings' in-tunnel `::/0 → block` rule swallows its dial and kills all
-    // DNS. Block saving one (mirrors the greyed strategy picker) so DNS can't be stranded.
-    val urlV6Blocked = !ipv6On && isCustom && customHost?.let { isIpv6Literal(it) } == true
-    val pinV6Blocked = !ipv6On && needsPin && isIpv6Literal(pinnedIp)
-    val canSave = urlValid && pinValid && !urlV6Blocked && !pinV6Blocked
+    // IPv6 off + a v6-literal resolver/pin: the runtime now degrades it to Cloudflare v4 at the
+    // chokepoint (applyDns). Surface a non-blocking heads-up here; it no longer blocks anything.
+    val urlV6Notice = !ipv6On && isCustom && customHost?.let { isIpv6Literal(it) } == true
+    val pinV6Notice = !ipv6On && needsPin && isIpv6Literal(pinnedIp)
     val strategyActive = ipv6On && resolver != DnsResolver.FROM_CONFIG
+
+    fun persist() {
+        DnsPreferences.save(context, DnsSettings(resolver, customUrl.trim(), pinnedIp.trim(), strategy))
+    }
 
     // DropdownField is String-keyed (see Task 5) — options map via enum name.
     val resolverOptions = listOf(
@@ -124,15 +125,6 @@ private fun DnsScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.dns_cd_back))
                     }
-                },
-                actions = {
-                    TextButton(
-                        enabled = canSave,
-                        onClick = {
-                            DnsPreferences.save(context, DnsSettings(resolver, customUrl.trim(), pinnedIp.trim(), strategy))
-                            onBack()
-                        }
-                    ) { Text(stringResource(R.string.dns_save)) }
                 }
             )
         }
@@ -142,31 +134,31 @@ private fun DnsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DropdownField(
-                value = resolver.name, onValueChange = { resolver = DnsResolver.valueOf(it) },
+                value = resolver.name, onValueChange = { resolver = DnsResolver.valueOf(it); persist() },
                 label = stringResource(R.string.dns_resolver_label), options = resolverOptions,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
             )
             if (isCustom) {
                 OutlinedTextField(
-                    value = customUrl, onValueChange = { customUrl = it; resolveError = false },
+                    value = customUrl, onValueChange = { customUrl = it; resolveError = false; persist() },
                     label = { Text(stringResource(R.string.dns_custom_url)) },
-                    isError = !urlValid || urlV6Blocked,
+                    isError = !urlValid,
                     supportingText = {
                         if (!urlValid) Text(stringResource(R.string.dns_custom_url_error))
-                        else if (urlV6Blocked) Text(stringResource(R.string.dns_resolver_ipv6_off))
+                        else if (urlV6Notice) Text(stringResource(R.string.dns_resolver_ipv6_off))
                     },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 if (needsPin) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
-                            value = pinnedIp, onValueChange = { pinnedIp = it },
+                            value = pinnedIp, onValueChange = { pinnedIp = it; persist() },
                             label = { Text(stringResource(R.string.dns_pinned_ip)) },
-                            isError = !pinValid || resolveError || pinV6Blocked,
+                            isError = !pinValid || resolveError,
                             supportingText = {
                                 if (resolveError) Text(stringResource(R.string.dns_resolve_failed))
                                 else if (!pinValid) Text(stringResource(R.string.dns_pinned_ip_error))
-                                else if (pinV6Blocked) Text(stringResource(R.string.dns_resolver_ipv6_off))
+                                else if (pinV6Notice) Text(stringResource(R.string.dns_resolver_ipv6_off))
                             },
                             singleLine = true, modifier = Modifier.weight(1f)
                         )
@@ -175,7 +167,7 @@ private fun DnsScreen(onBack: () -> Unit) {
                                 val host = customHost
                                 scope.launch {
                                     val ip = withContext(Dispatchers.IO) { DohUrl.resolveHostname(host) }
-                                    if (ip != null) { pinnedIp = ip; resolveError = false } else resolveError = true
+                                    if (ip != null) { pinnedIp = ip; resolveError = false; persist() } else resolveError = true
                                 }
                             },
                             modifier = Modifier.padding(start = 8.dp)
@@ -184,7 +176,7 @@ private fun DnsScreen(onBack: () -> Unit) {
                 }
             }
             DropdownField(
-                value = strategy.name, onValueChange = { strategy = DnsQueryStrategy.valueOf(it) },
+                value = strategy.name, onValueChange = { strategy = DnsQueryStrategy.valueOf(it); persist() },
                 label = stringResource(R.string.dns_query_strategy_label), options = strategyOptions,
                 modifier = Modifier.fillMaxWidth(), enabled = strategyActive
             )
