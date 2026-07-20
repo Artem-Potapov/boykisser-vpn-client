@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -60,6 +59,18 @@ private fun MuxScreen(onBack: () -> Unit) {
     var xudp by remember { mutableStateOf(initial.xudpConcurrency.toString()) }
     var quic by remember { mutableStateOf(initial.quicHandling) }
 
+    fun persist() {
+        MuxPreferences.save(
+            context,
+            MuxSettings(
+                enabled,
+                concurrency.trim().toIntOrNull()?.coerceIn(1, 1024) ?: initial.concurrency,
+                xudp.trim().toIntOrNull()?.coerceAtLeast(0) ?: initial.xudpConcurrency,
+                quic
+            )
+        )
+    }
+
     val concurrencyValid = concurrency.trim().toIntOrNull()?.let { it in 1..1024 } == true
     val xudpValid = xudp.trim().toIntOrNull()?.let { it >= 0 } == true
     val inputsValid = concurrencyValid && xudpValid
@@ -79,25 +90,6 @@ private fun MuxScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.mux_cd_back))
                     }
-                },
-                actions = {
-                    TextButton(
-                        enabled = !enabled || inputsValid,
-                        onClick = {
-                            // Save is reachable with invalid number fields when the switch is off —
-                            // fall back to the last-saved values rather than crash on parse.
-                            MuxPreferences.save(
-                                context,
-                                MuxSettings(
-                                    enabled,
-                                    concurrency.trim().toIntOrNull()?.coerceIn(1, 1024) ?: initial.concurrency,
-                                    xudp.trim().toIntOrNull()?.coerceAtLeast(0) ?: initial.xudpConcurrency,
-                                    quic
-                                )
-                            )
-                            onBack()
-                        }
-                    ) { Text(stringResource(R.string.mux_save)) }
                 }
             )
         }
@@ -108,22 +100,22 @@ private fun MuxScreen(onBack: () -> Unit) {
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.mux_enable), modifier = Modifier.weight(1f))
-                Switch(checked = enabled, onCheckedChange = { enabled = it })
+                Switch(checked = enabled, onCheckedChange = { enabled = it; persist() })
             }
             OutlinedTextField(
-                value = concurrency, onValueChange = { concurrency = it },
+                value = concurrency, onValueChange = { concurrency = it; persist() },
                 label = { Text(stringResource(R.string.mux_concurrency)) },
                 isError = enabled && !concurrencyValid,
                 supportingText = { if (enabled && !concurrencyValid) Text(stringResource(R.string.mux_error_concurrency)) },
                 singleLine = true, modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
-                value = xudp, onValueChange = { xudp = it },
+                value = xudp, onValueChange = { xudp = it; persist() },
                 label = { Text(stringResource(R.string.mux_xudp_concurrency)) },
                 isError = enabled && !xudpValid, singleLine = true, modifier = Modifier.fillMaxWidth()
             )
             DropdownField(
-                value = quic.name, onValueChange = { quic = QuicHandling.valueOf(it) },
+                value = quic.name, onValueChange = { quic = QuicHandling.valueOf(it); persist() },
                 label = stringResource(R.string.mux_quic_handling_label),
                 options = quicOptions, modifier = Modifier.fillMaxWidth()
             )
