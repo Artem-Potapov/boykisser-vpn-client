@@ -27,7 +27,8 @@ tables and sanitize unbuildable choices:
 
 `ConfigBuilder.effectiveRoutingMode` repeats the critical unsupported-country backstop. It never emits
 the direct catch-all unless blocked data exists; otherwise an unavailable list would fail open by
-sending all traffic direct. Unavailable UI choices are labeled, and Save persists the sanitized value.
+sending all traffic direct. Unavailable UI choices are labeled, and the screen autosaves — every
+change persists the sanitized value (there is no Save button).
 
 ## Rule construction and ordering
 

@@ -69,8 +69,6 @@
     <string name="mux_hint">Применяется к профилям VLESS по TCP-транспортам. Hysteria2 и xhttp не затрагиваются. Вступает в силу при следующем подключении.</string>
     <string name="mux_error_concurrency">Введите число от 1 до 1024</string>
     <string name="mux_cd_back">Назад</string>
-    <string name="mux_save">Сохранить</string>
-
     <!-- Экран настроек пинг-теста -->
     <string name="ping_title">Пинг-тест</string>
     <string name="ping_target">URL цели (http://…, ответ 204)</string>
@@ -82,8 +80,6 @@
     <string name="ping_auto">Автопинг при открытии</string>
     <string name="ping_hint">Применяется к следующему пингу. Цель должна быть HTTP-эндпоинтом без TLS, возвращающим 204.</string>
     <string name="ping_cd_back">Назад</string>
-    <string name="ping_save">Сохранить</string>
-
     <!-- Settings hub sections -->
     <string name="settings_section_ui">Интерфейс</string>
     <string name="settings_section_tunnel">Туннель</string>
@@ -154,8 +150,6 @@
     <string name="dns_strategy_from_config">Стратегия запросов применяется, только если выше выбран резолвер. «Из конфига» оставляет DNS из вашего конфига без изменений.</string>
     <string name="dns_hint">Вступает в силу при следующем подключении. Открытый DNS не используется.</string>
     <string name="dns_cd_back">Назад</string>
-    <string name="dns_save">Сохранить</string>
-
     <!-- Настройки маршрутизации -->
     <string name="routing_title">Правила маршрутизации</string>
     <string name="settings_routing_subtitle">Выберите, что идёт через VPN</string>
@@ -173,8 +167,6 @@
     <string name="routing_mode_fallback_notice">Этот режим недоступен в этой сборке. Будет использован режим «Весь трафик через прокси».</string>
     <string name="routing_hint">Вступает в силу при следующем подключении.</string>
     <string name="routing_cd_back">Назад</string>
-    <string name="routing_save">Сохранить</string>
-
     <!-- Настройки ядра XRAY -->
     <string name="xray_title">Настройки XRAY</string>
     <string name="settings_xray_subtitle">Сетевые параметры уровня ядра</string>
@@ -193,8 +185,6 @@
     <string name="xray_core_version_unknown">неизвестна</string>
     <string name="xray_hint">Вступает в силу при следующем подключении.</string>
     <string name="xray_cd_back">Назад</string>
-    <string name="xray_save">Сохранить</string>
-
     <!-- Диалог автоподключения при запуске -->
     <string name="autoconnect_dialog_title">Автоподключение при запуске</string>
     <string name="autoconnect_dialog_body">Android может автоматически поддерживать подключение VPN — в том числе после перезагрузки — с помощью встроенной функции «Постоянная VPN». Откройте настройки VPN и включите «Постоянная VPN» (и «Блокировать подключения без VPN» для строгого kill switch) для этого приложения.</string>
@@ -223,9 +213,7 @@
     <string name="fragmentation_packets">Пакеты</string>
     <string name="fragmentation_length">Длина</string>
     <string name="fragmentation_interval">Интервал (мс)</string>
-    <string name="fragmentation_hint">Работает только для серверов на TCP/TLS. На Hysteria2 (QUIC) не влияет.</string>
-    <string name="fragmentation_save">Сохранить</string>
-    <string name="fragmentation_error_packets">Укажите «tlshello» или число/диапазон, например 1-3</string>
+    <string name="fragmentation_hint">Работает только для серверов на TCP/TLS. На Hysteria2 (QUIC) не влияет.</string>    <string name="fragmentation_error_packets">Укажите «tlshello» или число/диапазон, например 1-3</string>
     <string name="fragmentation_error_range">Укажите число или диапазон, например 100-200</string>
 
     <!-- MainActivity -->

@@ -68,8 +68,6 @@
     <string name="mux_hint">Applies to VLESS profiles over TCP-based transports. Hysteria2 and xhttp are unaffected. Takes effect on the next connect.</string>
     <string name="mux_error_concurrency">Enter a number from 1 to 1024</string>
     <string name="mux_cd_back">Back</string>
-    <string name="mux_save">Save</string>
-
     <!-- Ping test settings screen -->
     <string name="ping_title">Ping test</string>
     <string name="ping_target">Target URL (http://…, returns 204)</string>
@@ -81,8 +79,6 @@
     <string name="ping_auto">Auto-ping on open</string>
     <string name="ping_hint">Applies to the next ping. The target must be a plaintext HTTP endpoint returning 204.</string>
     <string name="ping_cd_back">Back</string>
-    <string name="ping_save">Save</string>
-
     <!-- Settings hub sections -->
     <string name="settings_section_ui">UI</string>
     <string name="settings_section_tunnel">Tunnel</string>
@@ -153,8 +149,6 @@
     <string name="dns_strategy_from_config">Query strategy applies only when you pick a resolver above. \"From config\" leaves your config\'s own DNS untouched.</string>
     <string name="dns_hint">Takes effect on the next connect. Plaintext DNS is never used.</string>
     <string name="dns_cd_back">Back</string>
-    <string name="dns_save">Save</string>
-
     <!-- Routing settings -->
     <string name="routing_title">Routing rules</string>
     <string name="settings_routing_subtitle">Choose what goes through the VPN</string>
@@ -172,8 +166,6 @@
     <string name="routing_mode_fallback_notice">This mode is not available in this build. Proxy everything will be used instead.</string>
     <string name="routing_hint">Takes effect on the next connect.</string>
     <string name="routing_cd_back">Back</string>
-    <string name="routing_save">Save</string>
-
     <!-- XRAY core settings -->
     <string name="xray_title">XRAY settings</string>
     <string name="settings_xray_subtitle">Core-level network options</string>
@@ -192,8 +184,6 @@
     <string name="xray_core_version_unknown">unknown</string>
     <string name="xray_hint">Takes effect on the next connect.</string>
     <string name="xray_cd_back">Back</string>
-    <string name="xray_save">Save</string>
-
     <!-- Auto-connect on boot dialog -->
     <string name="autoconnect_dialog_title">Auto-connect on boot</string>
     <string name="autoconnect_dialog_body">Android can keep this VPN connected automatically — including after a reboot — using its built-in Always-on VPN feature. Open VPN settings, then enable \"Always-on VPN\" (and \"Block connections without VPN\" for a strict kill switch) for this app.</string>
@@ -222,9 +212,7 @@
     <string name="fragmentation_packets">Packets</string>
     <string name="fragmentation_length">Length</string>
     <string name="fragmentation_interval">Interval (ms)</string>
-    <string name="fragmentation_hint">Only affects TCP/TLS-based servers. Has no effect on Hysteria2 (QUIC).</string>
-    <string name="fragmentation_save">Save</string>
-    <string name="fragmentation_error_packets">Use \"tlshello\" or a number/range like 1-3</string>
+    <string name="fragmentation_hint">Only affects TCP/TLS-based servers. Has no effect on Hysteria2 (QUIC).</string>    <string name="fragmentation_error_packets">Use \"tlshello\" or a number/range like 1-3</string>
     <string name="fragmentation_error_range">Use a number or range like 100-200</string>
 
     <!-- MainActivity -->

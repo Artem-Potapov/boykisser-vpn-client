@@ -60,7 +60,7 @@ fun buildRuntimeConfig(
     val withLog = forceLog(base, log)
     val withFragmentation = applyFragmentation(withLog, tuning.fragmentation)
     val withMux = applyMux(withFragmentation, tuning.mux)
-    val withDns = applyDns(withMux, tuning.dns)
+    val withDns = applyDns(withMux, tuning.dns, tuning.core.ipv6)
     val withRouting = applyRouting(withDns, tuning.routing)
     val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
     return applyCoreSettings(withRouting, tuning.core, forceSniffing)

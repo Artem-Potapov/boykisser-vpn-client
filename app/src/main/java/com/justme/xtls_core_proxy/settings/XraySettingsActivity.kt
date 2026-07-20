@@ -78,7 +78,7 @@ private fun XrayScreen(onBack: () -> Unit) {
     }
 
     // Domain-based routing rules only match with sniffing on, so the switch shows a forced-on,
-    // greyed state in that case. Display-only: `sniffing` (the user's value) is what Save writes.
+    // greyed state in that case. Display-only: `sniffing` (the user's value) is what persist() writes.
     var sniffingForced by remember { mutableStateOf(routingNeedsDomainRules(RoutingPreferences.load(context))) }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
