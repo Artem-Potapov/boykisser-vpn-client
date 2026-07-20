@@ -107,7 +107,7 @@
     <string name="sanitization_group_security">Security enforcement</string>
     <string name="sanitization_group_global">Your global settings</string>
     <string name="sanitization_empty">Select a profile to see how it\'ll be sanitized.</string>
-    <string name="sanitization_failure">This profile\'s config couldn\'t be processed: %1$s</string>
+    <string name="sanitization_failure">This profile\'s config couldn\'t be processed.</string>
     <string name="sanitization_status_rewrote">Rewrote</string>
     <string name="sanitization_status_added">Added</string>
     <string name="sanitization_status_compliant">Already compliant</string>

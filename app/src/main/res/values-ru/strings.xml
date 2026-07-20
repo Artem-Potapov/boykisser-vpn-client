@@ -108,7 +108,7 @@
     <string name="sanitization_group_security">Принудительная безопасность</string>
     <string name="sanitization_group_global">Ваши глобальные настройки</string>
     <string name="sanitization_empty">Выберите профиль, чтобы увидеть санитизацию.</string>
-    <string name="sanitization_failure">Конфиг этого профиля не удалось обработать: %1$s</string>
+    <string name="sanitization_failure">Конфиг этого профиля не удалось обработать.</string>
     <string name="sanitization_status_rewrote">Переписано</string>
     <string name="sanitization_status_added">Добавлено</string>
     <string name="sanitization_status_compliant">Уже соответствует</string>

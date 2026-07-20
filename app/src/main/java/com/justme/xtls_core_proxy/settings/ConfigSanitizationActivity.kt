@@ -168,8 +168,11 @@ private fun ConfigSanitizationScreen(onBack: () -> Unit) {
                 )
             }
             is SanitizationUiState.Failed -> {
+                // Fail-closed: the reason is always the generic constant (redundant with this
+                // localized sentence), so it is deliberately NOT interpolated — this avoids a
+                // mixed-language string and never risks echoing submitted input into the UI.
                 Text(
-                    stringResource(R.string.sanitization_failure, state.reason),
+                    stringResource(R.string.sanitization_failure),
                     modifier = Modifier
                         .padding(innerPadding)
                         .padding(16.dp),
