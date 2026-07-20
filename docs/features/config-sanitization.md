@@ -1,8 +1,9 @@
 # Config Sanitization: Read-Only Runtime-Pipeline Diagnostic
 
 Maintainer reference for the Advanced → Config sanitization screen and
-`ConfigSanitizer`. The feature explains what the app would enforce on the active profile; it never
-edits, saves, exports, or reconnects that profile.
+`ConfigSanitizer`. The feature explains what the app would enforce on the **subject profile** — the
+active profile, or the first profile when none has been explicitly activated yet (see Data and
+refresh behavior); it never edits, saves, exports, or reconnects that profile.
 
 ## Contract: an inverse view of the real pipeline
 
@@ -35,8 +36,19 @@ IPv6, DNS resolver, routing, and domain strategy) remain visible at defaults.
 
 ## Data and refresh behavior
 
-`ConfigSanitizationActivity` resolves the active profile through `ActiveProfileRepository` and Room,
-then reads the **current global settings** from `LogPreferences`, `FragmentationPreferences`,
+`ConfigSanitizationActivity` resolves its **subject profile** through the read-only
+`resolveSanitizationSubjectProfile(context)` helper: the persisted active profile if it still exists
+(`ActiveProfileRepository.getActiveProfileId` → `ProfileDao.getById`), otherwise the lowest-id profile
+(`ProfileDao.getFirst`). That active-or-first order matches the "effective profile" the QS tile and
+`XrayVpnService` resolve via `pickOrPersistActive` — but the sanitizer **never persists** the fallback
+pick, because opening a read-only diagnostic must not change which profile the app considers active.
+
+This matters: `getActiveProfileId` alone is `null` until a Connect/tile/service action first writes
+it, so resolving on the raw active id showed the empty state to *every* user who had imported profiles
+but never connected. With the `getFirst` fallback, the empty state now appears only when the profile
+table is genuinely empty.
+
+It then reads the **current global settings** from `LogPreferences`, `FragmentationPreferences`,
 `MuxPreferences`, `DnsPreferences`, `RoutingPreferences`, and `XrayCorePreferences`. It recomputes on
 every lifecycle `ON_RESUME`, including the first, so returning from a sibling settings screen refreshes
 the report without recreating the Activity.
@@ -44,7 +56,7 @@ the report without recreating the Activity.
 The work runs off the main thread. UI states are explicit:
 
 - loading spinner;
-- no-active-profile message;
+- empty-state message only when there is no profile at all (empty Room table);
 - failure message for malformed/unbuildable input;
 - success grouped into Security enforcement and Global settings.
 
@@ -99,8 +111,9 @@ Two deliberate imprecisions affect only the *label*, never runtime enforcement o
 
 - `config/ConfigSanitizer.kt` — analysis model (`SanitizationReport`, `Finding`, `Status`) and
   final-config inspection.
-- `settings/ConfigSanitizationActivity.kt` — active-profile/current-preference loading and
-  resume-triggered refresh.
+- `settings/ConfigSanitizationActivity.kt` — subject-profile resolution
+  (`resolveSanitizationSubjectProfile`, active-or-first, read-only, never persists),
+  current-preference loading, and resume-triggered refresh.
 - `settings/SanitizationPresentation.kt` — pure grouping, title mapping, warning-chip decision, and UI
   state resolution.
 - `config/ConfigBuilder.kt` — source of truth for normalization and the complete overlay chain; its
@@ -115,8 +128,12 @@ pair present/partial/absent), malformed failure, omitted disabled settings, defa
 values, effective DNS/routing/IPv6 summaries, `Added` vs `Applied` from final JSON, credential-safety
 regressions (`pbk`/`sid`/user-info/query values absent from both failure and success output), and
 `NotApplicable` cases. `SanitizationPresentationTest` covers grouping and loading/empty/failure/ready
-states.
+states. `SanitizationProfileResolutionTest` (instrumented) covers subject-profile resolution:
+active-or-first fallback, stale-active-id fallback to first, empty-DB → null (legitimate empty state),
+valid-active-id resolves that profile, and the no-persist read-only guarantee.
 
-On a release APK, open the screen with no active profile, a canonical profile, and a profile whose
-transport makes an enabled overlay inapplicable. Change a global setting, return to the still-alive
-screen, and confirm the report refreshes. Confirm there is no write/save/export action.
+On a release APK, open the screen with no profiles at all (must show the empty state), with a profile
+imported but never connected (must resolve the first profile — **not** the empty state), a canonical
+profile, and a profile whose transport makes an enabled overlay inapplicable. Change a global setting,
+return to the still-alive screen, and confirm the report refreshes. Confirm there is no
+write/save/export action, and that opening the screen does not change the app's active profile.

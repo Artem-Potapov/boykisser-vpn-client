@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.settings
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,6 +52,7 @@ import com.justme.xtls_core_proxy.config.Status
 import com.justme.xtls_core_proxy.config.TuningSettings
 import com.justme.xtls_core_proxy.config.XrayCorePreferences
 import com.justme.xtls_core_proxy.db.AppDatabase
+import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.log.LogPreferences
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
@@ -71,6 +73,23 @@ class ConfigSanitizationActivity : LocalizedComponentActivity() {
         enableEdgeToEdge()
         setContent { XTLS_CORE_PROXYTheme { ConfigSanitizationScreen(onBack = { finish() }) } }
     }
+}
+
+/**
+ * Read-only resolution of the profile this diagnostic analyzes: the persisted active profile if it
+ * still exists, else the lowest-id profile (`ProfileDao.getFirst`) — the same "effective profile"
+ * the QS tile and [com.justme.xtls_core_proxy.vpn.XrayVpnService] pick via `pickOrPersistActive`.
+ * Returns null only when the profile table is empty (the legitimate empty state).
+ *
+ * Unlike `ActiveProfileRepository.pickOrPersistActive` this NEVER persists the fallback pick — the
+ * screen must not mutate which profile the app considers active just by being opened. Without this
+ * fallback the screen was a permanent dead end for any user who had imported profiles but never
+ * connected: `getActiveProfileId` stays null until a Connect/tile/service action writes it.
+ */
+internal suspend fun resolveSanitizationSubjectProfile(context: Context): Profile? {
+    val dao = AppDatabase.get(context).profileDao()
+    val activeId = ActiveProfileRepository.getActiveProfileId(context)
+    return activeId?.let { dao.getById(it) } ?: dao.getFirst()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,8 +121,7 @@ private fun ConfigSanitizationScreen(onBack: () -> Unit) {
         noProfile = false
         report = null
         val result = withContext(Dispatchers.Default) {
-            val id = ActiveProfileRepository.getActiveProfileId(context) ?: return@withContext null
-            val profile = AppDatabase.get(context).profileDao().getById(id) ?: return@withContext null
+            val profile = resolveSanitizationSubjectProfile(context) ?: return@withContext null
             // Analyze the SAME log posture a real session builds: the app-private error-log path
             // (see XrayVpnService). Read-only — this only forms the path string; unlike the service it
             // never creates the logs/ directory or file (the sanitizer must not touch the filesystem).
