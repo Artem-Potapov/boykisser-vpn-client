@@ -22,7 +22,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,6 +63,13 @@ private fun RoutingScreen(onBack: () -> Unit) {
     var country by remember { mutableStateOf(initial.country) }
     var bypassLan by remember { mutableStateOf(initial.bypassLan) }
     var blockAds by remember { mutableStateOf(initial.blockAds) }
+
+    fun persist() {
+        RoutingPreferences.save(
+            context,
+            sanitizeForAvailability(RoutingSettings(mode, country, bypassLan, blockAds), available)
+        )
+    }
 
     // DropdownField is String-keyed and has no per-option disabling, so an unbuildable
     // combination is flagged with a label suffix; sanitizeForAvailability on save is the
@@ -110,17 +116,6 @@ private fun RoutingScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.routing_cd_back))
                     }
-                },
-                actions = {
-                    TextButton(
-                        onClick = {
-                            RoutingPreferences.save(
-                                context,
-                                sanitizeForAvailability(RoutingSettings(mode, country, bypassLan, blockAds), available)
-                            )
-                            onBack()
-                        }
-                    ) { Text(stringResource(R.string.routing_save)) }
                 }
             )
         }
@@ -130,24 +125,24 @@ private fun RoutingScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DropdownField(
-                value = mode.name, onValueChange = { mode = RoutingMode.valueOf(it) },
+                value = mode.name, onValueChange = { mode = RoutingMode.valueOf(it); persist() },
                 label = stringResource(R.string.routing_mode_label), options = modeOptions,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
             )
             if (mode != RoutingMode.PROXY_ALL) {
                 DropdownField(
-                    value = country.name, onValueChange = { country = RoutingCountry.valueOf(it) },
+                    value = country.name, onValueChange = { country = RoutingCountry.valueOf(it); persist() },
                     label = stringResource(R.string.routing_country_label), options = countryOptions,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(suffixed(stringResource(R.string.routing_bypass_lan), lanAvailable), modifier = Modifier.weight(1f))
-                Switch(checked = bypassLan, onCheckedChange = { bypassLan = it }, enabled = lanAvailable)
+                Switch(checked = bypassLan, onCheckedChange = { bypassLan = it; persist() }, enabled = lanAvailable)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(suffixed(stringResource(R.string.routing_block_ads), adsAvailable), modifier = Modifier.weight(1f))
-                Switch(checked = blockAds, onCheckedChange = { blockAds = it }, enabled = adsAvailable)
+                Switch(checked = blockAds, onCheckedChange = { blockAds = it; persist() }, enabled = adsAvailable)
             }
             if (mode == RoutingMode.BLOCKED_ONLY && modeAvailable(mode)) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
