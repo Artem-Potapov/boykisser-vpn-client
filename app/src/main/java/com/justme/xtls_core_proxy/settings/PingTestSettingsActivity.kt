@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,6 +57,20 @@ private fun PingTestScreen(onBack: () -> Unit) {
     var concurrency by rememberSaveable { mutableStateOf(initial.concurrency.toString()) }
     var auto by rememberSaveable { mutableStateOf(initial.autoOnOpen) }
 
+    fun persist() {
+        val t = timeout.trim().toLongOrNull()
+        val c = concurrency.trim().toIntOrNull()
+        if (PingPreferences.isValidTarget(target) &&
+            t != null && t in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX &&
+            c != null && c in PingPreferences.CONCURRENCY_MIN..PingPreferences.CONCURRENCY_MAX
+        ) {
+            PingPreferences.save(
+                context,
+                PingPreferences(targetUrl = target.trim(), timeoutMs = t, concurrency = c, autoOnOpen = auto)
+            )
+        }
+    }
+
     val targetValid = PingPreferences.isValidTarget(target)
     val timeoutValid = timeout.trim().toLongOrNull()
         ?.let { it in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX } == true
@@ -76,23 +89,6 @@ private fun PingTestScreen(onBack: () -> Unit) {
                             contentDescription = stringResource(R.string.ping_cd_back)
                         )
                     }
-                },
-                actions = {
-                    TextButton(
-                        enabled = inputsValid,
-                        onClick = {
-                            PingPreferences.save(
-                                context,
-                                PingPreferences(
-                                    targetUrl = target.trim(),
-                                    timeoutMs = timeout.trim().toLong(),
-                                    concurrency = concurrency.trim().toInt(),
-                                    autoOnOpen = auto,
-                                )
-                            )
-                            onBack()
-                        }
-                    ) { Text(stringResource(R.string.ping_save)) }
                 }
             )
         }
@@ -107,7 +103,7 @@ private fun PingTestScreen(onBack: () -> Unit) {
         ) {
             OutlinedTextField(
                 value = target,
-                onValueChange = { target = it },
+                onValueChange = { target = it; persist() },
                 label = { Text(stringResource(R.string.ping_target)) },
                 isError = !targetValid,
                 supportingText = {
@@ -118,7 +114,7 @@ private fun PingTestScreen(onBack: () -> Unit) {
             )
             OutlinedTextField(
                 value = timeout,
-                onValueChange = { timeout = it },
+                onValueChange = { timeout = it; persist() },
                 label = { Text(stringResource(R.string.ping_timeout)) },
                 isError = !timeoutValid,
                 supportingText = {
@@ -129,7 +125,7 @@ private fun PingTestScreen(onBack: () -> Unit) {
             )
             OutlinedTextField(
                 value = concurrency,
-                onValueChange = { concurrency = it },
+                onValueChange = { concurrency = it; persist() },
                 label = { Text(stringResource(R.string.ping_concurrency)) },
                 isError = !concurrencyValid,
                 supportingText = {
@@ -143,7 +139,7 @@ private fun PingTestScreen(onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(stringResource(R.string.ping_auto), modifier = Modifier.weight(1f))
-                Switch(checked = auto, onCheckedChange = { auto = it })
+                Switch(checked = auto, onCheckedChange = { auto = it; persist() })
             }
             Text(
                 text = stringResource(R.string.ping_hint),
