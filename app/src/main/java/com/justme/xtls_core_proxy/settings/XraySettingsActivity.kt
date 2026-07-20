@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -71,6 +70,13 @@ private fun XrayScreen(onBack: () -> Unit) {
     var sniffing by remember { mutableStateOf(initial.sniffing) }
     var domainStrategy by remember { mutableStateOf(initial.domainStrategy) }
 
+    fun persist() {
+        val m = mtu.trim().toIntOrNull()
+        if (m != null && m in XrayCorePreferences.MTU_MIN..XrayCorePreferences.MTU_MAX) {
+            XrayCorePreferences.save(context, XrayCoreSettings(m, ipv6, sniffing, domainStrategy))
+        }
+    }
+
     // Domain-based routing rules only match with sniffing on, so the switch shows a forced-on,
     // greyed state in that case. Display-only: `sniffing` (the user's value) is what Save writes.
     var sniffingForced by remember { mutableStateOf(routingNeedsDomainRules(RoutingPreferences.load(context))) }
@@ -112,18 +118,6 @@ private fun XrayScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.xray_cd_back))
                     }
-                },
-                actions = {
-                    TextButton(
-                        enabled = mtuValid,
-                        onClick = {
-                            XrayCorePreferences.save(
-                                context,
-                                XrayCoreSettings(mtu.trim().toInt(), ipv6, sniffing, domainStrategy)
-                            )
-                            onBack()
-                        }
-                    ) { Text(stringResource(R.string.xray_save)) }
                 }
             )
         }
@@ -133,7 +127,7 @@ private fun XrayScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedTextField(
-                value = mtu, onValueChange = { mtu = it },
+                value = mtu, onValueChange = { mtu = it; persist() },
                 label = { Text(stringResource(R.string.xray_mtu)) },
                 isError = !mtuValid,
                 supportingText = { if (!mtuValid) Text(stringResource(R.string.xray_mtu_error)) },
@@ -142,14 +136,14 @@ private fun XrayScreen(onBack: () -> Unit) {
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.xray_ipv6), modifier = Modifier.weight(1f))
-                Switch(checked = ipv6, onCheckedChange = { ipv6 = it })
+                Switch(checked = ipv6, onCheckedChange = { ipv6 = it; persist() })
             }
             Text(stringResource(R.string.xray_ipv6_hint), style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.xray_sniffing), modifier = Modifier.weight(1f))
                 Switch(
                     checked = sniffingForced || sniffing,
-                    onCheckedChange = { sniffing = it },
+                    onCheckedChange = { sniffing = it; persist() },
                     enabled = !sniffingForced
                 )
             }
@@ -157,7 +151,7 @@ private fun XrayScreen(onBack: () -> Unit) {
                 Text(stringResource(R.string.xray_sniffing_forced), style = MaterialTheme.typography.bodySmall)
             }
             DropdownField(
-                value = domainStrategy.name, onValueChange = { domainStrategy = XrayDomainStrategy.valueOf(it) },
+                value = domainStrategy.name, onValueChange = { domainStrategy = XrayDomainStrategy.valueOf(it); persist() },
                 label = stringResource(R.string.xray_domain_strategy_label),
                 options = strategyOptions, modifier = Modifier.fillMaxWidth()
             )
