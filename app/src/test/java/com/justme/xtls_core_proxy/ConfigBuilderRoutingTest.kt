@@ -165,6 +165,24 @@ class ConfigBuilderRoutingTest {
         assertEquals("exactly one outbound may carry the direct-helper tag '$lanTag'", 1, matches)
     }
 
+    // WB-NEW-3 — adopting an untagged freedom must not reuse a tag already taken by another outbound
+    // (here a blackhole mis-tagged "direct"), or Xray refuses to start on a duplicate tag.
+    @Test fun untagged_freedom_gets_unique_tag_when_direct_already_taken() {
+        val pasted = """
+            {"outbounds":[
+            {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,"users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+            {"protocol":"freedom"},
+            {"tag":"direct","protocol":"blackhole"}]}
+        """.trimIndent()
+        val out = ConfigBuilder.buildRuntimeConfig(
+            pasted,
+            tuning = TuningSettings(routing = RoutingSettings(RoutingMode.EXCEPT_COUNTRY, RoutingCountry.RU, bypassLan = true, blockAds = false))
+        )
+        val obs = JSONObject(out).getJSONArray("outbounds")
+        val tags = (0 until obs.length()).mapNotNull { obs.optJSONObject(it)?.optString("tag")?.takeIf { t -> t.isNotBlank() } }
+        assertEquals("outbound tags must be unique — adopting the untagged freedom must not duplicate 'direct': $tags", tags.size, tags.toSet().size)
+    }
+
     // FIX 4 — production path: a pasted panel config that natively carries ext: rules.
     @Test fun ext_rules_in_pasted_config_stripped_from_ping_config() {
         val pasted = """

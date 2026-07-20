@@ -14,6 +14,14 @@ class DohUrlTest {
         assertNull(DohUrl.host("http://x/y"))
     }
 
+    @Test fun extracts_bracketed_ipv6_host() {
+        // WB-NEW-2: a bracketed IPv6 authority yields the bare v6 literal (brackets + :port stripped),
+        // so isIpLiteral classifies it correctly instead of demanding a spurious hosts-pin.
+        assertEquals("2606:4700:4700::1111", DohUrl.host("https://[2606:4700:4700::1111]/dns-query"))
+        assertEquals("2606:4700:4700::1111", DohUrl.host("https://[2606:4700:4700::1111]:8443/resolve"))
+        assertTrue(DohUrl.isValidHttps("https://[2606:4700:4700::1111]/dns-query"))
+    }
+
     @Test fun accepts_https_rejects_plaintext() {
         assertTrue(DohUrl.isValidHttps("https://8.8.8.8/dns-query"))
         assertFalse(DohUrl.isValidHttps("http://8.8.8.8/dns-query"))

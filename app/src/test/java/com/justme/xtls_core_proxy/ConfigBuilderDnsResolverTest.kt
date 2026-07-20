@@ -93,6 +93,22 @@ class ConfigBuilderDnsResolverTest {
         assertTrue(serverAddrs(out).any { it == "https://doh.example.com:8443/resolve" })
     }
 
+    @Test fun custom_bracketed_ipv6_resolver_bootstraps_with_brackets_no_pin() {
+        // WB-NEW-2: a bracketed-IPv6 CUSTOM DoH URL is an IP literal (no pin needed); its scoped +local
+        // bootstrap must keep the brackets, not cascade into a malformed unbracketed address.
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessHostname,
+            tuning = TuningSettings(dns = DnsSettings(DnsResolver.CUSTOM, "https://[2606:4700:4700::1111]/dns-query", "", DnsQueryStrategy.USE_IP))
+        )
+        val addrs = serverAddrs(out)
+        assertTrue(
+            "scoped +local bootstrap must keep the bracketed v6 host; addrs=$addrs",
+            addrs.any { it == "https+local://[2606:4700:4700::1111]/dns-query" }
+        )
+        assertTrue("unscoped custom entry present", addrs.any { it == "https://[2606:4700:4700::1111]/dns-query" })
+        assertTrue("no unbracketed/malformed v6 bootstrap; addrs=$addrs", addrs.none { it.contains("//2606:") })
+    }
+
     @Test fun preset_preserves_config_owned_scoped_server() {
         // makeSecureDns preserves a pasted config's own secure domain-scoped resolver; the overlay
         // must rewrite ONLY the +local proxy-hostname bootstrap entries, not this one.

@@ -650,7 +650,10 @@ object ConfigBuilder {
             // Don't adopt a redirecting freedom (e.g. a WARP-chain outbound): pointing "direct" traffic at
             // its local redirect port would black-hole every direct rule. Append a clean one instead.
             if (ob.optJSONObject("settings")?.has("redirect") == true) continue
-            return ob.optString("tag").ifBlank { ensureTag(ob, preferredTag) }
+            // Adopting an untagged outbound: assign a tag that isn't already taken by another
+            // outbound (e.g. a pasted config's blackhole mis-tagged "direct"), or Xray refuses to
+            // start on a duplicate tag.
+            return ob.optString("tag").ifBlank { ensureTag(ob, uniqueOutboundTag(outbounds, preferredTag)) }
         }
         val tag = uniqueOutboundTag(outbounds, preferredTag)
         outbounds.put(JSONObject().put("tag", tag).put("protocol", protocol))
@@ -739,12 +742,23 @@ object ConfigBuilder {
 
     /**
      * Rewrites a `https://host[:port]/path` DoH URL to a `https+local://<ip>[:port]/path` bootstrap,
-     * swapping only the host for [ip] and preserving the port + path.
+     * swapping only the host for [ip] and preserving the port + path. Bracket-aware on both sides:
+     * it strips a bracketed `[IPv6]` authority correctly and re-brackets [ip] when it is an IPv6
+     * literal, so a v6-literal custom resolver bootstraps cleanly instead of cascading into garbage.
      */
     private fun customBootstrapUrl(url: String, ip: String): String {
-        val host = DohUrl.host(url) ?: return "https+local://$ip/dns-query"
-        val rest = url.trim().substringAfter("://").removePrefix(host)  // ":port/path", "/path", or ""
-        return "https+local://$ip$rest"
+        val ipLiteral = if (ip.contains(":")) "[$ip]" else ip   // re-bracket a bare IPv6 replacement
+        val afterScheme = url.trim().substringAfter("://")
+        val slash = afterScheme.indexOf('/')
+        val authority = if (slash < 0) afterScheme else afterScheme.substring(0, slash)
+        val path = if (slash < 0) "" else afterScheme.substring(slash)   // "/path" or ""
+        // Preserve an explicit :port from the original authority (bracket-aware for [IPv6]:port).
+        val port = if (authority.startsWith("[")) {
+            authority.substringAfter("]", "")                            // ":port" or ""
+        } else {
+            authority.substringAfter(":", "").let { if (it.isEmpty()) "" else ":$it" }
+        }
+        return "https+local://$ipLiteral$port$path"
     }
 
     /** True for an IPv4/IPv6 literal (needs no DNS resolution), false for a hostname. */
