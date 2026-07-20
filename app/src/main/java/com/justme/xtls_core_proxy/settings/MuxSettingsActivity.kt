@@ -60,20 +60,20 @@ private fun MuxScreen(onBack: () -> Unit) {
     var quic by remember { mutableStateOf(initial.quicHandling) }
 
     fun persist() {
-        MuxPreferences.save(
-            context,
-            MuxSettings(
-                enabled,
-                concurrency.trim().toIntOrNull()?.coerceIn(1, 1024) ?: initial.concurrency,
-                xudp.trim().toIntOrNull()?.coerceAtLeast(0) ?: initial.xudpConcurrency,
-                quic
-            )
-        )
+        // Bounded-numeric autosave (design §3.1): when Mux is ON, hold last-good — persist only
+        // once both number fields parse in range; if one is mid-edit/invalid, leave prefs untouched
+        // rather than reverting to the session-open value. When OFF the numbers are inert, so persist
+        // the toggle regardless and fall back to the loaded values. Validity is re-derived inline
+        // here — reading the composition-time `concurrencyValid`/`xudpValid` vals would be a stale
+        // (pre-keystroke) read.
+        val c = concurrency.trim().toIntOrNull()?.takeIf { it in 1..1024 }
+        val x = xudp.trim().toIntOrNull()?.takeIf { it >= 0 }
+        if (enabled && (c == null || x == null)) return
+        MuxPreferences.save(context, MuxSettings(enabled, c ?: initial.concurrency, x ?: initial.xudpConcurrency, quic))
     }
 
     val concurrencyValid = concurrency.trim().toIntOrNull()?.let { it in 1..1024 } == true
     val xudpValid = xudp.trim().toIntOrNull()?.let { it >= 0 } == true
-    val inputsValid = concurrencyValid && xudpValid
 
     // DropdownField is String-keyed (verified: ui/components/DropdownField.kt) — map via enum name.
     val quicOptions = listOf(
