@@ -146,6 +146,26 @@ This is intentional and documented in the code KDoc: `makeSecureDns` neutralizes
 regardless, so the runtime is always safe; widening the classifier would only expand the user-facing
 nag/badge without improving safety. **Do not widen `dnsDiagnosis` to mirror `makeSecureDns`.**
 
+## IPv6-off degrade: a v6-only custom resolver falls back to Cloudflare v4
+
+`applyDns` — the global DNS overlay that runs after `makeSecureDns` — carries a **third fail-closed
+backstop**, structurally parallel to routing's `effectiveRoutingMode` degrade and XRAY IPv6-off's
+capture-and-block. `buildRuntimeConfig` passes the captured IPv6-on flag into it
+(`applyDns(withMux, tuning.dns, tuning.core.ipv6)`). When IPv6 is off **and** the resolver is a
+**CUSTOM** DoH endpoint reachable only over IPv6 — its URL host is an IPv6 literal, or the host is a
+hostname whose pinned IP is an IPv6 literal (`customBootstrapIsV6Only`) — `applyDns` treats the
+resolver as `CLOUDFLARE`, falling through the unchanged preset path to `https://1.1.1.1/dns-query` (an
+IPv4 DoH resolver). Both promises hold: DNS stays encrypted DoH, and the IPv6-off contract is honored.
+All four presets (Cloudflare/Google/Quad9/AdGuard) are IPv4, so **only the CUSTOM branch can ever
+strand DNS** — this degrade is the only place the fallback can fire.
+
+It runs at the runtime chokepoint from the captured `TuningSettings`, **independent of whether the
+user ever reopened the DNS screen**. That is what closes the **WB-NEW-1 reverse-ordering residual**:
+set a v6-only custom resolver while IPv6 is on, then turn IPv6 off on the XRAY screen and never revisit
+DNS — the old UI-side `canSave` guard couldn't see that ordering, so the runtime stranded DNS; the
+chokepoint degrade now catches it regardless. The DNS screen's matching v6-literal caption is therefore
+an informational heads-up, not a gate (see [dns.md](dns.md)).
+
 ## Components
 
 | File | Change |

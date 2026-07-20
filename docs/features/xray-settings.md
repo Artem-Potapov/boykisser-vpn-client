@@ -13,7 +13,9 @@ strategy “From config.” `applyCoreSettings` is the last runtime-config overl
 - **IPv6** — when off, injects `::/0 → block` immediately after the mandatory port-53 rule and
   force-writes DNS `queryStrategy=UseIPv4`. The VpnService still establishes its IPv6 address/route,
   so IPv6 is blocked inside Xray rather than escaping around the tunnel; its IPv6 DNS server is
-  omitted from the Android VPN builder.
+  omitted from the Android VPN builder. Turning IPv6 off also **degrades a v6-only custom DNS
+  resolver** to the Cloudflare v4 preset at the `applyDns` chokepoint, so a resolver reachable only
+  over IPv6 can't strand DNS — see [dns-leak-enforcement.md](dns-leak-enforcement.md).
 - **Sniffing** — when enabled, writes one route-only tun-inbound block with
   `destOverride = [http, tls, quic]`.
 - **Domain strategy** — “From config” is a no-op; explicit values overwrite
@@ -21,7 +23,8 @@ strategy “From config.” `applyCoreSettings` is the last runtime-config overl
 
 Domain/geosite routing rules force sniffing even if the user's switch is off. The XRAY screen
 re-reads routing preferences on resume, renders the switch forced-on and disabled, and explains why;
-Save still persists the user's own value.
+the screen still **autosaves the user's own `sniffing` value**, not the forced-display state (there is
+no Save button).
 
 The complete order is
 `forceLog → applyFragmentation → applyMux → applyDns → applyRouting → applyCoreSettings`.

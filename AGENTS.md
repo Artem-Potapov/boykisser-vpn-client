@@ -248,9 +248,11 @@ The UI collects user input (a `vless://` or `hysteria2://`/`hy2://` share link, 
 `XrayBridge`, and starts/stops Xray-core through the Go mobile bridge. Connection state and sanitized
 logs flow through `LogRepository` back to the UI.
 
-Global connection settings are persisted independently of profiles. `XrayVpnService` captures
-fragmentation, Mux, DNS, routing, and XRAY-core preferences once per full connection and reuses that
-immutable `TuningSettings` snapshot for kill-switch revives. `ConfigBuilder` applies the snapshot in
+Global connection settings are persisted independently of profiles; the six overlay settings screens
+(DNS, Mux, Routing, XRAY, Fragmentation, Ping) **autosave** — each persists on change with no Save
+button, and the value is still captured into the session snapshot only at the next full connection.
+`XrayVpnService` captures fragmentation, Mux, DNS, routing, and XRAY-core preferences once per full
+connection and reuses that immutable `TuningSettings` snapshot for kill-switch revives. `ConfigBuilder` applies the snapshot in
 the load-bearing order `applyFragmentation → applyMux → applyDns → applyRouting →
 applyCoreSettings`; DNS must precede routing so the `BLOCKED_ONLY` DoH guard sees the effective
 resolver, and core settings run last for IPv6/query-strategy and forced-sniffing resolution.
@@ -284,12 +286,16 @@ together — change them as a pair), plus a third normalization on the same chok
   app-private error-file path via `LogSettings`), overwriting rather than merging so a pasted config
   can't redirect Xray's own log writes elsewhere. See
   [`docs/features/logs-screen.md`](docs/features/logs-screen.md).
-- **Global settings compose after those mandatory normalizations; they do not replace them.**
-  Routing's derived `effectiveRoutingMode` is a second fail-closed backstop: an unsupported
-  `BLOCKED_ONLY` country degrades to proxy-all before a direct catch-all can be emitted. XRAY
-  IPv6-off keeps IPv6 captured by the Android VPN and inserts an in-tunnel `::/0 → block` rule.
-  See [`docs/features/routing-rules.md`](docs/features/routing-rules.md) and
-  [`docs/features/xray-settings.md`](docs/features/xray-settings.md).
+- **Global settings compose after those mandatory normalizations; they do not replace them, and three
+  fail-closed backstops sit on the same runtime chokepoint.** (1) Routing's derived
+  `effectiveRoutingMode` degrades an unsupported `BLOCKED_ONLY` country to proxy-all before a direct
+  catch-all can be emitted. (2) XRAY IPv6-off keeps IPv6 captured by the Android VPN and inserts an
+  in-tunnel `::/0 → block` rule (forcing `queryStrategy=UseIPv4`). (3) `applyDns` IPv6-off degrades a
+  v6-only **custom** DoH resolver to the Cloudflare v4 preset so it can't strand DNS — all four presets
+  are IPv4, so only a custom resolver can ever fire it. See
+  [`docs/features/routing-rules.md`](docs/features/routing-rules.md),
+  [`docs/features/xray-settings.md`](docs/features/xray-settings.md), and
+  [`docs/features/dns-leak-enforcement.md`](docs/features/dns-leak-enforcement.md).
 
 ## Dormant / Temporarily-Disabled Features
 These feature **entry points** are intentionally switched off in the working tree. The disabling is
@@ -369,7 +375,10 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
 - Optional global overlays compose only after inbound/DNS/log enforcement. In particular,
   `BLOCKED_ONLY` emits its final direct catch-all only for a country with a real blocked dataset;
   `ConfigBuilder.effectiveRoutingMode` repeats that unsupported-country backstop at the runtime
-  chokepoint. The mode intentionally permits non-matching encrypted DNS such as app-owned DoH/DoT
+  chokepoint. `ConfigBuilder.applyDns` adds a third runtime backstop of the same fail-closed family:
+  with IPv6 off it degrades a v6-only custom DoH resolver to the Cloudflare v4 preset (all four presets
+  are IPv4), keeping DNS encrypted and unstranded. The mode intentionally permits non-matching
+  encrypted DNS such as app-owned DoH/DoT
   to follow its direct-by-default policy; Xray's intercepted port-53 DNS remains on the enforced
   resolver.
 - `ConfigSanitizer` is diagnostic-only: it builds through the real runtime pipeline, reports effective

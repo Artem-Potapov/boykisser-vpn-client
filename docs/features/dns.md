@@ -14,7 +14,8 @@ rule, and sets `ForceIP` on the proxy outbound. `applyDns` then runs as a global
 - Cloudflare, Google, Quad9, and AdGuard replace the unscoped resolver list with their primary and
   secondary IP-literal HTTPS endpoints.
 - Custom accepts one `https://` URL. A hostname endpoint requires a pinned IP; the screen can resolve
-  it as a convenience, but Save requires a valid pin.
+  it as a convenience and flags a missing pin, but there is no Save gate — the URL and pin **autosave
+  on every change** and the runtime backstop (`applyDns`) re-sanitizes the persisted draft.
 
 For a hostname-addressed proxy, `makeSecureDns` creates two domain-scoped `https+local://` bootstrap
 entries. A preset swap rewrites those entries pairwise to the selected resolver's primary/secondary
@@ -22,8 +23,8 @@ IPs, so bootstrap failover remains intact and the proxy hostname is not leaked t
 resolver. Config-owned domain-scoped secure resolvers are preserved.
 
 For custom DNS, an invalid or blank HTTPS URL makes `applyDns` return without changing the
-already-canonical secure resolver. Hostname-pin handling is different: the settings screen requires an
-IP-literal pin before Save, but `DnsPreferences` loads persisted URL and pin strings verbatim and the
+already-canonical secure resolver. Hostname-pin handling is different: the settings screen flags a
+missing IP-literal pin, but `DnsPreferences` loads persisted URL and pin strings verbatim and the
 runtime only checks whether the pin is nonblank. With a valid hostname URL and valid pin, `dns.hosts`
 maps the hostname to that pin and the scoped bootstrap preserves the custom URL's port and path. A
 blank persisted pin still installs the custom URL as the unscoped resolver while retaining the
@@ -44,8 +45,20 @@ DNS runs before routing because `BLOCKED_ONLY` needs DoH-guard rules derived fro
 resolver:
 `applyFragmentation → applyMux → applyDns → applyRouting → applyCoreSettings`.
 
+## IPv6-off degrade of a v6-only custom resolver
+
+When IPv6 is off (XRAY screen) and the custom resolver is reachable only over IPv6 — the DoH URL host
+is an IPv6 literal, or its host is a hostname pinned to an IPv6 literal — the DNS screen shows an
+**informational heads-up caption, not a blocking gate**. The value still autosaves, and the runtime
+**degrades** it to the Cloudflare v4 preset at the `applyDns` chokepoint so DNS never strands. This
+holds at connect time from the captured session snapshot even if the user turned IPv6 off later and
+never reopened the DNS screen. See
+[dns-leak-enforcement.md](dns-leak-enforcement.md) for the chokepoint and the residual it closes.
+
 ## Persistence and session semantics
 
+The DNS screen **autosaves** — the resolver/strategy controls persist immediately and the custom
+URL/pin persist on every change, with no Save button; the `‹` arrow is plain back navigation.
 `DnsPreferences` stores resolver, custom URL, pinned IP, and strategy in `xray_prefs`; unknown resolver
 or strategy names fall back to their respective `DnsSettings.FROM_CONFIG` defaults, while custom URL
 and pin strings are not validated during load. `XrayVpnService` captures the loaded value once into

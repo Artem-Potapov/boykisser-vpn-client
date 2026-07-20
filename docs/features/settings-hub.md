@@ -88,6 +88,27 @@ These rows are always enabled and visible in both debug and release. Because Adv
 four real rows, its header and contents are no longer wrapped in `BuildConfig.DEBUG`; the complete
 Advanced section ships in release.
 
+## Autosave: the overlay screens' house style
+
+The six global-overlay destinations reached from this hub — DNS, Mux, Routing, XRAY, Fragmentation,
+and Ping test — **autosave**. There is no Save button on any of them: each screen loads its
+preferences once, edits a local draft, and persists on change, and the `‹` back arrow is plain
+up-navigation with no unsaved-edits concern (there is nothing unsaved to lose). The persisted overlay
+is still captured into the session's `TuningSettings` snapshot only at the next full connection, so an
+edit applies on reconnect, not mid-session (see each feature doc).
+
+The per-control commit model is deliberately typed:
+
+- **Enums, toggles, and dropdowns persist immediately** on selection — resolver choice, IPv6/sniffing
+  switches, routing mode/toggles, domain strategy, fragmentation preset.
+- **DNS custom URL and pinned IP persist on every change.** The runtime chokepoint re-sanitizes the
+  draft — `applyDns` handles a blank/invalid URL or pin fail-closed (see [dns.md](dns.md) and
+  [dns-leak-enforcement.md](dns-leak-enforcement.md)) — so a mid-edit value is never stranded.
+- **Bounded numerics persist only when the value validates** (Mux concurrency/xudp, XRAY MTU, Ping
+  timeout/concurrency, Fragmentation packets/length/interval). An invalid entry **holds the last-good
+  persisted value** — the write is skipped, never reverted to the screen-open value — so an in-progress
+  number can't brick the next connect.
+
 ## The remaining `BuildConfig.DEBUG` placeholder convention
 
 Rows that stake out not-yet-implemented settings follow this shape:
