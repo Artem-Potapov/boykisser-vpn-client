@@ -346,6 +346,15 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   28.2.13676358), then runs `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug`, and uploads
   the AAR, debug APKs, and test/lint reports as artifacts. Device tests
   (`connectedDebugAndroidTest`) are **not** in CI — run them locally.
+- **Instrumented tests are welcome for regression checks.** Running
+  `:app:connectedDebugAndroidTest` against a connected device/emulator is encouraged whenever a change
+  could affect UI, ViewModel/state, the bridge, or lifecycle behavior — prefer running them to skipping
+  them. On One UI (Samsung) devices, prep first to avoid the intermittent "No compose hierarchies
+  found" flake (activity RESUMED→PAUSED when the screen sleeps): `adb shell input keyevent
+  KEYCODE_WAKEUP`, `adb shell svc power stayon true`, and zero the three animation scales
+  (`window_animation_scale`, `transition_animation_scale`, `animator_duration_scale`) before the run.
+  To target a single class, use `-Pandroid.testInstrumentationRunnerArguments.class=<FQN>` (**not**
+  `--tests`, which the instrumentation runner ignores).
 > TODO: Add selected device tests to CI.
 
 ## Security & Compliance
