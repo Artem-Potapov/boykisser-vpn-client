@@ -361,6 +361,17 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   (`window_animation_scale`, `transition_animation_scale`, `animator_duration_scale`) before the run.
   To target a single class, use `-Pandroid.testInstrumentationRunnerArguments.class=<FQN>` (**not**
   `--tests`, which the instrumentation runner ignores).
+- **`connectedAndroidTest` no longer wipes the app — uninstall is OPT-IN.** AGP's connected-test task
+  uninstalls the app-under-test after the run by default, deleting `/data/data/<pkg>` (the Room DB +
+  SharedPreferences). On a device holding real user data (imported profiles/subscriptions) that is a
+  destructive wipe. `gradle.properties` now sets
+  `android.injected.androidTest.leaveApksInstalledAfterRun=true` so the app is **kept installed** after
+  a run (verified against AGP 9.1.1: `DeviceProviderInstrumentTestTask` uninstalls iff
+  `!testRunnerFactory.keepInstalledApks`). To restore the destructive uninstall, opt in with the
+  friendly flag `./gradlew.bat :app:connectedDebugAndroidTest -PuninstallAfterTest` (an `app/build.gradle.kts`
+  block flips `keepInstalledApks` off — see the "OPT-IN" comment there), or the raw
+  `-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=false`. Both paths **fail safe**: if the
+  flag wiring ever no-ops the app stays installed, never an unexpected wipe.
 > TODO: Add selected device tests to CI.
 
 ## Security & Compliance

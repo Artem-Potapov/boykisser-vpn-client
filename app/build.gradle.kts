@@ -226,3 +226,37 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+// --- connectedAndroidTest post-run uninstall: OPT-IN -------------------------------------------
+// AGP's connectedAndroidTest UNINSTALLS the app-under-test after the run by default, deleting
+// /data/data/<pkg> (the app's Room DB + SharedPreferences). On a device holding real user data that
+// is a destructive wipe, so the default is flipped to "keep installed" in gradle.properties via
+// AGP's injected `android.injected.androidTest.leaveApksInstalledAfterRun=true`.
+//
+// This block honors a friendly OPT-IN, `-PuninstallAfterTest`, that restores the uninstall. It sets
+// the connected-test task's keepInstalledApks input to false (verified in AGP 9.1.1: the runner
+// uninstalls iff !testRunnerFactory.keepInstalledApks). That property lives on the task's @Nested
+// TestRunnerFactory, so it's reached two hops out: task.getTestRunnerFactory().getKeepInstalledApks().
+// The task is matched by class *name* and the property set *reflectively* on purpose: the default
+// (no-flag) path never touches this AGP-internal type, so a future AGP rename can't break normal
+// builds — and if the reflection ever fails, it fails SAFE (app stays installed, never a surprise wipe).
+if (project.hasProperty("uninstallAfterTest")) {
+    tasks.matching { it.javaClass.name.contains("DeviceProviderInstrumentTestTask") }
+        .configureEach {
+            val result = runCatching {
+                val factory = javaClass.getMethod("getTestRunnerFactory").invoke(this)
+                @Suppress("UNCHECKED_CAST")
+                val keep = factory.javaClass.getMethod("getKeepInstalledApks").invoke(factory)
+                    as org.gradle.api.provider.Property<Boolean>
+                keep.set(false)
+            }
+            if (result.isSuccess) {
+                logger.lifecycle("[uninstallAfterTest] $name: app WILL be uninstalled after the run.")
+            } else {
+                logger.warn(
+                    "[uninstallAfterTest] $name: could NOT override keepInstalledApks " +
+                        "(${result.exceptionOrNull()?.message}); app will stay installed (fail-safe)."
+                )
+            }
+        }
+}
