@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -78,6 +77,14 @@ private fun FragmentationScreen(onBack: () -> Unit) {
         )
     }
 
+    fun persist() {
+        val p = packets.trim(); val l = length.trim(); val iv = interval.trim()
+        val valid = PACKETS_RE.matches(p) && RANGE_RE.matches(l) && RANGE_RE.matches(iv)
+        if (!enabled || valid) {
+            FragmentationPreferences.save(context, FragmentationSettings(enabled, p, l, iv))
+        }
+    }
+
     val packetsValid = PACKETS_RE.matches(packets.trim())
     val lengthValid = RANGE_RE.matches(length.trim())
     val intervalValid = RANGE_RE.matches(interval.trim())
@@ -109,20 +116,6 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                             contentDescription = stringResource(R.string.fragmentation_cd_back)
                         )
                     }
-                },
-                actions = {
-                    TextButton(
-                        enabled = !enabled || inputsValid,
-                        onClick = {
-                            FragmentationPreferences.save(
-                                context,
-                                FragmentationSettings(enabled, packets.trim(), length.trim(), interval.trim())
-                            )
-                            onBack()
-                        }
-                    ) {
-                        Text(stringResource(R.string.fragmentation_save))
-                    }
                 }
             )
         }
@@ -137,12 +130,12 @@ private fun FragmentationScreen(onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(stringResource(R.string.fragmentation_enable), modifier = Modifier.weight(1f))
-                Switch(checked = enabled, onCheckedChange = { enabled = it })
+                Switch(checked = enabled, onCheckedChange = { enabled = it; persist() })
             }
 
             DropdownField(
                 value = preset,
-                onValueChange = { applyPreset(it) },
+                onValueChange = { applyPreset(it); persist() },
                 label = stringResource(R.string.fragmentation_preset_label),
                 options = presetOptions,
                 modifier = Modifier.fillMaxWidth()
@@ -150,7 +143,7 @@ private fun FragmentationScreen(onBack: () -> Unit) {
 
             OutlinedTextField(
                 value = packets,
-                onValueChange = { packets = it; preset = PRESET_CUSTOM },
+                onValueChange = { packets = it; preset = PRESET_CUSTOM; persist() },
                 label = { Text(stringResource(R.string.fragmentation_packets)) },
                 isError = !packetsValid,
                 supportingText = {
@@ -161,7 +154,7 @@ private fun FragmentationScreen(onBack: () -> Unit) {
             )
             OutlinedTextField(
                 value = length,
-                onValueChange = { length = it; preset = PRESET_CUSTOM },
+                onValueChange = { length = it; preset = PRESET_CUSTOM; persist() },
                 label = { Text(stringResource(R.string.fragmentation_length)) },
                 isError = !lengthValid,
                 supportingText = {
@@ -172,7 +165,7 @@ private fun FragmentationScreen(onBack: () -> Unit) {
             )
             OutlinedTextField(
                 value = interval,
-                onValueChange = { interval = it; preset = PRESET_CUSTOM },
+                onValueChange = { interval = it; preset = PRESET_CUSTOM; persist() },
                 label = { Text(stringResource(R.string.fragmentation_interval)) },
                 isError = !intervalValid,
                 supportingText = {
