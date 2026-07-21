@@ -38,6 +38,7 @@ import com.justme.xtls_core_proxy.i18n.LanguageSettingsActivity
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.KillSwitchSettingsActivity
 import com.justme.xtls_core_proxy.log.LogsActivity
+import com.justme.xtls_core_proxy.privacy.HwidSettingsActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.split.SplitTunnelSettingsActivity
 import com.justme.xtls_core_proxy.ui.SettingsRow
@@ -136,6 +137,14 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 title = stringResource(R.string.mux_title),
                 subtitle = stringResource(R.string.settings_mux_subtitle),
                 onClick = { open(MuxSettingsActivity::class.java) }
+            )
+
+            // Privacy
+            SettingsSectionHeader(stringResource(R.string.settings_section_privacy))
+            SettingsRow(
+                title = stringResource(R.string.settings_hwid_title),
+                subtitle = stringResource(R.string.settings_hwid_subtitle),
+                onClick = { open(HwidSettingsActivity::class.java) }
             )
 
             // Advanced (real rows always shown)

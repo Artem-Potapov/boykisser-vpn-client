@@ -99,6 +99,11 @@
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
 
         <activity
+            android:name=".privacy.HwidSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.XTLS_CORE_PROXY" />
+
+        <activity
             android:name=".settings.MuxSettingsActivity"
             android:exported="false"
             android:theme="@style/Theme.XTLS_CORE_PROXY" />
