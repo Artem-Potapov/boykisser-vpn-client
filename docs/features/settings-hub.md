@@ -2,7 +2,7 @@
 
 Maintainer reference for `SettingsHubActivity`: the sectioned single-scroll settings screen, the
 reusable `SettingsSectionHeader`/`SettingsRow` components it (and `LogsActivity`) are built from, the
-six promoted settings destinations, and the remaining debug-placeholder convention.
+seven promoted settings destinations, and the remaining debug-placeholder convention.
 
 ## Why this exists
 
@@ -11,7 +11,7 @@ a maintainer wiring in a new toggle) could go to find "all settings." `SettingsH
 single entry point — the one screen `MainActivity` links to — organized into fixed sections so future
 settings have an obvious home instead of accreting onto whichever screen was open when they were added.
 
-## Structure: one screen, five sections, single scroll
+## Structure: one screen, six sections, single scroll
 
 [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt)
 renders a single `Column` inside `verticalScroll(rememberScrollState())` — not a `LazyColumn`, not
@@ -21,6 +21,7 @@ per-section sub-screens. Sections appear in this fixed order:
 |---|---|---|
 | UI | `settings_section_ui` | Language (→ `LanguageSettingsActivity`), App appearance (→ `AppearanceSettingsActivity`) |
 | Tunnel | `settings_section_tunnel` | Split tunnel, Kill switch, Auto-connect on boot, Fragmentation, Mux.Cool |
+| Privacy | `settings_section_privacy` | Device identity (HWID) (→ `HwidSettingsActivity`; [hwid-device-identity.md](hwid-device-identity.md)) |
 | Advanced | `settings_section_advanced` | XRAY, DNS, Config sanitization, Routing rules |
 | Diagnostics | `settings_section_diagnostics` | Logs, Ping test |
 | About | `settings_section_about` | Sideload warning (opens `SideloadWarningDialog` in-place), About (→ `AboutActivity`) |
@@ -72,11 +73,13 @@ fun SettingsRow(
   `KeyboardArrowRight` chevron; a row with `onClick = null` (or `enabled = false`) renders with no
   chevron and no click affordance.
 
-## The six promoted rows
+## The seven promoted rows
 
-Plans 1–3 promoted all former Tunnel/Advanced/Diagnostics placeholders to real destinations:
+Plans 1–3 promoted all former Tunnel/Advanced/Diagnostics placeholders to real destinations; Privacy
+adds Device identity:
 
 - Tunnel → Mux.Cool (`MuxSettingsActivity`; [mux.md](mux.md))
+- Privacy → Device identity (HWID) (`HwidSettingsActivity`; [hwid-device-identity.md](hwid-device-identity.md))
 - Advanced → XRAY (`XraySettingsActivity`; [xray-settings.md](xray-settings.md))
 - Advanced → DNS (`DnsSettingsActivity`; [dns.md](dns.md))
 - Advanced → Config sanitization (`ConfigSanitizationActivity`;
@@ -86,7 +89,7 @@ Plans 1–3 promoted all former Tunnel/Advanced/Diagnostics placeholders to real
 
 These rows are always enabled and visible in both debug and release. Because Advanced now contains
 four real rows, its header and contents are no longer wrapped in `BuildConfig.DEBUG`; the complete
-Advanced section ships in release.
+Advanced section ships in release. Privacy is likewise a real section (not a debug placeholder).
 
 ## Autosave: the overlay screens' house style
 
@@ -96,6 +99,10 @@ preferences once, edits a local draft, and persists on change, and the `‹` bac
 up-navigation with no unsaved-edits concern (there is nothing unsaved to lose). The persisted overlay
 is still captured into the session's `TuningSettings` snapshot only at the next full connection, so an
 edit applies on reconnect, not mid-session (see each feature doc).
+
+Device identity (HWID) under Privacy follows the same **autosave** control model (persist on every
+change, no Save button) but is prefs-only — it is not part of `TuningSettings` and takes effect on
+the next subscription refresh. See [hwid-device-identity.md](hwid-device-identity.md).
 
 The per-control commit model is deliberately typed:
 
@@ -127,7 +134,7 @@ placeholder is About → `settings_ph_check_update`.
 
 Earlier promoted rows also include App appearance, Auto-connect, and Fragmentation. Because the sole
 remaining placeholder is gated on `BuildConfig.DEBUG`, release builds omit only Check for updates;
-all five section headers and every real row remain visible.
+all six section headers and every real row remain visible.
 
 **Do not re-enable (flip to always-visible) or delete a placeholder row without maintainer approval** —
 same spirit as the Dormant/Temporarily-Disabled Features convention in `AGENTS.md`: a placeholder marks
@@ -162,7 +169,7 @@ To promote a placeholder (or add a wholly new setting) to a real row:
 
 | File | Role |
 |---|---|
-| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: five fixed sections, six promoted rows, `open(cls)` navigation helper, and the one remaining debug placeholder. |
+| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: six fixed sections, seven promoted rows, `open(cls)` navigation helper, and the one remaining debug placeholder. |
 | [`ui/SettingsComponents.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/ui/SettingsComponents.kt) | `SettingsSectionHeader`, `SettingsRow` — the shared primitives (also used by `LogsActivity`). |
 | [`settings/AboutActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/AboutActivity.kt) | App name, `BuildConfig.VERSION_NAME`, purpose blurb, GitHub link button (placeholder URL `https://github.com/` — flagged as a known follow-up, not yet the real repo URL), license line. Destination of the About row. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Destination of the Diagnostics → Logs row; see [`logs-screen.md`](logs-screen.md). |
@@ -173,7 +180,7 @@ To promote a placeholder (or add a wholly new setting) to a real row:
 - **`AboutActivity`'s GitHub link is a placeholder URL** (`https://github.com/`), not the project's real
   repository — flagged explicitly in the implementation plan as a follow-up, not an oversight to
   "helpfully" fix by guessing a URL.
-- **No search/filter** across settings — with five sections and a handful of rows this hasn't been
+- **No search/filter** across settings — with six sections and a handful of rows this hasn't been
   needed yet; revisit if the hub grows substantially.
 - **The remaining Check for updates placeholder carries no persisted state** — it is a static,
   disabled debug row.
@@ -184,5 +191,5 @@ To promote a placeholder (or add a wholly new setting) to a real row:
   extracted pure decision logic (the `BuildConfig.DEBUG` gating is a compile-time constant, not runtime
   logic to unit test).
 - **On-device (manual)**: confirm debug shows the disabled Check for updates row with a DEBUG badge;
-  confirm release omits that row but shows all five sections, including Advanced, and opens all six
-  promoted destinations.
+  confirm release omits that row but shows all six sections, including Privacy and Advanced, and opens
+  all seven promoted destinations.

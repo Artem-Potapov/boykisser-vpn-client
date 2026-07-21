@@ -40,11 +40,12 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
 │       │   │   ├── log/            LogRepository (sanitized state/log surface), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
+│       │   │   ├── privacy/        Device identity (HWID): settings repo + pure header/UA/rejection/hint logic + HwidSettingsActivity → docs/features/hwid-device-identity.md
 │       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/; DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
-│       │   │   ├── subs/           Subscription fetch/parse/refresh; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
+│       │   │   ├── subs/           Subscription fetch/parse/refresh; SubscriptionRefreshCoordinator loads device-identity settings and augments fetch errors with HWID/UA guidance; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
 │       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features), StartCommandDecision, VpnNotifications
@@ -68,6 +69,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── failclosed-startup.md    2A: protect(), whole-app tunneling, resilient startup
 │   │   ├── fragmentation.md         Global anti-DPI sockopt.fragment overlay (TCP-only; xhttp-over-h3 skipped); ConfigBuilder merge + XrayVpnService session capture
 │   │   ├── hysteria2-support.md      Hysteria2 share links, codec, toShareLink, protocol-aware editor, FinalMask/Salamander, QUIC protect() (device-confirmed)
+│   │   ├── hwid-device-identity.md   Android-Happ parity HWID + device headers on subscription fetch; Privacy settings; pure builders + coordinator chokepoint
 │   │   ├── kill-on-foreground.md
 │   │   ├── localization.md
 │   │   ├── logs-screen.md           File+tail log pipeline, session-stable level, redaction boundary
@@ -404,6 +406,9 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory
   `LogRepository` buffer — never that file. Do not add a code path that reads or shares the file
   directly. See `docs/features/logs-screen.md`.
+- Subscription fetches send Happ-parity `x-hwid` + device headers built by `DeviceIdentityHeaders`,
+  whose `sanitize` strips CR/LF + control chars to prevent header injection; the HWID is a minted
+  random 16-hex value, never the real Android ID. See `docs/features/hwid-device-identity.md`.
 - `.gitignore` already excludes local/dev artifacts (`local.properties`, generated `app/libs/*.aar`,
   geo data assets, and `xray-go/go.sum`).
 - Dependency intake is dynamic in AAR scripts (`go get ...@main`, `go get ...@latest`).
