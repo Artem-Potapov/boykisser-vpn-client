@@ -40,13 +40,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import java.util.Locale
 
 private const val AUTO_KEY = "auto"
 
@@ -54,13 +54,19 @@ class HwidSettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { XTLS_CORE_PROXYTheme { HwidScreen(onBack = { finish() }) } }
+        // Match SubscriptionRefreshCoordinator: device default, not in-app override.
+        val realLanguage = Locale.getDefault().language
+        setContent {
+            XTLS_CORE_PROXYTheme {
+                HwidScreen(onBack = { finish() }, realLanguage = realLanguage)
+            }
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HwidScreen(onBack: () -> Unit) {
+private fun HwidScreen(onBack: () -> Unit, realLanguage: String) {
     val context = LocalContext.current
     val initial = remember { DeviceIdentityRepository.load(context) }
 
@@ -127,7 +133,7 @@ private fun HwidScreen(onBack: () -> Unit) {
         settings = previewSettings,
         realOsVersion = Build.VERSION.RELEASE ?: "",
         realModel = Build.MODEL ?: "",
-        realLanguage = LocalLocale.current.platformLocale.language,
+        realLanguage = realLanguage,
     )
     val previewUa = UserAgentBuilder.build(previewSettings, "XTLSCoreProxy")
     val previewText = if (previewHeaders.isEmpty()) {
