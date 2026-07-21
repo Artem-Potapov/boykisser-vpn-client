@@ -415,6 +415,23 @@ class ConfigSanitizerTest {
     }
 
     @Test
+    fun global_resolver_override_that_changes_the_stored_servers_is_rewritten() {
+        // Stored DNS already matches makeSecureDns's baseline shape (IP-literal proxy, Cloudflare
+        // pair) — but a global resolver override (QUAD9) is active and applyDns swaps the servers to
+        // Quad9 in the final config. DNS_DOH must report the profile's OWN outcome (its stored servers
+        // don't survive the pipeline unchanged), not just baseline-shape compliance.
+        val ipProxySecureDns = dirty.replace(
+            "\"dns\":{\"servers\":[\"8.8.8.8\"]}",
+            "\"dns\":{\"servers\":[\"https://1.1.1.1/dns-query\",\"https://1.0.0.1/dns-query\"]}",
+        )
+        val tuning = TuningSettings(dns = DnsSettings.FROM_CONFIG.copy(resolver = DnsResolver.QUAD9))
+
+        val report = ConfigSanitizer.analyze(ipProxySecureDns, log, tuning)
+
+        assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
+    }
+
+    @Test
     fun config_owned_scoped_secure_resolver_is_preserved_and_compliant() {
         // A config-owned domain-scoped https resolver (NOT a pipeline https+local bootstrap) is kept
         // verbatim by makeSecureDns for an IP-literal proxy → already compliant.

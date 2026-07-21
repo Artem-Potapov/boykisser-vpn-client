@@ -62,10 +62,11 @@ object ConfigSanitizer {
         }
 
         val finalServers = final.optJSONObject("dns")?.optJSONArray("servers")
-        // AlreadyCompliant only when the stored DNS already matches the full secure-enforcement shape
-        // the pipeline requires for THIS proxy — including the complete hostname bootstrap pair. Delegate
-        // that classification to ConfigBuilder rather than re-deriving makeSecureDns here.
-        val dnsCompliant = ConfigBuilder.storedDnsMatchesSecureEnforcement(stored)
+        // AlreadyCompliant only when the stored DNS already equals what the FULL pipeline produces for
+        // THIS profile — the hostname bootstrap pair where needed, AND any global resolver override
+        // (e.g. Quad9) actually in effect. Delegate that classification to ConfigBuilder rather than
+        // re-deriving makeSecureDns/applyDns here.
+        val dnsCompliant = ConfigBuilder.storedDnsSurvivesPipeline(stored, finalServers)
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.DNS_DOH,

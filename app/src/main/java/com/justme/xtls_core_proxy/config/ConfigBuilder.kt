@@ -282,21 +282,24 @@ object ConfigBuilder {
     }
 
     /**
-     * Read-only diagnostic helper (never mutates state): true when [configJson]'s stored `dns.servers`
-     * array already equals the secure-DNS enforcement shape [makeSecureDns] would produce for it — i.e.
-     * the pipeline would change nothing. That includes, for a hostname-addressed proxy, the COMPLETE
-     * scoped `https+local://` bootstrap PAIR; a missing or partial pair is not compliant. Consumed by
-     * `ConfigSanitizer` to decide DNS_DOH AlreadyCompliant vs Rewrote without re-deriving makeSecureDns's
-     * rules. Returns false for non-JSON input or an absent/empty stored server list (the pipeline injects
-     * a resolver, so that is a rewrite).
+     * Read-only diagnostic helper (never mutates state): true when [storedConfigJson]'s stored
+     * `dns.servers` array already equals [finalServers] — the array the FULL runtime pipeline actually
+     * produces for this profile (`makeSecureDns`'s security shape, THEN every tuning overlay, including
+     * a global DNS resolver override). Comparing against the full pipeline output, not just
+     * `makeSecureDns`'s baseline shape, is required: a stored resolver pair can already satisfy
+     * `makeSecureDns` (DoH-only, complete hostname bootstrap pair where needed) yet still be swapped
+     * out wholesale by a global resolver override (e.g. Quad9) later in the pipeline — that swap is a
+     * real rewrite of THIS profile's own DNS and must not read as AlreadyCompliant. Consumed by
+     * `ConfigSanitizer`, which already computes the final config once and passes its `dns.servers` array
+     * in. Returns false for non-JSON input or an absent/empty stored server list (the pipeline injects a
+     * resolver, so that is a rewrite).
      */
-    internal fun storedDnsMatchesSecureEnforcement(configJson: String): Boolean {
-        val original = runCatching { JSONObject(configJson) }.getOrNull() ?: return false
+    internal fun storedDnsSurvivesPipeline(storedConfigJson: String, finalServers: JSONArray?): Boolean {
+        val original = runCatching { JSONObject(storedConfigJson) }.getOrNull() ?: return false
         val storedServers = original.optJSONObject("dns")?.optJSONArray("servers") ?: return false
         if (storedServers.length() == 0) return false
-        val secured = runCatching { JSONObject(makeSecureDns(configJson)) }.getOrNull() ?: return false
-        val securedServers = secured.optJSONObject("dns")?.optJSONArray("servers") ?: return false
-        return dnsServerListsEqual(storedServers, securedServers)
+        finalServers ?: return false
+        return dnsServerListsEqual(storedServers, finalServers)
     }
 
     private fun dnsServerListsEqual(a: JSONArray, b: JSONArray): Boolean {
