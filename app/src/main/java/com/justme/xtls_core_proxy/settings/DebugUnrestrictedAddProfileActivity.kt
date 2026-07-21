@@ -24,7 +24,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -36,6 +36,8 @@ import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * DEBUG-only "unrestricted" profile adder. Stores whatever is typed verbatim (via
@@ -58,11 +60,12 @@ class DebugUnrestrictedAddProfileActivity : LocalizedComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DebugAddScreen(onBack: () -> Unit, onAdd: (String, String) -> Unit) {
+private fun DebugAddScreen(onBack: () -> Unit, onAdd: (String, String) -> Job) {
     var name by rememberSaveable { mutableStateOf("DEBUG raw") }
     var config by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     val doneMsg = stringResource(R.string.settings_debug_add_done) // captured in composable scope for the callback
+    val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -100,9 +103,11 @@ private fun DebugAddScreen(onBack: () -> Unit, onAdd: (String, String) -> Unit) 
             )
             Button(
                 onClick = {
-                    onAdd(name, config)
-                    Toast.makeText(context, doneMsg, Toast.LENGTH_SHORT).show()
-                    onBack()
+                    scope.launch {
+                        onAdd(name, config).join()
+                        Toast.makeText(context, doneMsg, Toast.LENGTH_SHORT).show()
+                        onBack()
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
