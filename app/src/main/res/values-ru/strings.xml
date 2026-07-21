@@ -98,6 +98,14 @@
     <string name="settings_ph_ping">Настройки пинг-теста</string>
     <string name="settings_ph_check_update">Проверить обновления</string>
 
+    <!-- Экран добавления профиля без проверок (только отладка) -->
+    <string name="settings_debug_add_title">Отладка: добавить без проверок</string>
+    <string name="settings_debug_add_subtitle">Вставить профиль как есть, без проверок (только отладка)</string>
+    <string name="settings_debug_add_name_label">Имя профиля</string>
+    <string name="settings_debug_add_config_label">Сырой конфиг (сохраняется дословно)</string>
+    <string name="settings_debug_add_button">Добавить как есть + активировать</string>
+    <string name="settings_debug_add_done">Добавлено и активировано</string>
+
     <!-- Экран санитизации конфига -->
     <string name="sanitization_title">Санитизация конфига</string>
     <string name="settings_sanitization_subtitle">Как переписывается активный профиль</string>

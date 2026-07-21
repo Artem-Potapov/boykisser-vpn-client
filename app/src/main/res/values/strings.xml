@@ -97,6 +97,14 @@
     <string name="settings_ph_ping">Ping test settings</string>
     <string name="settings_ph_check_update">Check for updates</string>
 
+    <!-- Debug-only unrestricted add-profile screen -->
+    <string name="settings_debug_add_title">Debug: unrestricted add</string>
+    <string name="settings_debug_add_subtitle">Insert a profile verbatim, no validation (debug only)</string>
+    <string name="settings_debug_add_name_label">Profile name</string>
+    <string name="settings_debug_add_config_label">Raw config (stored byte-for-byte)</string>
+    <string name="settings_debug_add_button">Add raw + activate</string>
+    <string name="settings_debug_add_done">Added and activated</string>
+
     <!-- Config sanitization screen -->
     <string name="sanitization_title">Config sanitization</string>
     <string name="settings_sanitization_subtitle">See how your active profile is rewritten</string>

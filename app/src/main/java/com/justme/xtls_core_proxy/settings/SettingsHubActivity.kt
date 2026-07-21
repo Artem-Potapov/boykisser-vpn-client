@@ -189,6 +189,11 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 onClick = { open(AboutActivity::class.java) }
             )
             if (BuildConfig.DEBUG) SettingsRow(
+                title = stringResource(R.string.settings_debug_add_title),
+                subtitle = stringResource(R.string.settings_debug_add_subtitle),
+                onClick = { open(DebugUnrestrictedAddProfileActivity::class.java) }
+            )
+            if (BuildConfig.DEBUG) SettingsRow(
                 title = stringResource(R.string.settings_ph_check_update), enabled = false, badge = badge
             )
         }
