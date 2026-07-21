@@ -513,4 +513,51 @@
     <string name="about_purpose">Бесплатный VPN-клиент для свободного доступа в Интернет.</string>
     <string name="about_github">Исходный код (GitHub)</string>
 	<string name="about_license">Лицензия GNU AGPLv3. Использует Xray-core (MPL-2.0).</string>
+
+    <!-- HWID / идентификатор устройства: ошибки загрузки -->
+    <string name="subs_error_hwid_limit">Достигнут лимит устройств — эта подписка уже используется на максимальном числе устройств. Освободите слот на панели или сбросьте идентификатор устройства в «Настройки → Конфиденциальность».</string>
+    <string name="subs_error_hwid_required">Эта подписка требует идентификатор устройства (HWID). Включите его в «Настройки → Конфиденциальность».</string>
+    <string name="subs_error_forbidden_try_happ_ua">%1$s\nНекоторые панели отвечают только определённым приложениям — попробуйте задать User-Agent как у Happ в «Настройки → Конфиденциальность».</string>
+    <string name="subs_error_no_servers_try_happ_ua">Серверы не получены. Некоторые панели отвечают только определённым приложениям — попробуйте задать User-Agent как у Happ в «Настройки → Конфиденциальность».</string>
+
+    <!-- HWID / идентификатор устройства: экран настроек -->
+    <string name="settings_section_privacy">Конфиденциальность</string>
+    <string name="settings_hwid_title">Идентификатор устройства (HWID)</string>
+    <string name="settings_hwid_subtitle">ID устройства и заголовки, отправляемые панелям подписок</string>
+    <string name="hwid_title">Идентификатор устройства</string>
+    <string name="hwid_cd_back">Назад</string>
+    <string name="hwid_send_label">Отправлять ID устройства (HWID)</string>
+    <string name="hwid_your_id_label">Ваш HWID</string>
+    <string name="hwid_copy">Копировать</string>
+    <string name="hwid_reset">Сбросить</string>
+    <string name="hwid_copied">HWID скопирован</string>
+    <string name="hwid_reset_confirm_title">Сбросить ID устройства?</string>
+    <string name="hwid_reset_confirm_body">Новый ID освобождает старый слот на панели, но занимает новый и заново формирует Авто-идентификацию. Продолжить?</string>
+    <string name="hwid_reset_confirm_ok">Сбросить</string>
+    <string name="hwid_reset_confirm_cancel">Отмена</string>
+    <string name="hwid_identity_label">Идентификация</string>
+    <string name="hwid_identity_real">Реальное устройство</string>
+    <string name="hwid_identity_android">Android</string>
+    <string name="hwid_identity_iphone">iPhone</string>
+    <string name="hwid_identity_none">Нет (только ID)</string>
+    <string name="hwid_auto">Авто</string>
+    <string name="hwid_android_version_label">Версия Android</string>
+    <string name="hwid_android_model_label">Модель</string>
+    <string name="hwid_ios_version_label">Версия iOS</string>
+    <string name="hwid_ios_model_label">Модель</string>
+    <string name="hwid_model_pixel">Pixel</string>
+    <string name="hwid_model_samsung">Samsung</string>
+    <string name="hwid_model_xiaomi">Xiaomi</string>
+    <string name="hwid_model_huawei">Huawei</string>
+    <string name="hwid_preview_label">Отправляемые заголовки</string>
+    <string name="hwid_preview_none">Ничего не отправляется (HWID выключен)</string>
+    <string name="hwid_custom_label">Ручная настройка</string>
+    <string name="hwid_custom_os">ОС (x-device-os)</string>
+    <string name="hwid_custom_os_version">Версия ОС (x-ver-os)</string>
+    <string name="hwid_custom_model">Модель (x-device-model)</string>
+    <string name="hwid_custom_locale">Локаль (x-device-locale)</string>
+    <string name="hwid_custom_hint">Оставьте поле пустым, чтобы не отправлять этот заголовок.</string>
+    <string name="hwid_ua_label">User-Agent</string>
+    <string name="hwid_ua_happ_label">Использовать User-Agent Happ</string>
+    <string name="hwid_ua_preview_label">Отправляемый User-Agent</string>
 </resources>

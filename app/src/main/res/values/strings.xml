@@ -517,4 +517,51 @@
     <string name="about_purpose">A free VPN client to keep the Internet open.</string>
     <string name="about_github">Source code (GitHub)</string>
 	<string name="about_license">Licensed under GNU AGPLv3. Uses Xray-core (MPL-2.0).</string>
+
+    <!-- HWID / device identity: fetch error messages -->
+    <string name="subs_error_hwid_limit">Device limit reached — this subscription is already in use on the maximum number of devices. Free a slot on the panel or reset your device ID in Settings → Privacy.</string>
+    <string name="subs_error_hwid_required">This subscription requires a device ID (HWID). Enable it in Settings → Privacy.</string>
+    <string name="subs_error_forbidden_try_happ_ua">%1$s\nSome panels only respond to specific apps — try setting the User-Agent to Happ in Settings → Privacy.</string>
+    <string name="subs_error_no_servers_try_happ_ua">No servers received. Some panels only respond to specific apps — try setting the User-Agent to Happ in Settings → Privacy.</string>
+
+    <!-- HWID / device identity: settings screen -->
+    <string name="settings_section_privacy">Privacy</string>
+    <string name="settings_hwid_title">Device identity (HWID)</string>
+    <string name="settings_hwid_subtitle">Device ID and headers sent to subscription panels</string>
+    <string name="hwid_title">Device identity</string>
+    <string name="hwid_cd_back">Back</string>
+    <string name="hwid_send_label">Send device ID (HWID)</string>
+    <string name="hwid_your_id_label">Your HWID</string>
+    <string name="hwid_copy">Copy</string>
+    <string name="hwid_reset">Reset</string>
+    <string name="hwid_copied">HWID copied</string>
+    <string name="hwid_reset_confirm_title">Reset device ID?</string>
+    <string name="hwid_reset_confirm_body">A new device ID frees the old slot on the panel but consumes a new one, and re-rolls your Auto identity. Continue?</string>
+    <string name="hwid_reset_confirm_ok">Reset</string>
+    <string name="hwid_reset_confirm_cancel">Cancel</string>
+    <string name="hwid_identity_label">Identity</string>
+    <string name="hwid_identity_real">Real device</string>
+    <string name="hwid_identity_android">Android</string>
+    <string name="hwid_identity_iphone">iPhone</string>
+    <string name="hwid_identity_none">None (ID only)</string>
+    <string name="hwid_auto">Auto</string>
+    <string name="hwid_android_version_label">Android version</string>
+    <string name="hwid_android_model_label">Model</string>
+    <string name="hwid_ios_version_label">iOS version</string>
+    <string name="hwid_ios_model_label">Model</string>
+    <string name="hwid_model_pixel">Pixel</string>
+    <string name="hwid_model_samsung">Samsung</string>
+    <string name="hwid_model_xiaomi">Xiaomi</string>
+    <string name="hwid_model_huawei">Huawei</string>
+    <string name="hwid_preview_label">Headers sent</string>
+    <string name="hwid_preview_none">Nothing sent (HWID off)</string>
+    <string name="hwid_custom_label">Custom override</string>
+    <string name="hwid_custom_os">OS (x-device-os)</string>
+    <string name="hwid_custom_os_version">OS version (x-ver-os)</string>
+    <string name="hwid_custom_model">Model (x-device-model)</string>
+    <string name="hwid_custom_locale">Locale (x-device-locale)</string>
+    <string name="hwid_custom_hint">Leave a field blank to omit that header.</string>
+    <string name="hwid_ua_label">User-Agent</string>
+    <string name="hwid_ua_happ_label">Use Happ User-Agent</string>
+    <string name="hwid_ua_preview_label">User-Agent sent</string>
 </resources>
