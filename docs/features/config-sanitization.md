@@ -18,11 +18,14 @@ This is not a JSON diff. Findings describe policy:
 - `Rewrote` — a non-canonical stored value was normalized (currently inbounds or DNS).
 - `AlreadyCompliant` — the stored value already matches what the pipeline would produce. For inbounds
   this means the stored inbound protocol list is exactly one `tun`. For DNS it means the stored
-  `dns.servers` list positionally equals what the real `makeSecureDns` emits for this exact config
-  (`ConfigBuilder.storedDnsMatchesSecureEnforcement`) — so a hostname-addressed proxy must already
-  carry the **complete** `https+local://` bootstrap pair; a missing or partial pair reports `Rewrote`,
-  not `AlreadyCompliant`. The DNS comparison is by address + `domains` scope, not by every server field
-  (see the precision boundaries below) or by canonical JSON equality.
+  `dns.servers` list positionally equals what the FULL runtime pipeline emits for this exact config —
+  `makeSecureDns`'s security shape, **then** every tuning overlay including a global DNS resolver
+  override (`ConfigBuilder.storedDnsSurvivesPipeline`). So a hostname-addressed proxy must already
+  carry the **complete** `https+local://` bootstrap pair, **and** a global resolver override (e.g.
+  Quad9) that swaps the stored servers for a different preset also reports `Rewrote`, not
+  `AlreadyCompliant` — the status reflects this profile's actual end-to-end outcome, not just
+  baseline-shape compliance. The DNS comparison is by address + `domains` scope, not by every server
+  field (see the precision boundaries below) or by canonical JSON equality.
 - `Added` — the pipeline inserted a missing security object or rule the stored config lacked (e.g. the
   forced app-private `log` object, or the port-53 → `dns-out` route when the stored config had none).
 - `Applied` — an unconditional security rule or effective global setting is present and enforced, as
@@ -94,18 +97,21 @@ The screen never displays the full runtime JSON.
 
 ### Diagnostic-precision boundaries
 
-Two deliberate imprecisions affect only the *label*, never runtime enforcement or credential safety:
+One deliberate imprecision affects only the *label*, never runtime enforcement or credential safety:
 
-- **DNS_DOH status vs. detail split.** The `AlreadyCompliant`/`Rewrote` *status* is decided against the
-  `makeSecureDns` security shape, while the displayed resolver *detail* reflects the post-`applyDns`
-  effective resolver (which a global resolver overlay may have changed). A stored-compliant config can
-  therefore read `AlreadyCompliant` beside an overlay resolver label it never itself carried; the
-  separate DNS_RESOLVER finding explains the overlay. No leak.
-- **DNS entry comparison granularity.** `storedDnsMatchesSecureEnforcement` compares server entries by
+- **DNS entry comparison granularity.** `storedDnsSurvivesPipeline` compares server entries by
   address + `domains` scope only. A stored bootstrap-position entry carrying extra fields (e.g.
   `expectIPs`) that `makeSecureDns` would drop at runtime still compares equal, so `AlreadyCompliant`
   can be marginally optimistic. The effective runtime shape is still the enforced secure shape on every
   path — this is label precision, not a safety gap.
+
+(Formerly a second boundary existed here: DNS_DOH's `AlreadyCompliant`/`Rewrote` *status* was decided
+only against the `makeSecureDns` baseline shape, separately from the *detail* text, which already
+reflected the post-`applyDns` effective resolver. That split let a profile read `AlreadyCompliant` even
+when a global resolver override — e.g. Quad9 — had silently replaced its stored DoH servers, which QA
+flagged as misleading (§5 SA5). `storedDnsSurvivesPipeline` now decides status against the actual final
+`dns.servers` array, the same source the detail text already used, so status and detail agree again and
+this is no longer a documented boundary.)
 
 ## Components
 
@@ -117,14 +123,17 @@ Two deliberate imprecisions affect only the *label*, never runtime enforcement o
 - `settings/SanitizationPresentation.kt` — pure grouping, title mapping, warning-chip decision, and UI
   state resolution.
 - `config/ConfigBuilder.kt` — source of truth for normalization and the complete overlay chain; its
-  read-only `internal storedDnsMatchesSecureEnforcement(configJson)` is the DNS-compliance classifier
-  the sanitizer consumes (it runs the real `makeSecureDns` and structurally compares the two server
-  lists) instead of re-deriving DoH rules. **Gated file** — changes need maintainer review.
+  read-only `internal storedDnsSurvivesPipeline(storedConfigJson, finalServers)` is the DNS-compliance
+  classifier the sanitizer consumes (it structurally compares the stored server list against the array
+  `ConfigSanitizer` already computed by running the FULL pipeline — `makeSecureDns` plus every tuning
+  overlay, including a global resolver override) instead of re-deriving DoH rules. **Gated file** —
+  changes need maintainer review.
 
 ## Testing and manual gate
 
 `ConfigSanitizerTest` covers rewritten and already-compliant input (including hostname-proxy bootstrap
-pair present/partial/absent), malformed failure, omitted disabled settings, default always-visible
+pair present/partial/absent, and a global resolver override — e.g. Quad9 — silently replacing a
+stored-compliant resolver pair), malformed failure, omitted disabled settings, default always-visible
 values, effective DNS/routing/IPv6 summaries, `Added` vs `Applied` from final JSON, credential-safety
 regressions (`pbk`/`sid`/user-info/query values absent from both failure and success output), and
 `NotApplicable` cases. `SanitizationPresentationTest` covers grouping and loading/empty/failure/ready
