@@ -136,6 +136,17 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * DEBUG-only unrestricted insert (see DebugUnrestrictedAddProfileActivity): stores [raw] verbatim
+     * — NO toProfileStorageConfig, NO makeSecureDns, NO validation — then activates the new row via the
+     * sanctioned ActiveProfileRepository writer so Config Sanitization / Connect target it. Lets a
+     * maintainer reproduce arbitrary (incl. malformed) profile state the fail-closed ingest gates reject.
+     */
+    fun addRawProfile(name: String, raw: String): Job = viewModelScope.launch {
+        val id = dao.insert(Profile(name = name, config = raw, sanitizedDns = false))
+        ActiveProfileRepository.setActiveProfileId(getApplication(), id)
+    }
+
     fun confirmDnsFixAndAdd() {
         val warning = _dnsWarning.value ?: return
         viewModelScope.launch {
