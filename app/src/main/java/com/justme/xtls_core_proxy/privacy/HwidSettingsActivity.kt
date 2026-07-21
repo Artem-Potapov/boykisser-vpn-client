@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.justme.xtls_core_proxy.BuildConfig
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.i18n.LocalizedComponentActivity
 import com.justme.xtls_core_proxy.ui.components.DropdownField
@@ -135,7 +136,9 @@ private fun HwidScreen(onBack: () -> Unit, realLanguage: String) {
         realModel = Build.MODEL ?: "",
         realLanguage = realLanguage,
     )
-    val previewUa = UserAgentBuilder.build(previewSettings, "XTLSCoreProxy")
+    // Match the real fetch default (state/VpnViewModel.defaultUserAgent) so the DEFAULT-mode
+    // preview shows the actual wire UA, not a version-less understatement.
+    val previewUa = UserAgentBuilder.build(previewSettings, "XTLSCoreProxy/${BuildConfig.VERSION_NAME}")
     val previewText = if (previewHeaders.isEmpty()) {
         stringResource(R.string.hwid_preview_none)
     } else {
