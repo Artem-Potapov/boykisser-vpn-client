@@ -40,6 +40,27 @@ data class ProfilesView(val manual: List<Profile>, val groups: List<SubGroup>) {
 fun shouldAutoPing(autoOnOpen: Boolean, alreadyConsumed: Boolean): Boolean =
     autoOnOpen && !alreadyConsumed
 
+/**
+ * The set of servers the launch-time auto-ping probes: every stored profile, taken straight from the
+ * single flat `profiles` query (`ProfileDao.getAll` returns manual and subscription-imported rows
+ * alike, in one atomic emission), ordered to match the list UI — manual ("My profiles") servers
+ * first, then subscription servers grouped by subscription, id-ascending within each partition.
+ *
+ * It deliberately does NOT rebuild the set from the subscription-*grouped* view. That view assembles
+ * its groups from the separate `subscriptions` Room query, which loads on its own schedule; keying
+ * the once-per-launch auto-ping on that union raced the subscriptions load and, ~30% of launches,
+ * spent the [AutoPingLatch] on a manual-only partial set — silently skipping every subscription
+ * server. Ordering here is likewise derived only from per-row fields (`subscriptionId`, `id`), NOT
+ * from the `subscriptions` list, so the probe order can't flake on whether that list has loaded yet;
+ * because subscription rows import as contiguous id blocks and subscription ids ascend with creation
+ * time, this reproduces the visual top-to-bottom order. The `subscriptions` list is accepted only to
+ * make explicit at the call site that auto-ping is intentionally independent of it; a CASCADE foreign
+ * key guarantees no orphaned profiles, so the flat set already equals the rendered union.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun autoPingServers(profiles: List<Profile>, subscriptions: List<Subscription>): List<Profile> =
+    profiles.sortedWith(compareBy({ it.subscriptionId != null }, { it.subscriptionId }, { it.id }))
+
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.get(application)
@@ -60,6 +81,17 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 groups = subs.map { sub -> SubGroup(sub, bySubId[sub.id].orEmpty()) }
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProfilesView.EMPTY)
+
+    /**
+     * Server set for the launch-time auto-ping, routed through [autoPingServers] so it is sourced
+     * from the atomic flat `profiles` query and never races the subscription groups (which the
+     * grouped [groupedProfiles] view assembles from the separately-loaded `subscriptions` query).
+     * Keying auto-ping on this rather than the grouped union fixes the ~30% "subscriptions skipped"
+     * flake. See [autoPingServers].
+     */
+    val autoPingProfiles: StateFlow<List<Profile>> =
+        combine(profiles, subscriptions, ::autoPingServers)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val activeProfileId: StateFlow<Long?> = ActiveProfileRepository.activeProfileIdFlow
         .stateIn(

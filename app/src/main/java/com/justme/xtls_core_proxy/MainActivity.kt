@@ -465,12 +465,17 @@ private fun MainScreen(
     // (NOT the Activity-scoped ViewModel), so it survives an Activity/ViewModel relaunch within the
     // same process and re-arms only on process death — once per app launch. AutoPingLatch.consume()
     // is atomic, so two overlapping consumers can't both fire.
-    val allProfiles = view.manual + view.groups.flatMap { it.profiles }
-    LaunchedEffect(allProfiles.isNotEmpty()) {
-        if (allProfiles.isNotEmpty() &&
+    //
+    // Source is viewModel.autoPingProfiles (the flat `profiles` query), NOT the subscription-grouped
+    // `view`: the grouped union only folds subscription servers in after the *separate* subscriptions
+    // query loads, which raced this trigger and skipped subscriptions ~30% of launches. See
+    // VpnViewModel.autoPingServers.
+    val autoPingCandidates by viewModel.autoPingProfiles.collectAsState()
+    LaunchedEffect(autoPingCandidates.isNotEmpty()) {
+        if (autoPingCandidates.isNotEmpty() &&
             shouldAutoPing(PingPreferences.load(mainContext).autoOnOpen, AutoPingLatch.isConsumed)
         ) {
-            if (AutoPingLatch.consume()) viewModel.pingTestGroup(allProfiles)
+            if (AutoPingLatch.consume()) viewModel.pingTestGroup(autoPingCandidates)
         }
     }
     val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)

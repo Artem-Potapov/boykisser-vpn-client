@@ -267,9 +267,10 @@ Ping probes are deliberately outside the connection snapshot. `VpnViewModel` loa
 cross-run `inFlight` de-dup set and its fixed native-slot ceiling (`= PingPreferences.CONCURRENCY_MAX`)
 persist across concurrency changes; `probeWithBackstop` bounds orphaned JNI probes by holding a native
 slot until the uninterruptible call returns, and the Kotlin wall-clock backstop (derived from the Go
-timeout) abandons only the *await*, not the slot. Optional auto-ping waits for the Room-backed profile
-union and is consumed once per app launch via the process-scoped `AutoPingLatch` (an `object` whose
-atomic consumed bit re-arms only on process death). See
+timeout) abandons only the *await*, not the slot. Optional auto-ping probes the full server set from
+the atomic flat `profiles` query (`VpnViewModel.autoPingProfiles`, **not** the subscription-grouped
+view, which raced the separate `subscriptions` load) and is consumed once per app launch via the
+process-scoped `AutoPingLatch` (an `object` whose atomic consumed bit re-arms only on process death). See
 [`docs/features/ping-test.md`](docs/features/ping-test.md).
 
 Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
@@ -463,8 +464,11 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   `probeWithBackstop` releases the native slot only in the child's `finally` after the JNI call
   returns (a saturated ceiling returns `Unavailable` promptly). Auto-ping is gated by the
   process-scoped `state/AutoPingLatch.kt` (`consume()` = atomic compare-and-set, once per app launch),
-  while `MainActivity` waits for the manual+grouped profile union before consuming it. Extend the
-  coordinator/latch rather than reintroducing a per-run tester or a ViewModel-scoped consumed bit.
+  while `MainActivity` triggers it off `VpnViewModel.autoPingProfiles` — the full server set from the
+  atomic flat `profiles` query (top-level `autoPingServers`), **not** the subscription-grouped view.
+  Sourcing from the grouped union raced the separately-loaded `subscriptions` query and skipped every
+  subscription server ~30% of launches; do not reintroduce that dependency. Extend the coordinator/latch
+  rather than reintroducing a per-run tester or a ViewModel-scoped consumed bit.
 - Profile config extension points:
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and

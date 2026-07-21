@@ -132,14 +132,23 @@ housekeeping rather than user-visible behavior.
   synthetic expandable group. It has no DB row; the expand-state key is the string literal `"manual"`.
   The group has no refresh action and no "last seen" subtitle, but it does have the speedometer and is
   testable exactly like a real subscription group.
-- **Auto-ping on open:** after the asynchronous profile lists become non-empty, `MainActivity` builds
-  the same manual + subscription-profile union the render loop uses. If the fresh preference enables
-  auto-ping and the process-scoped `AutoPingLatch` is unconsumed, `AutoPingLatch.consume()` (an atomic
-  compare-and-set) claims the latch and only the winner probes the union. The effect is keyed on list
-  non-emptiness so it does not race the initial Room load. Because the latch is a top-level `object`
-  (JVM process lifetime), it runs **once per app launch**: Activity recreation (rotation/theme), a new
-  `VpnViewModel`, ordinary navigation, resume, and recomposition all observe the consumed bit and do
-  not repeat it. Only process death re-arms it.
+- **Auto-ping on open:** once the profile set loads, `MainActivity` probes
+  `VpnViewModel.autoPingProfiles` — the full server set taken straight from the single flat `profiles`
+  Room query (`autoPingServers`), **not** the subscription-grouped render union. If the fresh
+  preference enables auto-ping and the process-scoped `AutoPingLatch` is unconsumed,
+  `AutoPingLatch.consume()` (an atomic compare-and-set) claims the latch and only the winner probes
+  the set. **Sourcing from the flat query is load-bearing:** the grouped view folds subscription
+  servers in only after the *separate* `subscriptions` Room query loads, so an auto-ping keyed on that
+  union raced the second query and skipped every subscription server ~30% of launches (a
+  nondeterministic "sometimes works" flake). The flat `profiles` query is atomic — it already carries
+  manual and subscription-imported rows in one emission — and, via the `Profile` CASCADE foreign key,
+  is free of orphans, so it equals the rendered union with no dependency on the subscriptions query.
+  `autoPingServers` orders the set to match the list UI — manual ("My profiles") servers first, then
+  subscription servers — using only per-row fields (`subscriptionId`, `id`), never the `subscriptions`
+  list, so the probe/spinner order can't flake on that list's load timing either.
+  Because the latch is a top-level `object` (JVM process lifetime), it runs **once per app launch**:
+  Activity recreation (rotation/theme), a new `VpnViewModel`, ordinary navigation, resume, and
+  recomposition all observe the consumed bit and do not repeat it. Only process death re-arms it.
 
 ## Preferences and bounds
 
@@ -170,9 +179,9 @@ caller migrated to `backstopFor`.
 | [`state/PingCoordinator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingCoordinator.kt) | Single stable admission owner: `runGroup(ids, concurrency, onUpdate, probe)` with a `Mutex`-guarded cross-run `inFlight` de-dup set + a per-run local `Semaphore`; `probeWithBackstop(...)` bounds orphaned JNI probes with a fixed `nativeSlots` ceiling (`= PingPreferences.CONCURRENCY_MAX`) released only in the child's `finally` after the native call returns. `CancellationException` propagates; other `Throwable` → `Unavailable`. |
 | [`state/AutoPingLatch.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/AutoPingLatch.kt) | Process-scoped once-per-launch latch (`object` + `AtomicBoolean`): `consume()` = atomic compare-and-set, `isConsumed`, non-persisted `resetForTest()`. Re-arms only on process death. |
 | [`state/PingPreferences.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/PingPreferences.kt) | `xray_prefs` persistence, `http://` target validation, timeout/concurrency bounds, and defaults tied to `PingTester`. |
-| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `pingStates` (ephemeral); fresh-at-probe preferences; one stable `pingCoordinator` `val`; `pingTestGroup`/`pingTestProfile` → `runGroup`; `probeProfile(...)` → `probeWithBackstop` with the derived backstop. Auto-ping is gated by the process-scoped `AutoPingLatch`, not a ViewModel field. |
+| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `pingStates` (ephemeral); fresh-at-probe preferences; one stable `pingCoordinator` `val`; `pingTestGroup`/`pingTestProfile` → `runGroup`; `probeProfile(...)` → `probeWithBackstop` with the derived backstop. `autoPingProfiles` (the race-free launch-time server set, via the top-level `autoPingServers`) sources auto-ping from the flat `profiles` query, not the subscription-grouped view. Auto-ping is gated by the process-scoped `AutoPingLatch`, not a ViewModel field. |
 | [`config/ConfigBuilder.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ConfigBuilder.kt) | `toPingTestConfig(stored: String): String` — calls `buildRuntimeConfig` (DoH, ForceIP, outbounds preserved) then removes the `inbounds` array and `stripGeoRoutingRules` (drops `geoip:`/`geosite:`/`ext:` rules that fail in the geo-asset-less throwaway instance; keeps port-53 → `dns-out` and other non-geo rules). |
-| [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) | Owns `VpnViewModel` through Activity `viewModels()`, renders speedometer/results, wires manual probes, and triggers auto-ping after manual + grouped profiles load. |
+| [`MainActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/MainActivity.kt) | Owns `VpnViewModel` through Activity `viewModels()`, renders speedometer/results, wires manual probes, and triggers auto-ping off `viewModel.autoPingProfiles` (the flat profile query — race-free vs. the subscription groups) once that set becomes non-empty. |
 | [`ProfileActionsDialog.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/ProfileActionsDialog.kt) | Long-press island menu (`BasicAlertDialog`) with a "Ping test" row (`ic_speedometer`); see [profile-actions-menu.md](profile-actions-menu.md). |
 | [`settings/PingTestSettingsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/PingTestSettingsActivity.kt) | Target, timeout, concurrency, and auto-on-open editor with exact validation bounds. |
 | [`bridge/XrayBridge.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt) | `measureLatency(configJson, targetUrl, timeoutMs: Long): Result<Long>` — reflects `MeasureLatency`/`measureLatency` (3 params); handles gomobile's int/long type variance for the timeout arg; parses the JSON result; logs failures to `LogRepository`. |
@@ -211,6 +220,10 @@ build does not prove the release path.
 - **`PingTesterBackstopTest`** (JVM): `backstopFor` is the configured timeout + `BACKSTOP_MARGIN_MS`.
 - **`AutoPingLatchTest`** (JVM): `consume()` wins exactly once; a fresh facade still sees `isConsumed`;
   `resetForTest()` persists nothing.
+- **`AutoPingServersTest`** (JVM): `autoPingServers` includes subscription-imported servers even when
+  the `subscriptions` query has not loaded yet — the regression guard for the ~30% "subscriptions
+  skipped" launch race (QA §4 P10) — and orders manual ("My profiles") servers before subscription
+  servers to match the list UI (independent of the subscriptions query).
 - **`PingPreferencesTest` / `AutoPingTest` / `PingTargetValidationTest`** (JVM): defaults match live
   constants; persistence keys round-trip; invalid target fallback; timeout `1_000..30_000` and
   concurrency `1..5` clamp on load/save; the `shouldAutoPing` truth table (enabled + unconsumed → run);
