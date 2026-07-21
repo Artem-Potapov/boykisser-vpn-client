@@ -49,13 +49,6 @@ object SpoofIdentities {
         IosId("26.1", "iPhone 17"),
     )
 
-    private val ANDROID_FAMILY_DEFAULT = mapOf(
-        "pixel" to "Pixel 8 Pro",
-        "samsung" to "SM-S928B",
-        "xiaomi" to "Redmi Note 13",
-        "huawei" to "ELS-NX9",
-    )
-
     /** Deterministic 64-bit hash of the HWID string (stable across runs/platforms). */
     fun seed(hwid: String): Long {
         var h = 1125899906842597L // large prime
@@ -64,25 +57,43 @@ object SpoofIdentities {
     }
 
     fun resolveAndroid(hwid: String, versionPin: String?, modelFamilyPin: String?): DeviceSpoof {
-        var pool = ANDROID_TABLE
-        if (versionPin != null) pool = pool.filter { it.verOs == versionPin }
-        if (modelFamilyPin != null) pool = pool.filter { it.family == modelFamilyPin }
-        val entry = pool.getOrNull(pick(hwid, pool.size)) ?: AndroidId(
-            verOs = versionPin ?: "14",
-            model = ANDROID_FAMILY_DEFAULT[modelFamilyPin] ?: "Pixel 8 Pro",
-            family = modelFamilyPin ?: "pixel",
-        )
+        val both = ANDROID_TABLE
+            .filter { versionPin == null || it.verOs == versionPin }
+            .filter { modelFamilyPin == null || it.family == modelFamilyPin }
+        // Model-axis-wins precedence: when the version and family pins contradict (no row
+        // ships both), keep the family choice and relax the impossible version to a real
+        // shipped one, rather than emitting an implausible pair (e.g. "Android 9 Pixel 8 Pro").
+        // Chain always terminates on the full table, so the pool is never empty.
+        val pool = when {
+            both.isNotEmpty() -> both
+            modelFamilyPin != null -> ANDROID_TABLE.filter { it.family == modelFamilyPin }
+                .ifEmpty { ANDROID_TABLE.filter { versionPin == null || it.verOs == versionPin } }
+                .ifEmpty { ANDROID_TABLE }
+            versionPin != null -> ANDROID_TABLE.filter { it.verOs == versionPin }
+                .ifEmpty { ANDROID_TABLE }
+            else -> ANDROID_TABLE
+        }
+        val entry = pool[pick(hwid, pool.size)]
         return DeviceSpoof(os = "Android", verOs = entry.verOs, model = entry.model)
     }
 
     fun resolveIphone(hwid: String, versionPin: String?, modelPin: String?): DeviceSpoof {
-        var pool = IOS_TABLE
-        if (versionPin != null) pool = pool.filter { it.verOs == versionPin }
-        if (modelPin != null) pool = pool.filter { it.model == modelPin }
-        val entry = pool.getOrNull(pick(hwid, pool.size)) ?: IosId(
-            verOs = versionPin ?: "18.5",
-            model = modelPin ?: "iPhone 15 Pro",
-        )
+        val both = IOS_TABLE
+            .filter { versionPin == null || it.verOs == versionPin }
+            .filter { modelPin == null || it.model == modelPin }
+        // Model-axis-wins precedence (see resolveAndroid): iOS pins an exact model, so an
+        // impossible (version, model) pair keeps the model and relaxes to its real shipped
+        // version. Chain always terminates on the full table, so the pool is never empty.
+        val pool = when {
+            both.isNotEmpty() -> both
+            modelPin != null -> IOS_TABLE.filter { it.model == modelPin }
+                .ifEmpty { IOS_TABLE.filter { versionPin == null || it.verOs == versionPin } }
+                .ifEmpty { IOS_TABLE }
+            versionPin != null -> IOS_TABLE.filter { it.verOs == versionPin }
+                .ifEmpty { IOS_TABLE }
+            else -> IOS_TABLE
+        }
+        val entry = pool[pick(hwid, pool.size)]
         return DeviceSpoof(os = "iOS", verOs = entry.verOs, model = entry.model)
     }
 

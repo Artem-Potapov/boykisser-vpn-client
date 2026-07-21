@@ -2,10 +2,13 @@ package com.justme.xtls_core_proxy.privacy
 
 /**
  * Builds the effective default User-Agent. `DEFAULT` passes through the app's own UA; `HAPP_LIKE`
- * emits `Happ/<HAPP_VERSION>/<os>/<build>` where `<os>` mirrors the identity's `x-device-os` (so
- * UA and headers can never disagree) and `<build>` is the unsigned-decimal HWID hash (stable per
- * install, re-rolls on HWID reset). Independent of `sendHwid`: a panel can filter by app without
- * enforcing a device limit.
+ * emits `Happ/<HAPP_VERSION>/<os>/<build>` where `<os>` is always normalized to `Android` or `iOS`
+ * (a real Happ UA only ever reports one of those two) and `<build>` is the unsigned-decimal HWID
+ * hash (stable per install, re-rolls on HWID reset). For the enum identity modes the normalized
+ * `<os>` mirrors the identity's `x-device-os`. In **custom** mode they can intentionally differ:
+ * a non-Android/non-iOS `customOs` (e.g. "Windows") is carried literally in the `x-device-os`
+ * header but normalizes to `Android` in the UA. Independent of `sendHwid`: a panel can filter by
+ * app without enforcing a device limit.
  */
 object UserAgentBuilder {
 
