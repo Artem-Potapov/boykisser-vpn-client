@@ -21,7 +21,11 @@ import javax.net.ssl.X509TrustManager
 
 sealed class FetchResult {
     data class Success(val body: String, val intervalHoursFromHeader: Int?) : FetchResult()
-    data class Failure(val message: String) : FetchResult()
+    data class Failure(
+        val message: String,
+        val httpStatus: Int? = null,
+        val responseHeaders: Map<String, List<String>> = emptyMap(),
+    ) : FetchResult()
 }
 
 object SubscriptionFetcher {
@@ -31,10 +35,15 @@ object SubscriptionFetcher {
     private const val MAX_BODY_BYTES = 2L * 1024L * 1024L
     private const val READ_CHUNK_BYTES = 16 * 1024
 
-    suspend fun fetch(context: Context, sub: Subscription, defaultUserAgent: String): FetchResult =
+    suspend fun fetch(
+        context: Context,
+        sub: Subscription,
+        defaultUserAgent: String,
+        identityHeaders: Map<String, String> = emptyMap(),
+    ): FetchResult =
         withContext(Dispatchers.IO) {
             try {
-                fetchBlocking(context, sub, defaultUserAgent)
+                fetchBlocking(context, sub, defaultUserAgent, identityHeaders)
             } catch (e: IOException) {
                 FetchResult.Failure(
                     context.getString(
@@ -52,7 +61,12 @@ object SubscriptionFetcher {
             }
         }
 
-    private fun fetchBlocking(context: Context, sub: Subscription, defaultUserAgent: String): FetchResult {
+    private fun fetchBlocking(
+        context: Context,
+        sub: Subscription,
+        defaultUserAgent: String,
+        identityHeaders: Map<String, String>,
+    ): FetchResult {
         val url = URL(sub.url)
         val scheme = url.protocol.lowercase()
         if (scheme != "http" && scheme != "https") {
@@ -70,6 +84,9 @@ object SubscriptionFetcher {
                 sub.userAgentOverride?.takeIf { it.isNotBlank() } ?: defaultUserAgent
             )
             connection.setRequestProperty("Accept", "*/*")
+            for ((name, value) in identityHeaders) {
+                connection.setRequestProperty(name, value)
+            }
 
             if (connection is HttpsURLConnection && sub.allowInsecureTls) {
                 applyInsecureTls(connection)
@@ -78,11 +95,13 @@ object SubscriptionFetcher {
             val status = connection.responseCode
             if (status !in 200..299) {
                 return FetchResult.Failure(
-                    context.getString(
+                    message = context.getString(
                         R.string.subs_error_http_prefix,
                         status,
                         connection.responseMessage.orEmpty(),
-                    )
+                    ),
+                    httpStatus = status,
+                    responseHeaders = connection.headerFields ?: emptyMap(),
                 )
             }
 
