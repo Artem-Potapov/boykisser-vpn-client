@@ -3,6 +3,43 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
+## [2.3.0R] — 2026-07-26
+
+Tag: `2.3.0-Release`. Minor release.
+
+## Device identity (HWID) for subscription fetches, under a new Privacy settings screen.
+
+### Added
+- **Device identity (HWID) on subscription fetches** (Settings → Privacy). Subscription requests now
+  carry Happ-parity `x-hwid` plus device headers (OS, model, locale) so panels that gate on a device
+  identifier or count device slots work as they do with the Happ client. The HWID is a **random,
+  minted 16-hex value** (Android-ID *shape*, never the real `Settings.Secure.ANDROID_ID`), stored once
+  and kept **stable across every identity mode** so switching modes doesn't burn a panel device slot.
+- **Identity modes:** Real device, Android spoof, iPhone spoof (pair-plausible model/OS tables), and a
+  fully custom OS/version/model/locale. **User-Agent** is independently selectable (Default ·
+  Happ-like) and works regardless of whether the HWID header is sent. A **live preview** shows the
+  exact headers + wire UA the next fetch will send, and **Reset HWID** re-rolls the identifier.
+- **Panel HWID-rejection handling.** A fetch rejected for a missing/duplicate device ID surfaces a
+  specific message ("device limit reached" / "requires a device ID"), and an app-filtering panel
+  (403, or a 2xx that parses to zero servers) appends a "try a Happ User-Agent" hint.
+
+### Fixed
+- **HWID mint race.** On first launch, concurrent subscription refreshes could each mint a *different*
+  HWID and burn several panel device slots at once; the lazy first-read mint is now serialized so all
+  callers agree on one identifier.
+- **User-Agent hint no longer hides the parse-error count.** When a filtering panel returns an
+  unparseable 2xx body, the "N lines failed to parse" detail and the "try Happ UA" hint are reported
+  together instead of one shadowing the other.
+- **Per-control autosave on the XRAY and Ping settings screens.** An out-of-range numeric (e.g. a
+  mid-edit MTU) no longer vetoes the *whole* screen's save — each control holds its own last-good
+  value — so toggling IPv6 (or auto-ping) while a number field is invalid can no longer be silently
+  dropped.
+
+### Security
+- **HWID is never a real hardware identifier.** No `ANDROID_ID` / `Build.SERIAL` is read anywhere, and
+  no identity-bearing value reaches the log surface. Outbound header values are sanitized (CR/LF and
+  control characters stripped) to prevent header injection.
+
 ## [2.2.1R] — 2026-07-16
 
 Tag: `2.2.1-Release`. Minor release.
