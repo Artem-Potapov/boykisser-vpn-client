@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -49,6 +50,9 @@ import com.justme.xtls_core_proxy.ui.components.DropdownField
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** Test handle for the IPv6 switch — shared with XraySettingsPersistTest so the tag can't drift. */
+internal const val IPV6_SWITCH_TAG = "xray_ipv6_switch"
 
 class XraySettingsActivity : LocalizedComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,10 +75,18 @@ private fun XrayScreen(onBack: () -> Unit) {
     var domainStrategy by remember { mutableStateOf(initial.domainStrategy) }
 
     fun persist() {
+        // Bounded-numeric autosave, same contract as MuxSettingsActivity: an out-of-range or
+        // mid-edit MTU holds its last-good *persisted* value and never blocks the rest of the tuple.
+        // Skipping the whole write let the IPv6 switch read "off" on screen while prefs kept "on" —
+        // a privacy control failing in the fail-open direction, because applyCoreSettings would then
+        // emit no `::/0 → block` rule on the next connect. The fallback re-reads prefs rather than
+        // using `initial`, so a valid MTU edit made earlier this session is held, not reverted to the
+        // screen-open value. Validity is re-derived inline — reading the composition-time `mtuValid`
+        // val here would be a stale (pre-keystroke) read.
         val m = mtu.trim().toIntOrNull()
-        if (m != null && m in XrayCorePreferences.MTU_MIN..XrayCorePreferences.MTU_MAX) {
-            XrayCorePreferences.save(context, XrayCoreSettings(m, ipv6, sniffing, domainStrategy))
-        }
+            ?.takeIf { it in XrayCorePreferences.MTU_MIN..XrayCorePreferences.MTU_MAX }
+            ?: XrayCorePreferences.load(context).mtu
+        XrayCorePreferences.save(context, XrayCoreSettings(m, ipv6, sniffing, domainStrategy))
     }
 
     // Domain-based routing rules only match with sniffing on, so the switch shows a forced-on,
@@ -136,7 +148,14 @@ private fun XrayScreen(onBack: () -> Unit) {
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.xray_ipv6), modifier = Modifier.weight(1f))
-                Switch(checked = ipv6, onCheckedChange = { ipv6 = it; persist() })
+                // testTag: the two switches on this screen collapse into sibling peers in Compose's
+                // merged semantics tree, so structural matchers can't tell IPv6 from Sniffing. The tag
+                // addresses this switch by identity (see XraySettingsPersistTest).
+                Switch(
+                    checked = ipv6,
+                    onCheckedChange = { ipv6 = it; persist() },
+                    modifier = Modifier.testTag(IPV6_SWITCH_TAG),
+                )
             }
             Text(stringResource(R.string.xray_ipv6_hint), style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

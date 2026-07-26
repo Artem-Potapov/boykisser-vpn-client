@@ -3,15 +3,21 @@ package com.justme.xtls_core_proxy.privacy
 import android.content.Context
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class DeviceIdentityRepositoryTest {
 
@@ -83,5 +89,63 @@ class DeviceIdentityRepositoryTest {
         assertTrue(Regex("^[0-9a-f]{16}$").matches(fresh))
         verify(editor).putString(eq("hwid_value"), eq(fresh))
         verify(editor).apply()
+    }
+
+    @Test
+    fun resetHwid_mintsFresh_evenWhenOneIsAlreadyStored() {
+        // getOrMintHwid re-reads under the lock; resetHwid must NOT, or "Reset HWID" would no-op.
+        whenever(prefs.getString(eq("hwid_value"), eq(null))).thenReturn("a983997074675192")
+
+        val fresh = DeviceIdentityRepository.resetHwid(context)
+
+        assertNotEquals("a983997074675192", fresh)
+        verify(editor).putString(eq("hwid_value"), eq(fresh))
+    }
+
+    @Test
+    fun load_mintsExactlyOneHwid_whenFirstReadsRaceAcrossThreads() {
+        // refreshAllStaleSubscriptions launches one IO coroutine per stale subscription and each
+        // calls load() as its first step. On the first launch after the feature ships, none of them
+        // finds a stored HWID — a check-then-act mint would hand each a different one and burn a
+        // panel device slot apiece. Needs a stateful prefs stand-in: the shared mock above always
+        // answers null, which cannot observe another thread's write.
+        val store = ConcurrentHashMap<String, String>()
+        val statefulEditor: SharedPreferences.Editor = mock()
+        whenever(statefulEditor.putString(any(), any())).thenAnswer { call ->
+            store[call.getArgument<String>(0)] = call.getArgument(1)
+            statefulEditor
+        }
+        val statefulPrefs: SharedPreferences = mock()
+        whenever(statefulPrefs.edit()).thenReturn(statefulEditor)
+        whenever(statefulPrefs.getString(any(), anyOrNull())).thenAnswer { call ->
+            store[call.getArgument<String>(0)]
+        }
+        whenever(statefulPrefs.getBoolean(any(), any())).thenAnswer { call ->
+            call.getArgument<Boolean>(1)
+        }
+        val statefulContext: Context = mock()
+        whenever(statefulContext.getSharedPreferences(eq("xray_prefs"), eq(Context.MODE_PRIVATE)))
+            .thenReturn(statefulPrefs)
+
+        val racers = 16
+        val startGate = CountDownLatch(1)
+        val finished = CountDownLatch(racers)
+        val minted = ConcurrentHashMap.newKeySet<String>()
+        val pool = Executors.newFixedThreadPool(racers)
+        try {
+            repeat(racers) {
+                pool.execute {
+                    startGate.await()
+                    minted.add(DeviceIdentityRepository.load(statefulContext).hwid)
+                    finished.countDown()
+                }
+            }
+            startGate.countDown()
+            assertTrue("racing load() calls did not finish", finished.await(10, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+
+        assertEquals("concurrent first reads must agree on one HWID", 1, minted.size)
     }
 }

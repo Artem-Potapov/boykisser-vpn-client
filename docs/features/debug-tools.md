@@ -35,9 +35,27 @@ gated three separate ways (below) so that it cannot appear or run in one.
    it via an explicit `Intent` regardless of build type — the same declaration pattern as every other
    internal settings screen (`ConfigSanitizationActivity`, `PingTestSettingsActivity`, etc.).
 
-Any one of the three would suffice for release safety; all three are present because this screen's
-entire purpose is to defeat validation, so it gets the same defense-in-depth posture as the app's other
-fail-closed chokepoints.
+**Only guard 2 independently holds — do not treat these as three interchangeable guards.** Guard 3
+alone would leave the Settings-hub row ungated, so the screen would be visible and tappable in a
+release build; guard 1 alone removes the row but leaves the Activity present in the manifest and
+startable by anything that can name it. Guard 2 is the only one that survives *every* launch vector,
+which is why it must stay the first statement in `onCreate`. All three are present because this
+screen's entire purpose is to defeat validation, so it gets the same defense-in-depth posture as the
+app's other fail-closed chokepoints — but the defense in depth is layered, not redundant.
+
+## What a raw profile can and cannot do at connect time
+
+Storing an unvalidated config does **not** create a leaky tunnel. `XrayVpnService.bringUpTunnel` calls
+`ConfigBuilder.buildRuntimeConfig(profile.config, log, sessionTuning)` on the **stored** config every
+time it brings the tunnel up (`vpn/XrayVpnService.kt`), so the mandatory normalizations — tun-only
+inbound rewriting, the fail-closed secure-DNS posture, and the forced `log` object — all still run on
+whatever `addRawProfile` inserted. A config that cannot survive that pipeline throws inside
+`runCatching` and the connection fails closed rather than starting a degraded tunnel.
+
+This is what makes the tool safe to ship in debug builds: it bypasses the *ingest* gates
+(`toProfileStorageConfig` / `dnsDiagnosis` / `makeSecureDns` at add time), not the *runtime*
+chokepoint. Reaching a genuinely unenforced tunnel would require changing `bringUpTunnel`, which is
+under the `vpn/` human-review guardrail.
 
 ## `VpnViewModel.addRawProfile`
 

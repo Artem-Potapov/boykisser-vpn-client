@@ -15,7 +15,9 @@ rule, and sets `ForceIP` on the proxy outbound. `applyDns` then runs as a global
   secondary IP-literal HTTPS endpoints.
 - Custom accepts one `https://` URL. A hostname endpoint requires a pinned IP; the screen can resolve
   it as a convenience and flags a missing pin, but there is no Save gate — the URL and pin **autosave
-  on every change** and the runtime backstop (`applyDns`) re-sanitizes the persisted draft.
+  on every change**. `applyDns` re-checks the persisted draft, but the URL and the pin are **not**
+  handled alike: an invalid URL no-ops, a missing pin does not. See the precise rules below before
+  assuming a backstop covers both.
 
 For a hostname-addressed proxy, `makeSecureDns` creates two domain-scoped `https+local://` bootstrap
 entries. A preset swap rewrites those entries pairwise to the selected resolver's primary/secondary
