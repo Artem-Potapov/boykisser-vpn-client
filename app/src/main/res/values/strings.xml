@@ -523,6 +523,7 @@
     <string name="subs_error_hwid_required">This subscription requires a device ID (HWID). Enable it in Settings → Privacy.</string>
     <string name="subs_error_forbidden_try_happ_ua">%1$s\nSome panels only respond to specific apps — try setting the User-Agent to Happ in Settings → Privacy.</string>
     <string name="subs_error_no_servers_try_happ_ua">No servers received. Some panels only respond to specific apps — try setting the User-Agent to Happ in Settings → Privacy.</string>
+    <string name="subs_error_parse_lines_try_happ_ua">%1$d line(s) failed to parse, leaving no usable servers. Some panels only respond to specific apps — try setting the User-Agent to Happ in Settings → Privacy.</string>
 
     <!-- HWID / device identity: settings screen -->
     <string name="settings_section_privacy">Privacy</string>

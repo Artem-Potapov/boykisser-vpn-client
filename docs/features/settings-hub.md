@@ -108,13 +108,26 @@ The per-control commit model is deliberately typed:
 
 - **Enums, toggles, and dropdowns persist immediately** on selection — resolver choice, IPv6/sniffing
   switches, routing mode/toggles, domain strategy, fragmentation preset.
-- **DNS custom URL and pinned IP persist on every change.** The runtime chokepoint re-sanitizes the
-  draft — `applyDns` handles a blank/invalid URL or pin fail-closed (see [dns.md](dns.md) and
-  [dns-leak-enforcement.md](dns-leak-enforcement.md)) — so a mid-edit value is never stranded.
+- **DNS custom URL and pinned IP persist on every change** — there is no validity gate on the write.
+  `applyDns` no-ops on a blank/invalid **URL**, leaving the canonical secure resolver in place. It does
+  **not** do the same for the **pin**: a valid hostname URL with a blank pin persists and installs that
+  URL as the unscoped resolver with no `dns.hosts` entry (the scoped proxy bootstrap is still retained,
+  so the proxy's own hostname keeps resolving). That is a deliberate decision, not an oversight — read
+  [dns.md](dns.md) ("Do not describe corrupt pin state as an unconditional fail-closed no-op") and
+  [dns-leak-enforcement.md](dns-leak-enforcement.md) before changing it.
 - **Bounded numerics persist only when the value validates** (Mux concurrency/xudp, XRAY MTU, Ping
   timeout/concurrency, Fragmentation packets/length/interval). An invalid entry **holds the last-good
-  persisted value** — the write is skipped, never reverted to the screen-open value — so an in-progress
-  number can't brick the next connect.
+  persisted value** so an in-progress number can't brick the next connect.
+
+  **The hold is per-control, not per-screen.** An invalid numeric must never block the write of the
+  *other* controls in the same settings tuple. XRAY and Ping previously did skip the whole write, so
+  an unparsed MTU silently discarded a flip of the IPv6 switch — the screen showed IPv6 off while
+  prefs kept it on, and the next connect emitted no `::/0 → block` rule: a privacy control failing
+  fail-open. Each `persist()` now substitutes the last-good persisted value for just the invalid
+  field. Two rules when touching one of these: re-read the fallback from **prefs**, not the
+  screen-open `initial` (otherwise a valid edit made earlier in the same session gets reverted), and
+  re-derive validity **inline** rather than reading the composition-time `xxxValid` val, which is a
+  stale pre-keystroke read. `MuxSettingsActivity.persist()` is the reference implementation.
 
 ## The remaining `BuildConfig.DEBUG` placeholder convention
 

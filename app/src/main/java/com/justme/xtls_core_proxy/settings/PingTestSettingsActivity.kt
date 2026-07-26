@@ -58,17 +58,25 @@ private fun PingTestScreen(onBack: () -> Unit) {
     var auto by rememberSaveable { mutableStateOf(initial.autoOnOpen) }
 
     fun persist() {
+        // Bounded-value autosave, same contract as MuxSettingsActivity: each field that is mid-edit
+        // or out of range independently holds its last-good *persisted* value instead of blocking
+        // the whole tuple — an invalid timeout used to silently discard a flip of the auto-ping
+        // switch, leaving the screen and prefs disagreeing. The fallbacks re-read prefs rather than
+        // using `initial`, so a valid edit made earlier this session is held, not reverted to the
+        // screen-open value. Validity is re-derived inline — reading the composition-time
+        // `targetValid`/`timeoutValid`/`concurrencyValid` vals would be a stale (pre-keystroke) read.
+        val lastGood = PingPreferences.load(context)
         val t = timeout.trim().toLongOrNull()
+            ?.takeIf { it in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX }
+            ?: lastGood.timeoutMs
         val c = concurrency.trim().toIntOrNull()
-        if (PingPreferences.isValidTarget(target) &&
-            t != null && t in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX &&
-            c != null && c in PingPreferences.CONCURRENCY_MIN..PingPreferences.CONCURRENCY_MAX
-        ) {
-            PingPreferences.save(
-                context,
-                PingPreferences(targetUrl = target.trim(), timeoutMs = t, concurrency = c, autoOnOpen = auto)
-            )
-        }
+            ?.takeIf { it in PingPreferences.CONCURRENCY_MIN..PingPreferences.CONCURRENCY_MAX }
+            ?: lastGood.concurrency
+        val tgt = if (PingPreferences.isValidTarget(target)) target.trim() else lastGood.targetUrl
+        PingPreferences.save(
+            context,
+            PingPreferences(targetUrl = tgt, timeoutMs = t, concurrency = c, autoOnOpen = auto)
+        )
     }
 
     val targetValid = PingPreferences.isValidTarget(target)
@@ -76,7 +84,6 @@ private fun PingTestScreen(onBack: () -> Unit) {
         ?.let { it in PingPreferences.TIMEOUT_MIN..PingPreferences.TIMEOUT_MAX } == true
     val concurrencyValid = concurrency.trim().toIntOrNull()
         ?.let { it in PingPreferences.CONCURRENCY_MIN..PingPreferences.CONCURRENCY_MAX } == true
-    val inputsValid = targetValid && timeoutValid && concurrencyValid
 
     Scaffold(
         topBar = {

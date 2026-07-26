@@ -426,7 +426,11 @@ object ConfigBuilder {
         // survives the resolver swap instead of collapsing onto a single IP. CUSTOM supplies at most
         // one URL (pinned hostname or IP-literal host), preserving that URL's port + path via
         // customBootstrapUrl rather than hardcoding `/dns-query`. A hostname CUSTOM without a pin
-        // (UI-unreachable, but prefs could be stale/corrupt) yields no replacement.
+        // yields no replacement. That state is REACHABLE: the DNS screen autosaves every keystroke
+        // and only flags a missing pin, so a valid hostname URL persists with a blank pin (and prefs
+        // can also be stale/corrupt). It is deliberately NOT a fail-closed no-op here — see
+        // docs/features/dns.md ("Do not describe corrupt pin state as an unconditional
+        // fail-closed no-op") before changing this.
         val bootstrapUrls = when {
             needsPin -> listOf(customBootstrapUrl(dns.customUrl, pinnedIp))
             dns.resolver == DnsResolver.CUSTOM ->
@@ -459,8 +463,9 @@ object ConfigBuilder {
                 bootstrapIndex++
                 newServers.put(JSONObject().put("address", url).put("domains", entry.getJSONArray("domains")))
             } else {
-                // If no replacement URL exists (hostname custom without a pin — UI-unreachable, but
-                // prefs could be stale/corrupt), keep the original bootstrap instead of dropping it:
+                // If no replacement URL exists (hostname custom without a pin — reachable via the
+                // autosaving DNS screen, and from stale/corrupt prefs), keep the original bootstrap
+                // instead of dropping it:
                 // losing the scoped entry would deadlock a hostname-addressed proxy's own name
                 // resolution.
                 newServers.put(entry)

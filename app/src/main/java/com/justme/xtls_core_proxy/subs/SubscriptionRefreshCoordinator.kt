@@ -103,9 +103,17 @@ object SubscriptionRefreshCoordinator {
 
                 profileDao.replaceProfilesForSubscription(subId, keepProfileId, newProfiles)
 
+                // Both signals can be true at once and neither may swallow the other: a UA-filtering
+                // panel typically answers 200 with an HTML block page, so every line fails to parse
+                // AND nothing is left — reporting only "no servers" would hide the accurate parse
+                // count, while reporting only the count would drop the hint in the very case it was
+                // written for.
+                val suggestUa =
+                    UaHint.shouldSuggest(httpStatus = 200, parsedCount = outcome.parsed.size, uaIsHappLike)
                 val warning = when {
-                    UaHint.shouldSuggest(httpStatus = 200, parsedCount = outcome.parsed.size, uaIsHappLike) ->
-                        context.getString(R.string.subs_error_no_servers_try_happ_ua)
+                    suggestUa && outcome.parseErrorCount > 0 ->
+                        context.getString(R.string.subs_error_parse_lines_try_happ_ua, outcome.parseErrorCount)
+                    suggestUa -> context.getString(R.string.subs_error_no_servers_try_happ_ua)
                     outcome.parseErrorCount > 0 ->
                         context.getString(R.string.subs_error_parse_lines_prefix, outcome.parseErrorCount)
                     else -> null

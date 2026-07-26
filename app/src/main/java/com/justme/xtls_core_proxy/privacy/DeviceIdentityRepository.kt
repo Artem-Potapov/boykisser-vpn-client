@@ -27,6 +27,9 @@ object DeviceIdentityRepository {
 
     private val random = SecureRandom()
 
+    /** Serializes the lazy first-read mint so concurrent refreshes can't each mint a different HWID. */
+    private val hwidLock = Any()
+
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -35,7 +38,7 @@ object DeviceIdentityRepository {
 
     fun load(context: Context): DeviceIdentitySettings {
         val p = prefs(context)
-        val hwid = p.getString(KEY_HWID, null) ?: mintAndStore(context)
+        val hwid = getOrMintHwid(context)
         return DeviceIdentitySettings(
             sendHwid = p.getBoolean(KEY_SEND, true),
             hwid = hwid,
@@ -73,9 +76,22 @@ object DeviceIdentityRepository {
     }
 
     /** Mints a fresh 16-hex HWID, persists it, and returns it. Re-rolls Auto identity + UA build. */
-    fun resetHwid(context: Context): String = mintAndStore(context)
+    fun resetHwid(context: Context): String = synchronized(hwidLock) { mintAndStoreLocked(context) }
 
-    private fun mintAndStore(context: Context): String {
+    /**
+     * Returns the stored HWID, minting one only if none exists yet. The read and the mint happen
+     * together under [hwidLock] because `VpnViewModel.refreshAllStaleSubscriptions` launches one IO
+     * coroutine per stale subscription and each calls [load] as its first step: on the first launch
+     * after this feature ships every subscription is stale and no HWID is stored, so a plain
+     * check-then-act would let several of them mint *different* HWIDs in the same round and burn a
+     * panel device slot apiece — breaking the one-stable-HWID invariant the feature rests on.
+     */
+    private fun getOrMintHwid(context: Context): String = synchronized(hwidLock) {
+        prefs(context).getString(KEY_HWID, null) ?: mintAndStoreLocked(context)
+    }
+
+    /** Caller must hold [hwidLock]. Always mints, never re-reads — [resetHwid] depends on that. */
+    private fun mintAndStoreLocked(context: Context): String {
         val hwid = formatHwid(random.nextLong())
         prefs(context).edit().putString(KEY_HWID, hwid).apply()
         return hwid

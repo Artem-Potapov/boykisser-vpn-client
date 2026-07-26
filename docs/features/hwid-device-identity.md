@@ -71,6 +71,15 @@ Android versions offered: `9, 11, 13, 14, 15, 16`. Model families: `pixel`, `sam
 One **stable** 16-hex HWID across all modes (including iPhone spoof) — switching modes must not burn
 a fresh panel device slot.
 
+The lazy first-read mint is therefore **serialized**: `DeviceIdentityRepository.getOrMintHwid` does
+its prefs read and its mint together under a private `hwidLock`. A plain check-then-act would break
+the invariant on the very first launch after this feature ships —
+`VpnViewModel.refreshAllStaleSubscriptions` launches one IO coroutine per stale subscription, every
+subscription is stale, and each coroutine calls `load()` as its first step, so several would mint
+*different* HWIDs in one round and burn a device slot apiece. `resetHwid` deliberately does **not**
+re-read inside the lock (it calls `mintAndStoreLocked` directly); making it share the double-checked
+path would turn "Reset HWID" into a no-op whenever a value already exists — which is always.
+
 ## Coordinator chokepoint
 
 Every refresh flows through
