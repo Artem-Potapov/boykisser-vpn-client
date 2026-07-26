@@ -20,7 +20,7 @@ val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase =
 
 // Single source of truth for the app version; reused in defaultConfig and the APK
 // output file names (androidComponents block below).
-val appVersionName = "2.2.1R"
+val appVersionName = "2.3.0R"
 
 val buildXrayAar by tasks.registering(Exec::class) {
     group = "build setup"
@@ -80,7 +80,7 @@ android {
         applicationId = "com.justme.xtls_core_proxy"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
+        versionCode = 4
         versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
