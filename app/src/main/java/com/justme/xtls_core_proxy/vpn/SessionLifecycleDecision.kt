@@ -18,6 +18,7 @@ internal enum class SessionTunnelState {
     CONNECTED,
     PAUSED,
     REVIVING,
+    ROTATING,
     STOPPED,
 }
 
@@ -65,3 +66,38 @@ internal fun shouldDeferKillDuringRevive(
     tunnelState = tunnelState,
     expectedState = SessionTunnelState.REVIVING,
 )
+
+/**
+ * A CONNECTED session may reserve exactly one asynchronous failover rotation.
+ *
+ * Deliberately NOT expressed via [canReserveRevive]: revive reserves from PAUSED, rotation from
+ * CONNECTED. Sharing one state would let a kill-switch revive and a failover rotation each believe
+ * they own the same transition.
+ */
+internal fun canReserveRotation(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+): Boolean = ownsTunnelTransition(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+    tunnelState = tunnelState,
+    expectedState = SessionTunnelState.CONNECTED,
+)
+
+/**
+ * Whether a kill-switch event landing mid-transition must be DEFERRED and replayed rather than
+ * dropped. Generalises [shouldDeferKillDuringRevive] to also cover ROTATING: a failover rotation
+ * tears the tunnel down and brings it back up, so a kill arriving in that window would otherwise be
+ * permanently lost and leave the tunnel CONNECTED with a kill-listed app in the foreground.
+ */
+internal fun shouldDeferKillDuringTransition(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+): Boolean =
+    acceptsSessionLifecycleCallback(running, activeSessionEpoch, callbackSessionEpoch) &&
+        (tunnelState == SessionTunnelState.REVIVING || tunnelState == SessionTunnelState.ROTATING)
