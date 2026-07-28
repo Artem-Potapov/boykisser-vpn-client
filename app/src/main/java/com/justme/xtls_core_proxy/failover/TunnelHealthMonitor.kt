@@ -15,16 +15,22 @@ import kotlinx.coroutines.launch
 
 /**
  * Polls [probe] on a fixed cadence and reports the tunnel unhealthy after [failureThreshold]
- * consecutive failures.
+ * consecutive failures. **Terminal after firing:** it invokes the listener at most once per
+ * [start] call, then stops polling on its own ([isStarted] and the internal job are cleared
+ * before the listener runs) — [pausePolling]/[resumePolling] can never revive it after that,
+ * regardless of which order they land in relative to the fire. Only a fresh [start] call resets
+ * state and begins polling again.
  *
  * Screen on/off is handled by the caller (XrayVpnService) wiring a BroadcastReceiver to
  * pausePolling()/resumePolling(), exactly as the kill-switch monitor does — so this class stays
  * unit-testable without registering receivers.
  *
- * Differences from UsageStatsForegroundAppMonitor worth knowing:
- *  - A throwing source there ABORTS the loop; here a throw IS the signal, so the loop must survive.
- *  - resumePolling() probes immediately rather than waiting a full interval, so picking the phone
- *    up recovers fast at zero idle cost.
+ * Notable properties, relative to UsageStatsForegroundAppMonitor:
+ *  - A throwing source there ABORTS the loop; here a throw IS the signal, so the loop must survive
+ *    it instead (both the probe and the availability check are guarded per-tick).
+ *  - resumePolling() probes immediately rather than waiting a full interval — via the same
+ *    `firstTick` mechanism the sibling monitor also uses, not a divergence from it — so picking
+ *    the phone back up recovers fast at zero idle cost.
  */
 class TunnelHealthMonitor(
     private val probe: HealthProbe,
@@ -48,7 +54,19 @@ class TunnelHealthMonitor(
         consecutiveFailures = 0
         reportedUnhealthy = false
         job?.cancel()
-        job = scope.launch { runPollLoop() }
+        job = scope.launch {
+            try {
+                runPollLoop()
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                // The listener is the last unguarded throw source inside runPollLoop(); this
+                // scope has no CoroutineExceptionHandler, so letting it escape would crash the
+                // process while the VPN is up. Log and let the loop end, same as the kill-switch
+                // monitor's launch-site guard.
+                LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
+            }
+        }
     }
 
     fun stop() {
@@ -69,7 +87,15 @@ class TunnelHealthMonitor(
     fun resumePolling() {
         if (!isStarted) return
         if (job != null) return
-        job = scope.launch { runPollLoop() }
+        job = scope.launch {
+            try {
+                runPollLoop()
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
+            }
+        }
     }
 
     private suspend fun runPollLoop() {
@@ -116,12 +142,21 @@ class TunnelHealthMonitor(
             consecutiveFailures++
             if (consecutiveFailures >= failureThreshold && !reportedUnhealthy) {
                 reportedUnhealthy = true
+                // Go fully terminal BEFORE invoking the listener: a pause landing either side of
+                // this point must never leave resumePolling() able to relaunch into a loop that
+                // still carries a stale consecutiveFailures/reportedUnhealthy — that loop would
+                // poll forever without ever being able to fire again. Clearing isStarted here
+                // (not just job) makes resumePolling()'s `if (!isStarted) return` guard fire in
+                // BOTH orderings, and also protects against the listener itself synchronously
+                // calling resumePolling() before this coroutine has returned.
+                isStarted = false
+                job = null
                 LogRepository.append(
                     "Failover: tunnel unhealthy after $consecutiveFailures consecutive probe failures"
                 )
                 val l = listener
                 if (l != null && currentCoroutineContext().isActive) l.invoke()
-                return // stop probing; the service restarts us after rotation settles
+                return // terminal: only a fresh start() revives this monitor
             }
         }
     }
