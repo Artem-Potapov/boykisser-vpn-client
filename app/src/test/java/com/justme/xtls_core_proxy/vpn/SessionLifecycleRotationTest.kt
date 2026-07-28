@@ -66,4 +66,35 @@ class SessionLifecycleRotationTest {
             )
         }
     }
+
+    @Test
+    fun staleEpoch_doesNotDeferKill_duringTransition() {
+        // Mirrors SessionLifecycleDecisionTest.staleEpochInReviving_doesNotDeferKill, generalized
+        // to both transitional states: a kill callback belonging to a superseded session must
+        // never be replayed into the newer one.
+        for (state in listOf(SessionTunnelState.REVIVING, SessionTunnelState.ROTATING)) {
+            assertFalse(
+                "a stale epoch must not defer kill during $state",
+                shouldDeferKillDuringTransition(
+                    running = true, activeSessionEpoch = 6L, callbackSessionEpoch = 5L,
+                    tunnelState = state,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun stoppedSession_doesNotDeferKill_duringTransition() {
+        // Mirrors SessionLifecycleDecisionTest.stoppedSessionInReviving_doesNotDeferKill,
+        // generalized to both transitional states.
+        for (state in listOf(SessionTunnelState.REVIVING, SessionTunnelState.ROTATING)) {
+            assertFalse(
+                "a stopped session must not defer kill during $state",
+                shouldDeferKillDuringTransition(
+                    running = false, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+                    tunnelState = state,
+                )
+            )
+        }
+    }
 }
