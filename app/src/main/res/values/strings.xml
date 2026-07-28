@@ -565,4 +565,14 @@
     <string name="hwid_ua_label">User-Agent</string>
     <string name="hwid_ua_happ_label">Use Happ User-Agent</string>
     <string name="hwid_ua_preview_label">User-Agent sent</string>
+
+    <!-- Auto-failover notifications (two channels: routine switch vs. blackholed traffic) -->
+    <string name="failover_channel_name">Server failover</string>
+    <string name="failover_channel_description">Notifies when the app automatically switches to a different server.</string>
+    <string name="failover_notification_title">Switched server</string>
+    <string name="failover_notification_body">%1$s stopped responding. Now connected to %2$s.</string>
+    <string name="failover_blackhole_channel_name">Traffic blocked alerts</string>
+    <string name="failover_blackhole_channel_description">Alerts when no server responded and traffic is deliberately blocked until you act.</string>
+    <string name="failover_blackhole_title">No server responded — traffic is blocked</string>
+    <string name="failover_blackhole_body">No server in this subscription responded. Traffic is blocked on purpose, so nothing leaks to the open network. Tap to choose a server or stop the VPN.</string>
 </resources>

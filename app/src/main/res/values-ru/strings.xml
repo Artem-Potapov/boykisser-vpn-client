@@ -561,4 +561,14 @@
     <string name="hwid_ua_label">User-Agent</string>
     <string name="hwid_ua_happ_label">Использовать User-Agent Happ</string>
     <string name="hwid_ua_preview_label">Отправляемый User-Agent</string>
+
+    <!-- Auto-failover notifications (two channels: routine switch vs. blackholed traffic) -->
+    <string name="failover_channel_name">Переключение серверов</string>
+    <string name="failover_channel_description">Уведомляет, когда приложение автоматически переключается на другой сервер.</string>
+    <string name="failover_notification_title">Сервер переключён</string>
+    <string name="failover_notification_body">%1$s перестал отвечать. Сейчас подключение к %2$s.</string>
+    <string name="failover_blackhole_channel_name">Оповещения о блокировке трафика</string>
+    <string name="failover_blackhole_channel_description">Оповещает, когда ни один сервер не ответил и трафик намеренно заблокирован до ваших действий.</string>
+    <string name="failover_blackhole_title">Ни один сервер не ответил — трафик заблокирован</string>
+    <string name="failover_blackhole_body">Ни один сервер из этой подписки не ответил. Трафик заблокирован намеренно, чтобы ничего не ушло в открытую сеть. Нажмите, чтобы выбрать сервер или отключить VPN.</string>
 </resources>
