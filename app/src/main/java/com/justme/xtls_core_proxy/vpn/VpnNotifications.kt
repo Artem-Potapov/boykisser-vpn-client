@@ -227,4 +227,22 @@ internal object VpnNotifications {
         context.getSystemService(NotificationManager::class.java)
             .notify(FAILOVER_BLACKHOLE_NOTIFICATION_ID, notification)
     }
+
+    /**
+     * Removes the give-up alert once traffic is no longer blackholed — the user reconnected or
+     * picked another server, a later rotation succeeded, or the VPN stopped. The alert announces a
+     * transient state, so leaving it up would actively mislead: it would claim the internet is off
+     * while it is working.
+     *
+     * A dedicated cancel is required for the same reason [cancelExposed] is: this alert lives under
+     * its own id ([FAILOVER_BLACKHOLE_NOTIFICATION_ID]), separate from the ongoing FGS notification
+     * ([NOTIFICATION_ID]), so `stopForeground` does not clear it.
+     *
+     * The routine "switched server" notice ([FAILOVER_NOTIFICATION_ID]) needs no counterpart: it is
+     * `setAutoCancel(true)` and reports a completed event rather than an ongoing state.
+     */
+    fun cancelFailoverBlackholed(context: Context) {
+        context.getSystemService(NotificationManager::class.java)
+            .cancel(FAILOVER_BLACKHOLE_NOTIFICATION_ID)
+    }
 }

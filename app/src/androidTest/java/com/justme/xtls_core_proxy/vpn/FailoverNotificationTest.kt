@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -88,5 +89,21 @@ class FailoverNotificationTest {
     @Test
     fun postFailoverBlackholedNeverThrows_evenWithoutPostNotificationsPermission() {
         VpnNotifications.postFailoverBlackholed(context)
+    }
+
+    @Test
+    fun cancelFailoverBlackholed_clearsTheAlert() {
+        // The alert announces a transient state ("traffic is blocked"), so it must be clearable
+        // once traffic flows again — a lingering high-importance notice would claim the internet
+        // is off while it works. It lives under its own id, so stopForeground can't clear it.
+        VpnNotifications.postFailoverBlackholed(context)
+
+        VpnNotifications.cancelFailoverBlackholed(context)
+
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val stillPosted = manager.activeNotifications
+            .any { it.id == VpnNotifications.FAILOVER_BLACKHOLE_NOTIFICATION_ID }
+        // Holds whether or not POST_NOTIFICATIONS is granted: denied means nothing was posted.
+        assertFalse("blackhole alert survived cancelFailoverBlackholed", stillPosted)
     }
 }
