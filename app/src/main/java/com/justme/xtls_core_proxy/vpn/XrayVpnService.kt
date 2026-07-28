@@ -140,12 +140,14 @@ class XrayVpnService : VpnService() {
     /** Candidates that failed bring-up in the CURRENT rotation episode. Guarded by `lock`. */
     private var episodeFailedIds: Set<Long> = emptySet()
     /**
-     * True while a give-up is holding a blackhole TUN. Authored under `lock`; read off-lock by
-     * repostOngoingNotification, which needs to tell "ERROR because traffic is deliberately being
-     * dropped" (service still running, restore the ongoing line) from "ERROR because the session
-     * is dying" (nothing to restore).
+     * What the last failover give-up left behind, or null when no give-up state is showing.
+     *
+     * Not a bare "blackholed" boolean: the three outcomes need three different messages, and the
+     * uncontained one must never be reported with containment copy. Authored under `lock`; read
+     * off-lock by repostOngoingNotification, which uses it to tell a give-up (service still
+     * running, restore the ongoing line) from a session that is simply dying (nothing to restore).
      */
-    @Volatile private var trafficBlackholed: Boolean = false
+    @Volatile private var giveUpOutcome: FailoverGiveUpOutcome? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -678,7 +680,7 @@ class XrayVpnService : VpnService() {
                             // A revive that lands on a blackholed session replaces the unread fd
                             // with a real Xray-backed tunnel, so the give-up alert would now be
                             // actively misleading — it claims the internet is off while it works.
-                            trafficBlackholed = false
+                            giveUpOutcome = null
                             VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             // A kill-switch event deferred during this revive must now be replayed
@@ -794,6 +796,16 @@ class XrayVpnService : VpnService() {
                     }
                     tearDownTunnelLocked()
                     currentProfileId = next.id
+                    // ANNOUNCE THE GAP. From here until establish() there is no VPN interface at
+                    // all — bringUpTunnel does buildRuntimeConfig, geo-asset prep and the split
+                    // read off-lock first — so leaving the UI, the ongoing notification and the QS
+                    // tile saying CONNECTED would claim protection the user does not have. The
+                    // teardown-before-bring-up ordering is forced by bringUpTunnel's
+                    // check(tunInterface == null) and is not changed here; only the silence is.
+                    // Every arm below re-announces: success -> CONNECTED, retry -> CONNECTING
+                    // again on the next attempt, give-up -> BLACKHOLED/ERROR.
+                    LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
+                    updateNotification(localizedString(R.string.vpn_status_switching))
                 }
 
                 bringUpTunnel(
@@ -813,7 +825,7 @@ class XrayVpnService : VpnService() {
                             // Traffic flows again, so a give-up alert left over from an earlier
                             // blackhole would now claim the internet is off while it works. This
                             // also covers a rotation kicked off by the re-arm timer.
-                            trafficBlackholed = false
+                            giveUpOutcome = null
                             VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             pendingKillLabel.also { pendingKillLabel = null }
@@ -832,6 +844,18 @@ class XrayVpnService : VpnService() {
                             // Return to CONNECTED so the next attempt can reserve the transition.
                             if (ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
                                 sessionTunnelState = SessionTunnelState.CONNECTED
+                                // bringUpTunnel can fail AFTER establish() (e.g. startXray threw),
+                                // leaving a real fd with an indeterminate Xray behind it. Drop it,
+                                // so "tunInterface != null" keeps its single meaning downstream:
+                                // the live, still-proxying tunnel. Without this, a give-up would
+                                // mistake that half-built fd for a working tunnel.
+                                tearDownTunnelLocked()
+                                // Roll the profile back to the last one that actually connected.
+                                // currentProfileId is what reviveTunnel brings up, so leaving it on
+                                // a server we just proved dead makes a kill-switch revive fail and
+                                // stopVpn take the whole tunnel down. It also keeps this in step
+                                // with ActiveProfileRepository, which only advances on success.
+                                currentProfileId = session.profileId
                             }
                         }
                         LogRepository.append("Failover: ${next.name} failed to come up: ${error.message}")
@@ -862,7 +886,12 @@ class XrayVpnService : VpnService() {
      * Note the DELIBERATE disagreement between the two "states" this leaves behind:
      * [sessionTunnelState] returns to CONNECTED because that is mechanically required — a rotation
      * reserves from CONNECTED, so the re-arm timer could never try again otherwise — while the
-     * user-facing [LogRepository] connection state is ERROR, which is what the UI and tile show.
+     * user-facing [LogRepository] connection state becomes BLACKHOLED (or ERROR when nothing could
+     * be contained), which is what the UI and the tile show.
+     *
+     * The three outcomes are reported DIFFERENTLY on every user-facing surface. In particular the
+     * uncontained one must never inherit the reassuring "your connection is paused on purpose"
+     * copy — that would tell a user their traffic is safe at the exact moment it is not.
      *
      * Caller must hold `lock`.
      */
@@ -886,34 +915,84 @@ class XrayVpnService : VpnService() {
             return
         }
 
-        val contained = if (
-            shouldEstablishBlackholeTunnel(
-                hasTunnel = tunInterface != null,
-                tunnelState = sessionTunnelState,
-            )
+        // hadTunnel is captured BEFORE the establish attempt. Thanks to the teardown in the
+        // bring-up-failure arm, a non-null fd here can only be the live, still-proxying tunnel
+        // (the no-candidate and thrash-cap give-ups both run before any teardown) — never a
+        // half-built one whose Xray state is unknown.
+        val hadTunnel = tunInterface != null
+        val blackholeEstablished = if (
+            shouldEstablishBlackholeTunnel(hasTunnel = hadTunnel, tunnelState = sessionTunnelState)
         ) {
             establishBlackholeTunnelLocked()
         } else {
-            // A TUN is already in place — the dead server's (the no-candidate give-up runs BEFORE
-            // any teardown), or one from a bring-up that died after establish(). Either way nothing
-            // is reading it usefully, so it is already the blackhole.
-            true
+            false
         }
 
-        trafficBlackholed = true
+        val outcome = classifyGiveUpOutcome(hadTunnel, blackholeEstablished)
+        giveUpOutcome = outcome
         // State first, then the notifications — same ordering discipline as killTunnel.
-        LogRepository.setConnectionState(VpnConnectionState.ERROR)
-        if (contained) {
-            LogRepository.append(
-                "Failover: traffic stays contained in the tunnel; nothing leaks to the open network"
-            )
-        } else {
-            LogRepository.append(
-                "Failover: WARNING - no blackhole tunnel could be established, traffic is NOT contained"
-            )
+        LogRepository.setConnectionState(
+            if (outcome == FailoverGiveUpOutcome.UNPROTECTED) VpnConnectionState.ERROR
+            else VpnConnectionState.BLACKHOLED
+        )
+        when (outcome) {
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> {
+                LogRepository.append(
+                    "Failover: no server to switch to; the current tunnel is still up and traffic " +
+                        "stays inside it"
+                )
+                updateNotification(localizedString(R.string.vpn_status_no_response))
+                VpnNotifications.postFailoverNoResponse(this)
+            }
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE -> {
+                LogRepository.append(
+                    "Failover: traffic is held in an unread tunnel; nothing leaks to the open network"
+                )
+                updateNotification(localizedString(R.string.vpn_status_blackholed))
+                VpnNotifications.postFailoverBlackholed(this)
+            }
+            FailoverGiveUpOutcome.UNPROTECTED -> {
+                LogRepository.append(
+                    "Failover: WARNING - no tunnel could be established, traffic is NOT contained"
+                )
+                // AGENTS.md: user-visible errors go through LogRepository, not only the log buffer.
+                // The Logs screen is not where a user learns their traffic just went clear.
+                LogRepository.emitError(R.string.vpn_failover_unprotected_error)
+                updateNotification(localizedString(R.string.vpn_status_unprotected))
+                VpnNotifications.postFailoverUnprotected(this)
+            }
         }
-        updateNotification(localizedString(R.string.vpn_status_blackholed))
-        VpnNotifications.postFailoverBlackholed(this)
+    }
+
+    /**
+     * Clears a give-up state once the tunnel is demonstrably passing traffic again.
+     *
+     * Driven by [TunnelHealthMonitor]'s recovery callback, because the give-up state would
+     * otherwise be able to outlive the condition it describes: the no-candidate and thrash-cap
+     * give-ups can both land on a tunnel that is merely having a bad minute, and the monitor only
+     * ever reported failure — so the re-armed monitor would probe successfully, never fire again,
+     * and the user would be left staring at an error state over a working connection until they
+     * stopped and restarted the VPN by hand.
+     */
+    private fun clearGiveUpStateOnRecovery(sessionEpoch: Long) {
+        synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) return
+            if (giveUpOutcome == null) return
+            if (sessionTunnelState != SessionTunnelState.CONNECTED) return
+            // Load-bearing: after an UNPROTECTED give-up there is NO tunnel, so the probe travels
+            // the clear network and succeeds for the wrong reason. Clearing on that would announce
+            // CONNECTED with no VPN at all — the exact lie this fix round exists to remove. That
+            // state has no automatic recovery by design; it needs the user action the notification
+            // and the in-app error both ask for.
+            if (tunInterface == null) return
+            LogRepository.append("Failover: tunnel is passing traffic again; clearing the give-up state")
+            giveUpOutcome = null
+            // The episode is demonstrably over, so the sliding thrash window starts clean too.
+            rotationAttempts = emptyList()
+            LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+            updateNotification(localizedString(R.string.vpn_status_connected))
+            VpnNotifications.cancelFailoverBlackholed(this)
+        }
     }
 
     /**
@@ -959,10 +1038,16 @@ class XrayVpnService : VpnService() {
      * Returns whether the traffic is now actually contained.
      */
     private fun establishBlackholeTunnelLocked(): Boolean {
-        check(tunInterface == null) {
-            "Cannot blackhole while the active transition already owns a TUN interface"
-        }
         return try {
+            // INSIDE the try on purpose. This runs from a give-up, which is itself reached from
+            // rotateTunnel's `catch (Throwable)` — and a throw raised inside a catch block escapes
+            // that try/catch entirely, landing uncaught on a SupervisorJob with no handler, i.e.
+            // process death with the VPN up. Unreachable today (the single call site is guarded by
+            // shouldEstablishBlackholeTunnel under the same held lock), but a contract violation
+            // must degrade to "uncontained", never to a crash.
+            check(tunInterface == null) {
+                "Cannot blackhole while the active transition already owns a TUN interface"
+            }
             val builder = Builder()
                 .setSession(localizedString(R.string.app_name))
                 .setMtu(sessionTuning.core.mtu)
@@ -1115,7 +1200,13 @@ class XrayVpnService : VpnService() {
                 intervalMs = settings.probeIntervalMs,
                 failureThreshold = settings.failureThreshold,
             ).also { monitor ->
-                monitor.start { rotateTunnel(sessionEpoch) }
+                // Named arguments deliberately: onHealthy is declared first so existing
+                // trailing-lambda callers keep binding to onUnhealthy, which makes a positional
+                // call here easy to mis-read.
+                monitor.start(
+                    onHealthy = { clearGiveUpStateOnRecovery(sessionEpoch) },
+                    onUnhealthy = { rotateTunnel(sessionEpoch) },
+                )
             }
             LogRepository.append(
                 "Failover monitor started (interval=${settings.probeIntervalMs}ms, " +
@@ -1224,7 +1315,7 @@ class XrayVpnService : VpnService() {
             // servers that are perfectly healthy now.
             rotationAttempts = emptyList()
             episodeFailedIds = emptySet()
-            trafficBlackholed = false
+            giveUpOutcome = null
             // Keep stop, global TUN/Xray teardown, and the next start admission under one lock.
             // This prevents an old full stop from tearing down a newer session's resources.
             val tailerToStop = logTailer
@@ -1366,15 +1457,25 @@ class XrayVpnService : VpnService() {
                 updateNotification(localizedString(R.string.vpn_status_connecting))
             VpnConnectionState.CONNECTED ->
                 updateNotification(localizedString(R.string.vpn_status_connected))
+            VpnConnectionState.BLACKHOLED ->
+                // The give-up alert (id 1105) is setAutoCancel, so once the user dismisses it this
+                // persistent line is their only remaining indication. Only 1101 is restored — 1105
+                // was dismissed deliberately and re-posting it would fight the user.
+                updateNotification(
+                    localizedString(
+                        if (giveUpOutcome == FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL) {
+                            R.string.vpn_status_no_response
+                        } else {
+                            R.string.vpn_status_blackholed
+                        }
+                    )
+                )
             VpnConnectionState.ERROR -> {
                 // ERROR normally means the session is dying, with nothing ongoing to restore. The
-                // failover give-up is the exception: it leaves the service RUNNING while holding a
-                // blackhole TUN, and its own alert (id 1105) is setAutoCancel, so once the user
-                // dismisses that, this persistent line is the only remaining indication that
-                // traffic is deliberately being dropped. Only 1101 is restored — 1105 was
-                // dismissed deliberately and re-posting it would fight the user.
-                if (trafficBlackholed) {
-                    updateNotification(localizedString(R.string.vpn_status_blackholed))
+                // uncontained give-up is the exception: the service is still RUNNING, and the line
+                // it needs is the honest "not protected" one, never the containment copy.
+                if (giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED) {
+                    updateNotification(localizedString(R.string.vpn_status_unprotected))
                 }
             }
             VpnConnectionState.DISCONNECTED -> {

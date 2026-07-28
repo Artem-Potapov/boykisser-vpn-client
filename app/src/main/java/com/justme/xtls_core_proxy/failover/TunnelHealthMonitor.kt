@@ -43,16 +43,30 @@ class TunnelHealthMonitor(
     private var job: Job? = null
 
     @Volatile private var listener: (() -> Unit)? = null
+    @Volatile private var healthyListener: (() -> Unit)? = null
     @Volatile private var consecutiveFailures: Int = 0
     /** Latched after firing so we report once per transition, not once per failed probe. */
     @Volatile private var reportedUnhealthy: Boolean = false
+    /** Latched after the first healthy probe of this [start], for the same once-per-transition reason. */
+    @Volatile private var reportedHealthy: Boolean = false
     @Volatile private var isStarted: Boolean = false
 
-    fun start(onUnhealthy: () -> Unit) {
+    /**
+     * [onHealthy] is optional and fires AT MOST ONCE per [start] call, on the first probe that
+     * succeeds — the "the tunnel is working again" signal. Without it this class could only ever
+     * report failure, so a caller that recorded a failure state had no way to learn it was stale.
+     *
+     * Note the parameter ORDER: [onHealthy] deliberately comes first so that the mandatory
+     * [onUnhealthy] stays last and every existing `start { ... }` trailing-lambda call site keeps
+     * binding to it. Swapping them would silently re-bind those callers to the optional listener.
+     */
+    fun start(onHealthy: (() -> Unit)? = null, onUnhealthy: () -> Unit) {
         isStarted = true
         listener = onUnhealthy
+        healthyListener = onHealthy
         consecutiveFailures = 0
         reportedUnhealthy = false
+        reportedHealthy = false
         job?.cancel()
         job = scope.launch {
             try {
@@ -74,8 +88,10 @@ class TunnelHealthMonitor(
         job?.cancel()
         job = null
         listener = null
+        healthyListener = null
         consecutiveFailures = 0
         reportedUnhealthy = false
+        reportedHealthy = false
     }
 
     fun pausePolling() {
@@ -136,6 +152,22 @@ class TunnelHealthMonitor(
             if (healthy) {
                 consecutiveFailures = 0
                 reportedUnhealthy = false
+                if (!reportedHealthy) {
+                    reportedHealthy = true
+                    // Guarded like the unhealthy listener below: this scope has no
+                    // CoroutineExceptionHandler, and the enclosing launch-site catch would end the
+                    // whole poll loop over a throw from a caller's recovery handler.
+                    val h = healthyListener
+                    if (h != null && currentCoroutineContext().isActive) {
+                        try {
+                            h.invoke()
+                        } catch (ce: CancellationException) {
+                            throw ce
+                        } catch (t: Throwable) {
+                            LogRepository.append("TunnelHealthMonitor recovery listener failed: ${t.message}")
+                        }
+                    }
+                }
                 continue
             }
 

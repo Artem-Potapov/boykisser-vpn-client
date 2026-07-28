@@ -218,6 +218,100 @@ class TunnelHealthMonitorTest {
         m.stop()
     }
 
+    // NOTE for the six tests below: they call m.stop() BEFORE asserting. A monitor that never
+    // reaches its threshold polls forever, and runTest only returns once the scheduler is idle — so
+    // an assertion that throws before stop() strands the loop and HANGS the whole test task rather
+    // than reporting a failure. Stopping first costs nothing (every value asserted is already
+    // captured in an AtomicInteger / call counter) and keeps a genuine RED failure legible.
+
+    @Test
+    fun onHealthy_firesOnTheFirstSuccessfulProbe() = runTest {
+        // The recovery signal the service needs: TunnelHealthMonitor only ever reported failure, so
+        // a give-up state written over a tunnel that later works had no way to clear itself.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val recovered = AtomicInteger(0)
+        val m = monitor(FakeProbe(healthy = true), FakeAvailability(), dispatcher)
+
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        runCurrent()
+        m.stop()
+        assertEquals(1, recovered.get())
+    }
+
+    @Test
+    fun onHealthy_firesOnlyOncePerStart() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val recovered = AtomicInteger(0)
+        val m = monitor(FakeProbe(healthy = true), FakeAvailability(), dispatcher)
+
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        advanceTimeBy(100_000L); runCurrent()
+        m.stop()
+        assertEquals("must latch, not fire once per healthy probe", 1, recovered.get())
+    }
+
+    @Test
+    fun onHealthy_doesNotFire_whileEveryProbeFails() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val probe = FakeProbe(healthy = false)
+        val recovered = AtomicInteger(0)
+        val m = monitor(probe, FakeAvailability(), dispatcher, threshold = 100)
+
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        advanceTimeBy(100_000L); runCurrent()
+        m.stop()
+        assertEquals(0, recovered.get())
+        assertEquals("loop must be alive, so 0 is a real answer", 7, probe.calls)
+    }
+
+    @Test
+    fun onHealthy_firesOnRecovery_afterEarlierFailures() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val probe = FakeProbe(healthy = false)
+        val recovered = AtomicInteger(0)
+        val m = monitor(probe, FakeAvailability(), dispatcher, threshold = 100)
+
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        runCurrent()
+        val beforeRecovery = recovered.get()
+        probe.healthy = true
+        advanceTimeBy(15_001L); runCurrent()
+        m.stop()
+        assertEquals("no recovery to report while the probe still fails", 0, beforeRecovery)
+        assertEquals(1, recovered.get())
+    }
+
+    @Test
+    fun onHealthy_reArmsOnAFreshStart() = runTest {
+        // The service re-starts the monitor after a give-up; that fresh start is what must be able
+        // to report the tunnel healthy again and clear the stale give-up state.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val recovered = AtomicInteger(0)
+        val m = monitor(FakeProbe(healthy = true), FakeAvailability(), dispatcher)
+
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        runCurrent()
+        m.stop()
+        m.start(onHealthy = { recovered.incrementAndGet() }) { }
+        runCurrent()
+        m.stop()
+        assertEquals(2, recovered.get())
+    }
+
+    @Test
+    fun onHealthy_isOptional_andAbsenceDoesNotBreakPolling() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val probe = FakeProbe(healthy = false)
+        val fired = AtomicInteger(0)
+        val m = monitor(probe, FakeAvailability(), dispatcher)
+
+        m.start { fired.incrementAndGet() }   // trailing lambda must still bind to onUnhealthy
+        runCurrent()
+        advanceTimeBy(15_001L); runCurrent()
+        m.stop()
+        assertEquals("existing single-lambda callers must keep firing onUnhealthy", 1, fired.get())
+    }
+
     @Test
     fun pauseStopsProbing_resumeProbesImmediately() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)

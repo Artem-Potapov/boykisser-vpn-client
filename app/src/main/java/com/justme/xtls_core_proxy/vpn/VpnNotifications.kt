@@ -212,12 +212,53 @@ internal object VpnNotifications {
      * POST_NOTIFICATIONS is denied, so this never stalls the caller.
      */
     fun postFailoverBlackholed(context: Context) {
+        postGiveUp(
+            context,
+            titleRes = R.string.failover_blackhole_title,
+            body = localized(context, R.string.failover_blackhole_body),
+        )
+    }
+
+    /**
+     * Give-up variant for a tunnel that is STILL UP and still proxying: the no-candidate and
+     * thrash-cap give-ups both run before any teardown, so nothing was blocked — there was simply
+     * nowhere to rotate to. Reporting that with [postFailoverBlackholed]'s "your connection is
+     * paused on purpose" copy would be plainly false, so it gets its own wording (and names the
+     * server, which is the actionable part).
+     */
+    fun postFailoverNoResponse(context: Context) {
+        postGiveUp(
+            context,
+            titleRes = R.string.failover_no_response_title,
+            body = localized(context, R.string.failover_no_response_body),
+        )
+    }
+
+    /**
+     * Give-up variant for the one case where the user is genuinely on the clear network: no tunnel
+     * existed and the blackhole could not be established either. This MUST NOT reuse the reassuring
+     * "nothing leaks" copy — that would tell a user their traffic is safe at the exact moment it is
+     * not. The service pairs this with a `LogRepository.emitError` so the in-app UI says so too.
+     */
+    fun postFailoverUnprotected(context: Context) {
+        postGiveUp(
+            context,
+            titleRes = R.string.failover_unprotected_title,
+            body = localized(context, R.string.failover_unprotected_body),
+        )
+    }
+
+    /**
+     * Shared builder for the three give-up variants. They deliberately share one id + channel:
+     * only one give-up state exists at a time, so a later variant must REPLACE the earlier notice
+     * rather than stack beside it, and [cancelFailoverBlackholed] must clear whichever is showing.
+     */
+    private fun postGiveUp(context: Context, @StringRes titleRes: Int, body: String) {
         createFailoverBlackholeChannel(context)
-        val body = localized(context, R.string.failover_blackhole_body)
         val notification = NotificationCompat.Builder(context, FAILOVER_BLACKHOLE_CHANNEL_ID)
             .setSmallIcon(R.drawable.boykisser_notification_icon)
             .setColor(ContextCompat.getColor(context, R.color.warning_red))
-            .setContentTitle(localized(context, R.string.failover_blackhole_title))
+            .setContentTitle(localized(context, titleRes))
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)

@@ -26,6 +26,17 @@ enum class VpnConnectionState {
     CONNECTING,
     CONNECTED,
     PAUSED,
+
+    /**
+     * Auto-failover found no server it could reach, so the tunnel is deliberately holding traffic
+     * instead of releasing it to the clear network. Like [PAUSED] — and unlike [ERROR] — the
+     * service is still running and still owns a TUN, so it is stoppable and must be presented as a
+     * live state rather than a dead one.
+     *
+     * The constant is technical because only developers read it; every user-facing string mapped
+     * from it is deliberately plain and non-alarming.
+     */
+    BLACKHOLED,
     ERROR
 }
 

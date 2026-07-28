@@ -13,7 +13,11 @@
     <string name="vpn_permission_revoked_error">Разрешение VPN было отозвано. Откройте приложение для повторного подключения.</string>
     <string name="vpn_start_failed_error">Не удалось запустить VPN. Подробности в журнале.</string>
     <string name="vpn_status_paused">Приостановлено: открыто приложение %1$s</string>
-    <string name="vpn_status_blackholed">Трафик заблокирован: ни один сервер не ответил</string>
+    <string name="vpn_status_blackholed">Нет связи с сервером — пауза ради вашей защиты</string>
+    <string name="vpn_status_no_response">Сервер не отвечает — других серверов нет</string>
+    <string name="vpn_status_unprotected">Защита не работает — переподключитесь</string>
+    <string name="vpn_status_switching">Переключаемся на другой сервер…</string>
+    <string name="vpn_failover_unprotected_error">Не удалось сохранить защиту соединения. Выключите и снова включите VPN или выберите другой сервер.</string>
     <string name="vpn_status_connected">Подключено</string>
     <string name="vpn_status_connecting">Подключение</string>
     <string name="vpn_exposed_title">⚠️ VPN ОТКЛЮЧЁН — вы раскрыты</string>
@@ -235,6 +239,7 @@
     <string name="main_state_connecting">Подключение</string>
     <string name="main_state_connected">Подключено</string>
     <string name="main_state_paused">Приостановлено</string>
+    <string name="main_state_blackholed">Нет связи с сервером</string>
     <string name="main_state_error">Ошибка</string>
     <string name="main_button_disconnect">Отключить</string>
     <string name="main_empty_profiles">Профилей пока нет.\nНажмите +, чтобы добавить сервер, или значок облака, чтобы добавить подписку.</string>
@@ -568,8 +573,12 @@
     <string name="failover_channel_description">Уведомляет, когда приложение автоматически переключается на другой сервер.</string>
     <string name="failover_notification_title">Сервер переключён</string>
     <string name="failover_notification_body">%1$s перестал отвечать. Сейчас подключение к %2$s.</string>
-    <string name="failover_blackhole_channel_name">Оповещения о блокировке трафика</string>
-    <string name="failover_blackhole_channel_description">Оповещает, когда ни один сервер не ответил и трафик намеренно заблокирован до ваших действий.</string>
-    <string name="failover_blackhole_title">Ни один сервер не ответил — трафик заблокирован</string>
-    <string name="failover_blackhole_body">Ни один сервер из этой подписки не ответил. Трафик заблокирован намеренно, чтобы ничего не ушло в открытую сеть. Нажмите, чтобы выбрать сервер или отключить VPN.</string>
+    <string name="failover_blackhole_channel_name">Проблемы с подключением</string>
+    <string name="failover_blackhole_channel_description">Сообщает, когда не удалось связаться ни с одним сервером и соединение было приостановлено ради вашей защиты.</string>
+    <string name="failover_blackhole_title">Нет связи с сервером</string>
+    <string name="failover_blackhole_body">Ни один из ваших серверов не ответил, поэтому соединение намеренно приостановлено. Так ваше настоящее местоположение остаётся скрытым, а не раскрывается незаметно. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
+    <string name="failover_no_response_title">Сервер не отвечает</string>
+    <string name="failover_no_response_body">Ваш сервер перестал отвечать, а других для переключения нет. Защита работает, но страницы могут не открываться. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
+    <string name="failover_unprotected_title">Соединение не защищено</string>
+    <string name="failover_unprotected_body">Ни один сервер не ответил, и приостановить соединение тоже не удалось — сейчас оно не защищено. Нажмите, чтобы выключить и снова включить VPN или выбрать другой сервер.</string>
 </resources>

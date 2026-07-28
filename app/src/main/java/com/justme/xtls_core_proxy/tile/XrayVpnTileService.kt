@@ -181,6 +181,14 @@ class XrayVpnTileService : TileService() {
                 tile.state = Tile.STATE_ACTIVE
                 tile.label = ctx.getString(R.string.main_state_paused)
             }
+            VpnConnectionState.BLACKHOLED -> {
+                // ACTIVE, exactly like PAUSED: the service is still running and still owns a TUN,
+                // so the tile must stay a working Stop control. Mapping it to INACTIVE (as ERROR
+                // is) would dispatch ACTION_START on tap, which startVpn no-ops with "VPN already
+                // running" — a dead control in the one state where the user most needs a live one.
+                tile.state = Tile.STATE_ACTIVE
+                tile.label = ctx.getString(R.string.main_state_blackholed)
+            }
             VpnConnectionState.ERROR -> {
                 tile.state = Tile.STATE_INACTIVE
                 tile.label = ctx.getString(R.string.main_state_error)

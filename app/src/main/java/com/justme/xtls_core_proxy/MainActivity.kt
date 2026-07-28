@@ -531,9 +531,13 @@ private fun MainScreen(
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
+                // BLACKHOLED must offer Disconnect for the same reason the QS tile must stay
+                // ACTIVE: the tunnel is up and holding traffic, and canConnect() disables the
+                // per-profile Connect buttons, so without this the user has no in-app way out.
                 if (state == VpnConnectionState.CONNECTED ||
                     state == VpnConnectionState.CONNECTING ||
-                    state == VpnConnectionState.PAUSED
+                    state == VpnConnectionState.PAUSED ||
+                    state == VpnConnectionState.BLACKHOLED
                 ) {
                     OutlinedButton(onClick = onDisconnect) {
                         Text(stringResource(R.string.main_button_disconnect))
@@ -949,22 +953,29 @@ private fun vpnConnectionStateLabel(state: VpnConnectionState): String {
             VpnConnectionState.CONNECTING -> R.string.main_state_connecting
             VpnConnectionState.CONNECTED -> R.string.main_state_connected
             VpnConnectionState.PAUSED -> R.string.main_state_paused
+            VpnConnectionState.BLACKHOLED -> R.string.main_state_blackholed
             VpnConnectionState.ERROR -> R.string.main_state_error
         }
     )
 }
 
+// BLACKHOLED is grouped with the live states below, not with ERROR: the service is still running
+// and still owns a TUN, so the active profile must keep showing as active and the per-profile
+// Connect button must stay disabled — dispatching ACTION_START would only no-op with "VPN already
+// running". Same treatment PAUSED already gets, for the same reason.
 private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
     return profile.id == activeId &&
         (state == VpnConnectionState.CONNECTED ||
             state == VpnConnectionState.CONNECTING ||
-            state == VpnConnectionState.PAUSED)
+            state == VpnConnectionState.PAUSED ||
+            state == VpnConnectionState.BLACKHOLED)
 }
 
 private fun canConnect(state: VpnConnectionState): Boolean {
     return state != VpnConnectionState.CONNECTED &&
         state != VpnConnectionState.CONNECTING &&
-        state != VpnConnectionState.PAUSED
+        state != VpnConnectionState.PAUSED &&
+        state != VpnConnectionState.BLACKHOLED
 }
 
 /**

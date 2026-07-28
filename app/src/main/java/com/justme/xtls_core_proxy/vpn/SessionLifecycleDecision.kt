@@ -164,3 +164,38 @@ internal fun shouldEstablishBlackholeTunnel(
     hasTunnel: Boolean,
     tunnelState: SessionTunnelState,
 ): Boolean = !hasTunnel && tunnelState == SessionTunnelState.CONNECTED
+
+/**
+ * What a failover give-up actually left behind. Three physically different situations that must
+ * never share one message to the user.
+ */
+internal enum class FailoverGiveUpOutcome {
+    /** No tunnel existed and a blackhole was established: traffic is deliberately dropped. */
+    CONTAINED_BY_BLACKHOLE,
+
+    /**
+     * The current profile's tunnel is still up and still proxying — the no-candidate and thrash-cap
+     * give-ups both run BEFORE any teardown. Nothing was blocked; there was simply nowhere to
+     * rotate to. Telling this user "your traffic is blocked" would be false.
+     */
+    CONTAINED_BY_LIVE_TUNNEL,
+
+    /** No tunnel and the blackhole could not be established: the user IS on the clear network. */
+    UNPROTECTED,
+}
+
+/**
+ * Classifies a give-up from the two facts the service knows: whether a TUN existed before the
+ * attempt, and whether establishing a blackhole succeeded.
+ *
+ * [hadTunnel] wins outright — if an fd was already owned we never tried to blackhole, so
+ * [blackholeEstablished] carries no information in that case.
+ */
+internal fun classifyGiveUpOutcome(
+    hadTunnel: Boolean,
+    blackholeEstablished: Boolean,
+): FailoverGiveUpOutcome = when {
+    hadTunnel -> FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL
+    blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
+    else -> FailoverGiveUpOutcome.UNPROTECTED
+}

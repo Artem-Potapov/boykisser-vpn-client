@@ -11,7 +11,11 @@
     <string name="vpn_permission_revoked_error">VPN permission was revoked. Open the app to reconnect.</string>
     <string name="vpn_start_failed_error">VPN failed to start. See logs for details.</string>
     <string name="vpn_status_paused">Paused: %1$s is open</string>
-    <string name="vpn_status_blackholed">Traffic blocked: no server responded</string>
+    <string name="vpn_status_blackholed">No server connection — paused to keep you protected</string>
+    <string name="vpn_status_no_response">Server is not responding — no other server to try</string>
+    <string name="vpn_status_unprotected">Not protected — please reconnect</string>
+    <string name="vpn_status_switching">Switching to another server…</string>
+    <string name="vpn_failover_unprotected_error">We couldn\'t keep your connection protected. Please turn the VPN off and on again, or choose another server.</string>
     <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_connecting">Connecting</string>
     <string name="vpn_exposed_title">⚠️ VPN is OFF — you\'re exposed</string>
@@ -234,6 +238,7 @@
     <string name="main_state_connecting">Connecting</string>
     <string name="main_state_connected">Connected</string>
     <string name="main_state_paused">Paused</string>
+    <string name="main_state_blackholed">No server connection</string>
     <string name="main_state_error">Error</string>
     <string name="main_button_disconnect">Disconnect</string>
     <string name="main_empty_profiles">No profiles yet.\nTap + to add a server, or use the cloud icon to add a subscription.</string>
@@ -572,8 +577,12 @@
     <string name="failover_channel_description">Notifies when the app automatically switches to a different server.</string>
     <string name="failover_notification_title">Switched server</string>
     <string name="failover_notification_body">%1$s stopped responding. Now connected to %2$s.</string>
-    <string name="failover_blackhole_channel_name">Traffic blocked alerts</string>
-    <string name="failover_blackhole_channel_description">Alerts when no server responded and traffic is deliberately blocked until you act.</string>
-    <string name="failover_blackhole_title">No server responded — traffic is blocked</string>
-    <string name="failover_blackhole_body">No server in this subscription responded. Traffic is blocked on purpose, so nothing leaks to the open network. Tap to choose a server or stop the VPN.</string>
+    <string name="failover_blackhole_channel_name">Connection problems</string>
+    <string name="failover_blackhole_channel_description">Tells you when no server could be reached and your connection was paused to keep you protected.</string>
+    <string name="failover_blackhole_title">No server connection</string>
+    <string name="failover_blackhole_body">None of your servers responded, so your connection is paused on purpose. That keeps your real location private instead of quietly going unprotected. Tap to choose another server or turn the VPN off.</string>
+    <string name="failover_no_response_title">Server is not responding</string>
+    <string name="failover_no_response_body">Your server stopped responding and there is no other one to switch to. You are still protected, but pages may not load. Tap to choose another server or turn the VPN off.</string>
+    <string name="failover_unprotected_title">Connection is not protected</string>
+    <string name="failover_unprotected_body">No server responded, and we could not pause your connection either — so it is currently unprotected. Tap to turn the VPN off and on again, or choose another server.</string>
 </resources>

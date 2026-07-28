@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -306,6 +307,42 @@ class SessionLifecycleDecisionTest {
                 hasTunnel = false,
                 tunnelState = SessionTunnelState.PAUSED,
             )
+        )
+    }
+
+    // --- Give-up outcome: three physically different situations, three different messages ---
+
+    @Test
+    fun giveUpOverALiveTunnel_isNotTheSameAsABlackhole() {
+        // The no-candidate and thrash-cap give-ups run BEFORE any teardown, so the fd is the
+        // current profile's still-proxying tunnel. Telling that user "your traffic is blocked" is
+        // simply false.
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+            classifyGiveUpOutcome(hadTunnel = true, blackholeEstablished = false)
+        )
+        assertEquals(
+            "a live tunnel wins regardless of what the blackhole attempt would have said",
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+            classifyGiveUpOutcome(hadTunnel = true, blackholeEstablished = true)
+        )
+    }
+
+    @Test
+    fun giveUpWithNoTunnel_andASuccessfulBlackhole_isContained() {
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(hadTunnel = false, blackholeEstablished = true)
+        )
+    }
+
+    @Test
+    fun giveUpWithNoTunnel_andAFailedBlackhole_isUnprotected() {
+        // The one case where the user is genuinely on the clear network. It must never be reported
+        // with the reassuring "traffic is blocked on purpose" copy.
+        assertEquals(
+            FailoverGiveUpOutcome.UNPROTECTED,
+            classifyGiveUpOutcome(hadTunnel = false, blackholeEstablished = false)
         )
     }
 
