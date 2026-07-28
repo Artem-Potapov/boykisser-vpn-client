@@ -29,6 +29,14 @@ interface ProfileDao {
     @Query("SELECT * FROM profiles ORDER BY id ASC LIMIT 1")
     suspend fun getFirst(): Profile?
 
+    /** Suspend snapshot of one subscription's servers, in the same order the UI lists them. */
+    @Query("SELECT * FROM profiles WHERE subscriptionId = :subId ORDER BY id ASC")
+    suspend fun getBySubscriptionId(subId: Long): List<Profile>
+
+    /** Suspend snapshot of the manually-added ("My profiles") servers. */
+    @Query("SELECT * FROM profiles WHERE subscriptionId IS NULL ORDER BY id ASC")
+    suspend fun getManualList(): List<Profile>
+
     @Insert
     suspend fun insert(profile: Profile): Long
 
