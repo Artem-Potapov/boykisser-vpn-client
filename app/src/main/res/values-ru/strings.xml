@@ -13,6 +13,7 @@
     <string name="vpn_permission_revoked_error">Разрешение VPN было отозвано. Откройте приложение для повторного подключения.</string>
     <string name="vpn_start_failed_error">Не удалось запустить VPN. Подробности в журнале.</string>
     <string name="vpn_status_paused">Приостановлено: открыто приложение %1$s</string>
+    <string name="vpn_status_blackholed">Трафик заблокирован: ни один сервер не ответил</string>
     <string name="vpn_status_connected">Подключено</string>
     <string name="vpn_status_connecting">Подключение</string>
     <string name="vpn_exposed_title">⚠️ VPN ОТКЛЮЧЁН — вы раскрыты</string>

@@ -11,6 +11,7 @@
     <string name="vpn_permission_revoked_error">VPN permission was revoked. Open the app to reconnect.</string>
     <string name="vpn_start_failed_error">VPN failed to start. See logs for details.</string>
     <string name="vpn_status_paused">Paused: %1$s is open</string>
+    <string name="vpn_status_blackholed">Traffic blocked: no server responded</string>
     <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_connecting">Connecting</string>
     <string name="vpn_exposed_title">⚠️ VPN is OFF — you\'re exposed</string>

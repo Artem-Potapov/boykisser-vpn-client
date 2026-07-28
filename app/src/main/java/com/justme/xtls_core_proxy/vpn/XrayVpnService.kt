@@ -30,6 +30,14 @@ import com.justme.xtls_core_proxy.config.XrayLogLevel
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
 import androidx.annotation.StringRes
+import com.justme.xtls_core_proxy.failover.AndroidNetworkAvailability
+import com.justme.xtls_core_proxy.failover.FailoverDecision
+import com.justme.xtls_core_proxy.failover.FailoverPoolResolver
+import com.justme.xtls_core_proxy.failover.FailoverPreferences
+import com.justme.xtls_core_proxy.failover.FailoverSettings
+import com.justme.xtls_core_proxy.failover.Http204HealthProbe
+import com.justme.xtls_core_proxy.failover.RotationAdmission
+import com.justme.xtls_core_proxy.failover.TunnelHealthMonitor
 import com.justme.xtls_core_proxy.geo.GeoAssetPreparer
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
@@ -41,6 +49,7 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.log.XrayCoreLogTailer
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
+import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
@@ -51,6 +60,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -110,6 +120,33 @@ class XrayVpnService : VpnService() {
     private var killSwitchMonitor: UsageStatsForegroundAppMonitor? = null
     private var screenReceiver: BroadcastReceiver? = null
     private var settingsObserverJob: Job? = null
+
+    // --- Auto-failover ---
+    /** Live health monitor, or null when failover is not armed. Guarded by `lock`. */
+    private var failoverMonitor: TunnelHealthMonitor? = null
+    /**
+     * The settings [failoverMonitor] was CONSTRUCTED from. Interval/timeout/threshold are
+     * constructor arguments of TunnelHealthMonitor/Http204HealthProbe and cannot be changed on a
+     * running instance, so this is what tells a live timing edit apart from a no-op re-emission.
+     * Guarded by `lock`.
+     */
+    private var failoverMonitorSettings: FailoverSettings? = null
+    private var failoverSettingsJob: Job? = null
+    /** Pending "try again once the thrash window elapsed" timer from a give-up. Guarded by `lock`. */
+    private var failoverRearmJob: Job? = null
+    @Volatile private var failoverSettings: FailoverSettings = FailoverPreferences.DEFAULT
+    /** Rotation attempt timestamps for the sliding thrash window. Guarded by `lock`. */
+    private var rotationAttempts: List<Long> = emptyList()
+    /** Candidates that failed bring-up in the CURRENT rotation episode. Guarded by `lock`. */
+    private var episodeFailedIds: Set<Long> = emptySet()
+    /**
+     * True while a give-up is holding a blackhole TUN. Authored under `lock`; read off-lock by
+     * repostOngoingNotification, which needs to tell "ERROR because traffic is deliberately being
+     * dropped" (service still running, restore the ongoing line) from "ERROR because the session
+     * is dying" (nothing to restore).
+     */
+    @Volatile private var trafficBlackholed: Boolean = false
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -334,6 +371,14 @@ class XrayVpnService : VpnService() {
                     .onSuccess {
                         if (!isCurrentSession(sessionEpoch)) return@onSuccess
                         val prefs = KillSwitchRepository.load(this@XrayVpnService)
+                        // Seeded read, mirroring the KillSwitchRepository.load above and for the
+                        // same reason: FailoverPreferences.state is a process-global
+                        // MutableStateFlow(DEFAULT), so an observer-only wiring would receive
+                        // `enabled = false` and never arm failover on any path where the settings
+                        // Activity never ran in this process (process death, always-on restart, a
+                        // first-launch QS-tile connect). Both loads touch SharedPreferences and so
+                        // stay OUTSIDE the lifecycle lock.
+                        val failoverPrefs = FailoverPreferences.load(this@XrayVpnService)
                         val committed = synchronized(lock) {
                             if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.STARTING)) {
                                 false
@@ -353,6 +398,13 @@ class XrayVpnService : VpnService() {
                                         if (isCurrentSession(sessionEpoch)) {
                                             applyKillSwitchPreferences(newPrefs, sessionEpoch)
                                         }
+                                    }
+                                }
+                                applyFailoverPreferences(failoverPrefs, sessionEpoch)
+                                failoverSettingsJob?.cancel()
+                                failoverSettingsJob = serviceScope.launch {
+                                    FailoverPreferences.state.collect { newSettings ->
+                                        applyFailoverPreferences(newSettings, sessionEpoch)
                                     }
                                 }
                                 true
@@ -496,11 +548,14 @@ class XrayVpnService : VpnService() {
                 synchronized(lock) {
                     if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.CONNECTED)) {
                         // A kill can only tear down a CONNECTED tunnel. If the same session is
-                        // mid-revive, DEFER the event (record it, replay after the revive commits)
-                        // rather than dropping it — the foreground monitor is edge-triggered and
-                        // would never re-fire this safety event. Any other state (stale epoch,
-                        // stopped, already paused) has nothing to defer to, so drop as before.
-                        if (shouldDeferKillDuringRevive(
+                        // mid-transition — a kill-switch revive OR a failover rotation, both of
+                        // which tear the tunnel down and bring it back up — DEFER the event (record
+                        // it, replay once the transition commits) rather than dropping it: the
+                        // foreground monitor is edge-triggered and would never re-fire this safety
+                        // event, leaving the tunnel CONNECTED with a kill-listed app in the
+                        // foreground. Any other state (stale epoch, stopped, already paused) has
+                        // nothing to defer to, so drop as before.
+                        if (shouldDeferKillDuringTransition(
                                 running = running,
                                 activeSessionEpoch = activeSessionEpoch,
                                 callbackSessionEpoch = sessionEpoch,
@@ -509,7 +564,8 @@ class XrayVpnService : VpnService() {
                         ) {
                             pendingKillLabel = triggerPackageLabel
                             LogRepository.append(
-                                "Kill-switch: deferring kill for $triggerPackageLabel until revive completes"
+                                "Kill-switch: deferring kill for $triggerPackageLabel " +
+                                    "until the in-flight transition completes"
                             )
                         }
                         return@launch
@@ -528,6 +584,13 @@ class XrayVpnService : VpnService() {
                     LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
                     tearDownTunnelLocked()
                     sessionTunnelState = SessionTunnelState.PAUSED
+                    // No tunnel exists while PAUSED, so every health probe would fail and we would
+                    // "rotate" a tunnel the kill-switch deliberately tore down. Stop, don't pause:
+                    // pausePolling() preserves the failure count, which would then trip instantly on
+                    // revive. reviveTunnel re-applies prefs to bring the monitor back. The screen
+                    // receiver is deliberately NOT reconciled here — the kill-switch monitor is
+                    // still live, so it must stay registered.
+                    stopFailoverMonitorLocked()
                     // State first, then the notification: notify() is a silent no-op when
                     // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
                     // correct even if the exposed-notification build ever throws.
@@ -612,6 +675,11 @@ class XrayVpnService : VpnService() {
                             LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             // Dismiss the separate exposed heads-up; restore the connected status.
                             VpnNotifications.cancelExposed(this@XrayVpnService)
+                            // A revive that lands on a blackholed session replaces the unread fd
+                            // with a real Xray-backed tunnel, so the give-up alert would now be
+                            // actively misleading — it claims the internet is off while it works.
+                            trafficBlackholed = false
+                            VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             // A kill-switch event deferred during this revive must now be replayed
                             // so the tunnel does not stay CONNECTED with the kill-listed app in the
@@ -619,6 +687,15 @@ class XrayVpnService : VpnService() {
                             // the normal kill path (pause + exposed heads-up) for the current epoch.
                             pendingKillLabel.also { pendingKillLabel = null }
                         }
+                        // Restart failover for the restored tunnel — nothing else does, so without
+                        // this the feature would stay dead for the rest of the session after the
+                        // first kill-switch pause. Reads the current settings flow value (the
+                        // observer keeps it fresh) and re-checks epoch + CONNECTED internally.
+                        // MUST run outside the lock block above: it takes the lock itself, and
+                        // running it before CONNECTED is committed would read REVIVING and no-op.
+                        applyFailoverPreferences(FailoverPreferences.state.value, session.epoch)
+                        // Ordered before the replay so a replayed kill correctly stops the monitor
+                        // again through killTunnel's pause path.
                         if (replayKillLabel != null) {
                             killTunnel(session.epoch, replayKillLabel)
                         }
@@ -651,6 +728,288 @@ class XrayVpnService : VpnService() {
         if (shouldStop) stopVpn(expectedSessionEpoch = sessionEpoch)
     }
 
+    /**
+     * Failover rotation: tear the dead tunnel down and bring a sibling server up, inside the SAME
+     * session epoch. Sibling of [killTunnel]/[reviveTunnel] and keeps their locking discipline —
+     * reserve the transition under `lock` before any async work, re-check ownership before every
+     * mutation, and route every escape through a single fail path.
+     */
+    private fun rotateTunnel(sessionEpoch: Long) {
+        tunnelOpScope.launch {
+            try {
+                val session = synchronized(lock) {
+                    if (!canReserveRotation(
+                            running = running,
+                            activeSessionEpoch = activeSessionEpoch,
+                            callbackSessionEpoch = sessionEpoch,
+                            tunnelState = sessionTunnelState,
+                        )
+                    ) return@launch
+                    when (val admission = FailoverDecision.admitRotation(
+                        attempts = rotationAttempts,
+                        now = System.currentTimeMillis(),
+                        maxRotations = failoverSettings.maxRotations,
+                        windowMs = failoverSettings.rotationWindowMs,
+                    )) {
+                        RotationAdmission.Denied -> {
+                            giveUpRotationLocked(sessionEpoch, "thrash cap reached")
+                            return@launch
+                        }
+                        is RotationAdmission.Admitted -> rotationAttempts = admission.attempts
+                    }
+                    sessionTunnelState = SessionTunnelState.ROTATING
+                    // The monitor that fired is already TERMINAL (TunnelHealthMonitor clears its own
+                    // isStarted/job before invoking the listener) but the FIELD still holds it. Drop
+                    // it here so the post-rotation re-apply constructs a FRESH monitor instead of
+                    // early-returning on a non-null field — otherwise failover would arm exactly
+                    // once per session. The screen receiver is deliberately NOT reconciled yet: the
+                    // rotation is transient, and the post-rotation apply reconciles it.
+                    stopFailoverMonitorLocked()
+                    SessionContext(sessionEpoch, currentProfileId, sessionLog)
+                }
+
+                val dao = AppDatabase.get(this@XrayVpnService).profileDao()
+                val current = dao.getById(session.profileId)
+                if (current == null) {
+                    failRotation(
+                        session.epoch,
+                        "rotateTunnel: current profile ${session.profileId} not found"
+                    )
+                    return@launch
+                }
+                val pool = FailoverPoolResolver.resolve(dao, current)
+                val failed = synchronized(lock) { episodeFailedIds }
+                val next = FailoverDecision.nextCandidate(pool, current.id, failed)
+                if (next == null) {
+                    synchronized(lock) {
+                        giveUpRotationLocked(session.epoch, "no healthy candidate left in pool")
+                    }
+                    return@launch
+                }
+
+                LogRepository.append("Failover: rotating ${current.name} -> ${next.name}")
+                synchronized(lock) {
+                    if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
+                        return@launch
+                    }
+                    tearDownTunnelLocked()
+                    currentProfileId = next.id
+                }
+
+                bringUpTunnel(
+                    profile = next,
+                    log = session.log,
+                    sessionEpoch = session.epoch,
+                    expectedState = SessionTunnelState.ROTATING,
+                )
+                    .onSuccess {
+                        val replayKillLabel = synchronized(lock) {
+                            if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
+                                return@onSuccess
+                            }
+                            sessionTunnelState = SessionTunnelState.CONNECTED
+                            episodeFailedIds = emptySet()   // episode ends on a successful rotation
+                            LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            // Traffic flows again, so a give-up alert left over from an earlier
+                            // blackhole would now claim the internet is off while it works. This
+                            // also covers a rotation kicked off by the re-arm timer.
+                            trafficBlackholed = false
+                            VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
+                            updateNotification(localizedString(R.string.vpn_status_connected))
+                            pendingKillLabel.also { pendingKillLabel = null }
+                        }
+                        // The app's notion of "active profile" MUST follow, or the UI, the QS tile,
+                        // and the next manual reconnect all still point at the dead server. This is
+                        // also what makes START_REDELIVER_INTENT crash recovery correct.
+                        ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, next.id)
+                        VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)
+                        applyFailoverPreferences(failoverSettings, session.epoch) // restart monitor
+                        if (replayKillLabel != null) killTunnel(session.epoch, replayKillLabel)
+                    }
+                    .onFailure { error ->
+                        synchronized(lock) {
+                            episodeFailedIds = episodeFailedIds + next.id
+                            // Return to CONNECTED so the next attempt can reserve the transition.
+                            if (ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
+                                sessionTunnelState = SessionTunnelState.CONNECTED
+                            }
+                        }
+                        LogRepository.append("Failover: ${next.name} failed to come up: ${error.message}")
+                        rotateTunnel(session.epoch)   // try the next candidate, still under the cap
+                    }
+            } catch (ce: CancellationException) {
+                // Structured-concurrency cancellation (tunnelOpScope.cancel() in onDestroy) must
+                // propagate rather than be reported as a rotation failure. Like reviveTunnel and
+                // unlike killTunnel, this body suspends (getById/resolve), so it CAN observe a CE.
+                throw ce
+            } catch (error: Throwable) {
+                failRotation(sessionEpoch, "rotateTunnel failed: ${error.message}")
+            }
+        }
+    }
+
+    /**
+     * Give up on rotation, FAIL-CLOSED.
+     *
+     * "Just keep the tunnel established" does not hold on the path that matters: the all-servers-
+     * dead case tears the TUN down *before* bring-up fails, so a give-up can land with
+     * `tunInterface == null` and hand the user's traffic straight back to the clear network —
+     * and whether that happens would depend on where bring-up died (after `establish()` = contained,
+     * before = exposed), which is worse than either consistent answer. So when this session should
+     * own a tunnel and has none, re-establish a BLACKHOLE one: same routes and captured apps, no
+     * protector, no Xray — packets enter an fd nobody reads and are dropped.
+     *
+     * Note the DELIBERATE disagreement between the two "states" this leaves behind:
+     * [sessionTunnelState] returns to CONNECTED because that is mechanically required — a rotation
+     * reserves from CONNECTED, so the re-arm timer could never try again otherwise — while the
+     * user-facing [LogRepository] connection state is ERROR, which is what the UI and tile show.
+     *
+     * Caller must hold `lock`.
+     */
+    private fun giveUpRotationLocked(sessionEpoch: Long, reason: String) {
+        LogRepository.append("Failover: giving up ($reason)")
+        if (sessionTunnelState == SessionTunnelState.ROTATING) {
+            sessionTunnelState = SessionTunnelState.CONNECTED
+        }
+        episodeFailedIds = emptySet()
+        stopFailoverMonitorLocked()
+        reconcileScreenReceiverLocked(sessionEpoch)
+        scheduleFailoverRearmLocked(sessionEpoch)
+
+        if (sessionTunnelState != SessionTunnelState.CONNECTED) {
+            // Another owner holds this session's tunnel — most importantly the kill-switch's PAUSED
+            // state, whose compliance contract is literally "no tunnel must exist". Establishing a
+            // blackhole (or overwriting the PAUSED connection state) here would break that outright.
+            LogRepository.append(
+                "Failover: tunnel is $sessionTunnelState; leaving it to its owner"
+            )
+            return
+        }
+
+        val contained = if (
+            shouldEstablishBlackholeTunnel(
+                hasTunnel = tunInterface != null,
+                tunnelState = sessionTunnelState,
+            )
+        ) {
+            establishBlackholeTunnelLocked()
+        } else {
+            // A TUN is already in place — the dead server's (the no-candidate give-up runs BEFORE
+            // any teardown), or one from a bring-up that died after establish(). Either way nothing
+            // is reading it usefully, so it is already the blackhole.
+            true
+        }
+
+        trafficBlackholed = true
+        // State first, then the notifications — same ordering discipline as killTunnel.
+        LogRepository.setConnectionState(VpnConnectionState.ERROR)
+        if (contained) {
+            LogRepository.append(
+                "Failover: traffic stays contained in the tunnel; nothing leaks to the open network"
+            )
+        } else {
+            LogRepository.append(
+                "Failover: WARNING - no blackhole tunnel could be established, traffic is NOT contained"
+            )
+        }
+        updateNotification(localizedString(R.string.vpn_status_blackholed))
+        VpnNotifications.postFailoverBlackholed(this)
+    }
+
+    /**
+     * Re-arm failover once the thrash window has fully elapsed, so a network that recovers on its
+     * own self-heals without a manual reconnect.
+     *
+     * This lives in the single funnel every give-up passes through: the thrash-cap and no-candidate
+     * give-ups call [giveUpRotationLocked] directly and never go through [failRotation], so wiring
+     * the timer there would leave the common "all servers dead" case permanently disarmed.
+     * Caller must hold `lock`.
+     */
+    private fun scheduleFailoverRearmLocked(sessionEpoch: Long) {
+        val windowMs = failoverSettings.rotationWindowMs
+        failoverRearmJob?.cancel()
+        failoverRearmJob = serviceScope.launch {
+            delay(windowMs)
+            synchronized(lock) {
+                if (!isCurrentSessionLocked(sessionEpoch)) return@launch
+                rotationAttempts = emptyList()
+            }
+            // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op. Reads
+            // the settings flow rather than the captured value: the user may have edited them
+            // during the (up to one hour) wait.
+            applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
+        }
+    }
+
+    private fun failRotation(sessionEpoch: Long, logMessage: String) {
+        synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) return
+            LogRepository.append(logMessage)
+            giveUpRotationLocked(sessionEpoch, "rotation error")
+        }
+    }
+
+    /**
+     * Establishes a TUN with no reader attached: same session name, MTU, addresses, default routes,
+     * DNS servers and split-tunnel plan as a real bring-up, but NO protector registration and NO
+     * Xray. Packets enter the fd and are dropped, which is what makes give-up genuinely fail-closed
+     * rather than fail-closed-if-you-are-lucky.
+     *
+     * Caller must hold `lock`, and must only call this while [tunInterface] is null.
+     * Returns whether the traffic is now actually contained.
+     */
+    private fun establishBlackholeTunnelLocked(): Boolean {
+        check(tunInterface == null) {
+            "Cannot blackhole while the active transition already owns a TUN interface"
+        }
+        return try {
+            val builder = Builder()
+                .setSession(localizedString(R.string.app_name))
+                .setMtu(sessionTuning.core.mtu)
+                .addAddress("10.7.0.1", 32)
+                .addAddress("fd00:1:fd00:1::1", 128)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
+                // Mirrors bringUpTunnel: DNS is aimed INTO the tun, so resolver traffic is dropped
+                // here too instead of falling back to the underlying network's resolvers.
+                .addDnsServer("1.1.1.1")
+                .also { if (sessionTuning.core.ipv6) it.addDnsServer("2606:4700:4700::1111") }
+
+            // Same plan as a real bring-up, so exactly the same apps stay captured: anything the
+            // user split OUT keeps the direct route it already had while connected, and everything
+            // else keeps riding the tun — now into the blackhole.
+            val splitPrefs = SplitTunnelRepository.load(this)
+            val plan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
+            plan.allowedPackages.forEach { pkg ->
+                try {
+                    builder.addAllowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    LogRepository.append("Blackhole tunnel skipped missing package: $pkg")
+                }
+            }
+            plan.disallowedPackages.forEach { pkg ->
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    LogRepository.append("Blackhole tunnel skipped missing package: $pkg")
+                }
+            }
+
+            val pfd = builder.establish()
+            if (pfd == null) {
+                LogRepository.append("Failover: blackhole establish() returned null")
+                false
+            } else {
+                tunInterface = pfd
+                LogRepository.append("Failover: blackhole TUN established with fd=${pfd.fd}")
+                true
+            }
+        } catch (error: Throwable) {
+            LogRepository.append("Failover: blackhole TUN could not be established: ${error.message}")
+            false
+        }
+    }
+
     private inner class KillSwitchListener(
         private val sessionEpoch: Long,
     ) : ForegroundAppMonitor.Listener {
@@ -679,7 +1038,10 @@ class XrayVpnService : VpnService() {
                 val wasPaused = LogRepository.connectionState.value == VpnConnectionState.PAUSED
                 killSwitchMonitor?.stop()
                 killSwitchMonitor = null
-                unregisterScreenReceiver()
+                // Reconcile instead of unregistering outright: the receiver is now shared with the
+                // failover monitor, and an unconditional unregister here would tear it out from
+                // under a still-running failover session.
+                reconcileScreenReceiverLocked(sessionEpoch)
                 // Void any kill deferred during an in-flight revive. The feature is now OFF, so
                 // replaying it when the revive commits would park the tunnel PAUSED for a feature the
                 // user just disabled — and with the monitor gone, no left-foreground event would ever
@@ -699,11 +1061,97 @@ class XrayVpnService : VpnService() {
                 val monitor = UsageStatsForegroundAppMonitor(source)
                 killSwitchMonitor = monitor
                 monitor.start(prefs.packages, KillSwitchListener(sessionEpoch))
-                registerScreenReceiver(sessionEpoch)
+                reconcileScreenReceiverLocked(sessionEpoch)
                 LogRepository.append("Kill-switch monitor started with ${prefs.packages.size} package(s)")
             } else {
                 killSwitchMonitor?.updatePackages(prefs.packages)
             }
+        }
+    }
+
+    /**
+     * Starts, rebuilds, or stops the health monitor to match the current preferences and tunnel
+     * state. Mirrors [applyKillSwitchPreferences] — including its stale-session discipline: a
+     * superseded epoch returns WITHOUT touching the monitor, so a late emission from an already
+     * cancelled observer can never stop the CURRENT session's monitor.
+     *
+     * The monitor runs ONLY in CONNECTED: in PAUSED there is no tunnel, so every probe would fail
+     * and we would "rotate" a tunnel the kill-switch deliberately tore down.
+     */
+    private fun applyFailoverPreferences(settings: FailoverSettings, sessionEpoch: Long) {
+        synchronized(lock) {
+            if (!isCurrentSessionLocked(sessionEpoch)) return
+            failoverSettings = settings
+
+            if (!shouldRunFailoverMonitor(
+                    enabled = settings.enabled,
+                    running = running,
+                    tunnelState = sessionTunnelState,
+                )
+            ) {
+                stopFailoverMonitorLocked()
+                reconcileScreenReceiverLocked(sessionEpoch)
+                return
+            }
+
+            // A live monitor bakes interval/timeout/threshold in at construction, so a timing edit
+            // can only land by rebuilding it. An UNCHANGED emission must fall through untouched:
+            // the settings StateFlow re-emits on every save, and rebuilding on each one would
+            // restart the poll cycle continuously so the tunnel is never actually observed. The
+            // non-null check is also what stops the observer stacking duplicate monitors — the fix
+            // for the stale post-rotation monitor is to CLEAR the field (see rotateTunnel), never
+            // to drop this guard.
+            if (failoverMonitor != null) {
+                if (!failoverMonitorNeedsRebuild(failoverMonitorSettings, settings)) return
+                LogRepository.append("Failover: rebuilding monitor for updated probe timings")
+                stopFailoverMonitorLocked()
+            }
+
+            val target = PingPreferences.load(this).targetUrl
+            failoverMonitorSettings = settings
+            failoverMonitor = TunnelHealthMonitor(
+                probe = Http204HealthProbe(target, settings.probeTimeoutMs),
+                availability = AndroidNetworkAvailability(applicationContext),
+                intervalMs = settings.probeIntervalMs,
+                failureThreshold = settings.failureThreshold,
+            ).also { monitor ->
+                monitor.start { rotateTunnel(sessionEpoch) }
+            }
+            LogRepository.append(
+                "Failover monitor started (interval=${settings.probeIntervalMs}ms, " +
+                    "threshold=${settings.failureThreshold})"
+            )
+            reconcileScreenReceiverLocked(sessionEpoch)
+        }
+    }
+
+    /**
+     * Stops and forgets the health monitor. `stop()` (not `pausePolling()`) on purpose: pausing
+     * preserves the consecutive-failure count, which would trip instantly the next time polling
+     * resumes. Caller must hold `lock`.
+     */
+    private fun stopFailoverMonitorLocked() {
+        failoverMonitor?.stop()
+        failoverMonitor = null
+        failoverMonitorSettings = null
+    }
+
+    /**
+     * The screen receiver is shared by the kill-switch and failover monitors. Register while EITHER
+     * is live, unregister only when NEITHER is — never let one feature's teardown strand the other.
+     * [registerScreenReceiver] is already idempotent (`if (screenReceiver != null) return`) and
+     * [unregisterScreenReceiver] already tolerates a non-registered receiver, so this is safe to
+     * call on every preference change. Caller must hold `lock`.
+     */
+    private fun reconcileScreenReceiverLocked(sessionEpoch: Long) {
+        if (shouldHoldScreenReceiver(
+                killSwitchLive = killSwitchMonitor != null,
+                failoverLive = failoverMonitor != null,
+            )
+        ) {
+            registerScreenReceiver(sessionEpoch)
+        } else {
+            unregisterScreenReceiver()
         }
     }
 
@@ -723,9 +1171,17 @@ class XrayVpnService : VpnService() {
                 tunnelOpScope.launch {
                     synchronized(lock) {
                         if (!isCurrentSessionLocked(sessionEpoch)) return@launch
+                        // Both monitors share this receiver; each nullable field is independently
+                        // null when its feature is off, so this covers every on/off pairing.
                         when (action) {
-                            Intent.ACTION_SCREEN_OFF -> killSwitchMonitor?.pausePolling()
-                            Intent.ACTION_SCREEN_ON -> killSwitchMonitor?.resumePolling()
+                            Intent.ACTION_SCREEN_OFF -> {
+                                killSwitchMonitor?.pausePolling()
+                                failoverMonitor?.pausePolling()
+                            }
+                            Intent.ACTION_SCREEN_ON -> {
+                                killSwitchMonitor?.resumePolling()
+                                failoverMonitor?.resumePolling()
+                            }
                         }
                     }
                 }
@@ -763,6 +1219,12 @@ class XrayVpnService : VpnService() {
             // session (epoch is invalidated above under the same lock). Cleared on every teardown
             // path, including the no-live-session early return below.
             pendingKillLabel = null
+            // Same discipline for the failover episode state: a stale thrash count carried into a
+            // new session would deny its very first rotation, and stale episode failures would skip
+            // servers that are perfectly healthy now.
+            rotationAttempts = emptyList()
+            episodeFailedIds = emptySet()
+            trafficBlackholed = false
             // Keep stop, global TUN/Xray teardown, and the next start admission under one lock.
             // This prevents an old full stop from tearing down a newer session's resources.
             val tailerToStop = logTailer
@@ -782,6 +1244,13 @@ class XrayVpnService : VpnService() {
             killSwitchMonitor = null
             settingsObserverJob?.cancel()
             settingsObserverJob = null
+            stopFailoverMonitorLocked()
+            failoverSettingsJob?.cancel()
+            failoverSettingsJob = null
+            failoverRearmJob?.cancel()
+            failoverRearmJob = null
+            // Unconditional here (the whole session is ending), but it must follow the monitor
+            // teardown above so the shared-receiver invariant still holds if anything re-enters.
             unregisterScreenReceiver()
 
             tearDownTunnelLocked()
@@ -791,8 +1260,10 @@ class XrayVpnService : VpnService() {
             sessionTuning = TuningSettings.NONE
             LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
             LogRepository.append("VPN stopped")
-            // The exposed alert is a separate notification id; stopForeground won't remove it.
+            // The exposed alert and the failover give-up alert are separate notification ids;
+            // stopForeground won't remove either.
             VpnNotifications.cancelExposed(this)
+            VpnNotifications.cancelFailoverBlackholed(this)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -895,7 +1366,18 @@ class XrayVpnService : VpnService() {
                 updateNotification(localizedString(R.string.vpn_status_connecting))
             VpnConnectionState.CONNECTED ->
                 updateNotification(localizedString(R.string.vpn_status_connected))
-            VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR -> {
+            VpnConnectionState.ERROR -> {
+                // ERROR normally means the session is dying, with nothing ongoing to restore. The
+                // failover give-up is the exception: it leaves the service RUNNING while holding a
+                // blackhole TUN, and its own alert (id 1105) is setAutoCancel, so once the user
+                // dismisses that, this persistent line is the only remaining indication that
+                // traffic is deliberately being dropped. Only 1101 is restored — 1105 was
+                // dismissed deliberately and re-posting it would fight the user.
+                if (trafficBlackholed) {
+                    updateNotification(localizedString(R.string.vpn_status_blackholed))
+                }
+            }
+            VpnConnectionState.DISCONNECTED -> {
                 // Nothing ongoing to restore.
             }
         }

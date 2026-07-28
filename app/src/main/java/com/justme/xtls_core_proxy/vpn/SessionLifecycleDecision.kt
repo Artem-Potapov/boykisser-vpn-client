@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
+import com.justme.xtls_core_proxy.failover.FailoverSettings
+
 /**
  * Returns whether an asynchronous lifecycle callback still owns the currently running session.
  *
@@ -101,3 +103,64 @@ internal fun shouldDeferKillDuringTransition(
 ): Boolean =
     acceptsSessionLifecycleCallback(running, activeSessionEpoch, callbackSessionEpoch) &&
         (tunnelState == SessionTunnelState.REVIVING || tunnelState == SessionTunnelState.ROTATING)
+
+/**
+ * The screen on/off receiver is SHARED by the kill-switch and failover monitors: hold it while
+ * EITHER is live, release it only when NEITHER is.
+ *
+ * Previously the receiver's whole lifecycle belonged to the kill-switch, which failed failover two
+ * ways: with failover on and the kill-switch off (the default pairing) no receiver existed at all,
+ * and turning the kill-switch off mid-session tore the receiver out from under a running failover
+ * monitor.
+ */
+internal fun shouldHoldScreenReceiver(killSwitchLive: Boolean, failoverLive: Boolean): Boolean =
+    killSwitchLive || failoverLive
+
+/**
+ * The health monitor is meaningful only against a live tunnel in the current session.
+ *
+ * `CONNECTED` only, deliberately: in `PAUSED` the kill-switch has torn the tunnel down on purpose,
+ * so every probe would fail and the engine would "rotate" a tunnel nobody wants back yet; in
+ * `ROTATING`/`REVIVING`/`STARTING` another owner is mid-transition and will re-apply afterwards.
+ */
+internal fun shouldRunFailoverMonitor(
+    enabled: Boolean,
+    running: Boolean,
+    tunnelState: SessionTunnelState,
+): Boolean = enabled && running && tunnelState == SessionTunnelState.CONNECTED
+
+/**
+ * Whether a settings emission changes an input the LIVE monitor already baked in, and therefore
+ * requires stopping and rebuilding it.
+ *
+ * Only the three timing fields qualify — they are constructor arguments of `TunnelHealthMonitor` /
+ * `Http204HealthProbe` and cannot be changed on a running instance. `enabled` is handled by
+ * [shouldRunFailoverMonitor]; `maxRotations` / `rotationWindowMs` are read fresh at rotation time.
+ * An unchanged emission MUST return false: the settings StateFlow re-emits on every save, and
+ * rebuilding on each one would restart the poll cycle continuously so the tunnel is never observed.
+ * A null [builtFrom] means we have no record of what the live monitor was built from, so rebuild.
+ */
+internal fun failoverMonitorNeedsRebuild(
+    builtFrom: FailoverSettings?,
+    next: FailoverSettings,
+): Boolean = builtFrom == null ||
+    builtFrom.probeIntervalMs != next.probeIntervalMs ||
+    builtFrom.probeTimeoutMs != next.probeTimeoutMs ||
+    builtFrom.failureThreshold != next.failureThreshold
+
+/**
+ * Whether giving up on failover must re-establish a blackhole TUN — an fd nobody reads, so packets
+ * are dropped instead of falling back to the clear network.
+ *
+ * The all-servers-dead path tears the TUN down before bring-up fails, so give-up can otherwise end
+ * with no fd at all, and whether the user is exposed would depend on where bring-up died. That is
+ * worse than either consistent answer, hence the re-establish.
+ *
+ * `CONNECTED` only. `PAUSED` is the kill-switch's deliberate no-tunnel state and its compliance
+ * contract is "no tunnel must exist" — establishing one there would break it outright. Every other
+ * state has a different owner mid-transition who will establish (or tear down) itself.
+ */
+internal fun shouldEstablishBlackholeTunnel(
+    hasTunnel: Boolean,
+    tunnelState: SessionTunnelState,
+): Boolean = !hasTunnel && tunnelState == SessionTunnelState.CONNECTED
