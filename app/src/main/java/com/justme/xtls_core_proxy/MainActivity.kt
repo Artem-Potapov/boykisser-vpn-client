@@ -536,9 +536,17 @@ private fun MainScreen(
                 // per-profile Connect buttons, so without this the user has no in-app way out.
                 // ERROR is here too: a failover give-up that could not contain the traffic leaves
                 // the service RUNNING in ERROR while telling the user to turn the VPN off, and this
-                // was the only surface that could do it. Rendering it for a genuinely dying session
-                // as well is accepted and harmless — stopVpn early-returns when nothing is running,
-                // and confirming the VPN really is off during an error is defensible on its own.
+                // was the only surface that could do it.
+                //
+                // It therefore also renders for a genuinely DYING session, where the service has
+                // already stopSelf()'d. That tap does NOT hit a no-op: disconnect() dispatches
+                // startForegroundService(ACTION_STOP), which CREATES the service. It is safe only
+                // because that start reaches stopVpn's `!shouldStop && tunInterface == null` early
+                // return and stopSelf() synchronously, well inside Android's ~5 s startForeground
+                // deadline. Anything that makes the ACTION_STOP path await work before that point
+                // turns this into ForegroundServiceDidNotStartInTimeException — keep it synchronous.
+                // The tap also clears the active profile even though the session never connected;
+                // accepted, since the user asked to disconnect.
                 if (state == VpnConnectionState.CONNECTED ||
                     state == VpnConnectionState.CONNECTING ||
                     state == VpnConnectionState.PAUSED ||

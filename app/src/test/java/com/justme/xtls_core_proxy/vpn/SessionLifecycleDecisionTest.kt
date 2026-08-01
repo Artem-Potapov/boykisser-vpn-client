@@ -389,6 +389,74 @@ class SessionLifecycleDecisionTest {
         }
     }
 
+    // --- A scheduled retry must not outlive the setting that authorised it ---
+
+    @Test
+    fun retryTimer_firesOnlyWhileFailoverIsStillEnabled() {
+        assertTrue(shouldFireFailoverRetry(failoverEnabled = true, isCurrentSession = true))
+        assertFalse(
+            "disabling failover must veto an already-scheduled retry, or a user who turned the " +
+                "feature off still gets an automatic rotation — and a possible VPN shutdown",
+            shouldFireFailoverRetry(failoverEnabled = false, isCurrentSession = true)
+        )
+    }
+
+    @Test
+    fun retryTimer_doesNotFireForASupersededSession() {
+        assertFalse(shouldFireFailoverRetry(failoverEnabled = true, isCurrentSession = false))
+        assertFalse(shouldFireFailoverRetry(failoverEnabled = false, isCurrentSession = false))
+    }
+
+    // --- Connect-from-UNPROTECTED must actually recover, not no-op ---
+
+    @Test
+    fun startWhileUnprotected_restartsInsteadOfNoOpping() {
+        // canConnect(ERROR) enables the per-profile Connect buttons, but ACTION_START hits
+        // startVpn's "VPN already running" early return. The copy tells the user to turn the VPN
+        // off and on again or choose another server, so the control has to do exactly that.
+        assertTrue(
+            shouldRestartForRecovery(
+                running = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+            )
+        )
+    }
+
+    @Test
+    fun startWhileHealthy_keepsTheIdempotentEarlyReturn() {
+        // Deliberately NOT a general "start while running = restart". The tile,
+        // START_REDELIVER_INTENT recovery and stray/duplicated intents all rely on that early
+        // return being idempotent; a general restart would let a stray intent bounce a live tunnel.
+        assertFalse(shouldRestartForRecovery(running = true, giveUpOutcome = null))
+    }
+
+    @Test
+    fun startWhileContained_doesNotRestart() {
+        // Both contained give-ups still hold a TUN, so traffic is not leaking and there is nothing
+        // for a restart to rescue.
+        for (outcome in listOf(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+        )) {
+            assertFalse(
+                "$outcome is contained; a restart would bounce a tunnel that is doing its job",
+                shouldRestartForRecovery(running = true, giveUpOutcome = outcome)
+            )
+        }
+    }
+
+    @Test
+    fun startWhileStopped_isANormalStart_notARestart() {
+        // A dying-session ERROR has already stopped the service, so running is false and the plain
+        // start path applies — this predicate must not claim that one.
+        assertFalse(
+            shouldRestartForRecovery(
+                running = false,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+            )
+        )
+    }
+
     @Test
     fun blackhole_isNotEstablished_inAnyOtherState() {
         for (state in listOf(

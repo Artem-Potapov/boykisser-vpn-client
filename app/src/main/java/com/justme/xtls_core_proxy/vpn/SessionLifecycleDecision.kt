@@ -214,3 +214,35 @@ internal fun shouldStopServiceOnGiveUp(
     outcome: FailoverGiveUpOutcome,
     unprotectedRetryConsumed: Boolean,
 ): Boolean = outcome == FailoverGiveUpOutcome.UNPROTECTED && unprotectedRetryConsumed
+
+/**
+ * Whether a give-up's re-arm timer may still act when it finally fires.
+ *
+ * The timer is scheduled under one set of preferences and fires up to an hour later under another,
+ * so it must re-check [failoverEnabled] at the firing point rather than trusting the settings that
+ * authorised it. Without this a user who turned auto-failover OFF could still be handed an
+ * automatic server rotation — and, on the unprotected retry path, an automatic VPN shutdown.
+ * Cancelling the job on disable is the root fix; this is the backstop for a timer that fires
+ * concurrently with the settings edit.
+ */
+internal fun shouldFireFailoverRetry(
+    failoverEnabled: Boolean,
+    isCurrentSession: Boolean,
+): Boolean = failoverEnabled && isCurrentSession
+
+/**
+ * Whether an incoming start request should RESTART the running session instead of taking
+ * `startVpn`'s "VPN already running" early return.
+ *
+ * Deliberately narrow: only the UNPROTECTED give-up, where the service is running but owns no
+ * tunnel and traffic is not contained, so a start is the user acting on copy that told them to turn
+ * the VPN off and on again or pick another server. Everything else keeps the early return, because
+ * the tile, `START_REDELIVER_INTENT` crash recovery and stray/duplicated intents all depend on
+ * "start while running" being idempotent — a general restart would let a stray intent bounce a
+ * perfectly healthy tunnel. The two contained outcomes are excluded for the same reason: they still
+ * hold a TUN, so there is nothing for a restart to rescue.
+ */
+internal fun shouldRestartForRecovery(
+    running: Boolean,
+    giveUpOutcome: FailoverGiveUpOutcome?,
+): Boolean = running && giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED

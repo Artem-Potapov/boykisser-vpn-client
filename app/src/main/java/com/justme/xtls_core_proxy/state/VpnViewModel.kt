@@ -326,11 +326,18 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         val stopIntent = Intent(appContext, XrayVpnService::class.java).apply {
             action = XrayVpnService.ACTION_STOP
         }
-        // XrayVpnService is a foreground service and disconnect is only
-        // invoked from UI gated on CONNECTED/CONNECTING/PAUSED, so the
-        // service exists; startForegroundService keeps us safe against
-        // API 31+ background-start restrictions if the activity loses
-        // foreground state between gating and dispatch.
+        // The UI gate is CONNECTED/CONNECTING/PAUSED/BLACKHOLED/ERROR. In the first four the
+        // service is running and this is a plain stop. ERROR is the exception and covers two very
+        // different situations: a failover give-up that could not contain traffic (service RUNNING,
+        // a real stop), and a dying session that has already stopSelf()'d — where this
+        // startForegroundService CREATES the service rather than signalling one. That is safe only
+        // because ACTION_STOP reaches stopVpn's `!shouldStop && tunInterface == null` early return
+        // and stopSelf() synchronously, well inside Android's ~5 s startForeground deadline; if the
+        // stop path ever awaits work before that, this becomes
+        // ForegroundServiceDidNotStartInTimeException.
+        // startForegroundService (not startService) is also what keeps us clear of the API 31+
+        // background-start restriction if the activity loses foreground state between gate and
+        // dispatch.
         appContext.startForegroundService(stopIntent)
         ActiveProfileRepository.setActiveProfileId(context, null)
     }

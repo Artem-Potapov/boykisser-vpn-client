@@ -134,8 +134,8 @@ class XrayVpnTileService : TileService() {
 
     private fun sendStopIntent() {
         // XrayVpnService is a foreground service, and onClick() only reaches
-        // this method when the tile observed an active state (CONNECTING /
-        // CONNECTED / PAUSED) — so the service is running. Using
+        // this method when the tile observed a state in which the service is
+        // running (CONNECTING / CONNECTED / PAUSED / BLACKHOLED). Using
         // startForegroundService avoids the API 31+ background-start
         // restriction that can deny plain startService() if the tile's
         // foreground grant has already elapsed by the time we dispatch.

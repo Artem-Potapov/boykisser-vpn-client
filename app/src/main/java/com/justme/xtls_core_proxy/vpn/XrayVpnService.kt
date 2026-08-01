@@ -153,7 +153,17 @@ class XrayVpnService : VpnService() {
      * Whether the single automatic recovery attempt granted to an UNPROTECTED give-up has been
      * spent. "Disconnect now, stop if the re-arm fails": the first unprotected give-up re-arms, and
      * if the re-armed rotation also fails to bring anything up we stop the service rather than
-     * leaving it running-but-unprotected forever. Cleared wherever [giveUpOutcome] is.
+     * leaving it running-but-unprotected forever. Cleared wherever [giveUpOutcome] is — successful
+     * rotation, successful revive, the recovery callback, and full teardown.
+     *
+     * Two carry-over cases are known and ACCEPTED rather than fixed, because both err towards
+     * stopping a service that cannot protect anything:
+     *  - a retry whose give-up classifies CONTAINED_BY_BLACKHOLE leaves the flag set (traffic is
+     *    contained, so nothing clears it), so a later UNPROTECTED stops immediately with no retry
+     *    of its own;
+     *  - a kill-switch pause landing before the timer fires makes [rotateTunnel] bail at
+     *    `canReserveRotation`, silently spending the retry without attempting anything.
+     *
      * Guarded by `lock`.
      */
     private var unprotectedRetryConsumed: Boolean = false
@@ -272,8 +282,23 @@ class XrayVpnService : VpnService() {
     private fun startVpn(profileId: Long) {
         val sessionEpoch = synchronized(lock) {
             if (running) {
-                LogRepository.append("VPN already running")
-                return
+                if (!shouldRestartForRecovery(running, giveUpOutcome)) {
+                    LogRepository.append("VPN already running")
+                    return
+                }
+                // The user acted on the "turn the VPN off and on again, or choose another server"
+                // copy from an UNPROTECTED give-up: the service is running but owns no tunnel and
+                // is protecting nothing, so the early return above would silently swallow their
+                // only in-app recovery. Tear the dead session down and fall through to the NORMAL
+                // start path, which takes a fresh epoch — no parallel bring-up. stopService = false
+                // keeps this service instance alive across the restart: a real stopSelf() here
+                // would schedule our own destruction and onDestroy would then tear down the session
+                // we are about to start. Reentrant on the same thread, and it flips `running` false
+                // so the assignment below stays coherent.
+                LogRepository.append(
+                    "Restarting the tunnel to recover from an unprotected state (profile id=$profileId)"
+                )
+                stopVpn(stopService = false)
             }
             running = true
             nextSessionEpoch += 1
@@ -904,6 +929,14 @@ class XrayVpnService : VpnService() {
      * uncontained one must never inherit the reassuring "your connection is paused on purpose"
      * copy — that would tell a user their traffic is safe at the exact moment it is not.
      *
+     * **This does not always leave the service running.** Under "disconnect now, stop if the re-arm
+     * fails", an UNPROTECTED outcome gets exactly one automatic recovery attempt (a rotation driven
+     * from [scheduleFailoverRearmLocked], not a monitor restart — there is no tunnel for a probe to
+     * test). If a second give-up is still uncontained, [shouldStopServiceOnGiveUp] fires and this
+     * method calls [stopVpn]: an honest off state beats a service that is running and protecting
+     * nothing while its own notification tells the user to reconnect. The two contained outcomes
+     * never stop the service.
+     *
      * Caller must hold `lock`.
      */
     private fun giveUpRotationLocked(sessionEpoch: Long, reason: String) {
@@ -1053,9 +1086,23 @@ class XrayVpnService : VpnService() {
         failoverRearmJob?.cancel()
         failoverRearmJob = serviceScope.launch {
             delay(windowMs)
-            synchronized(lock) {
-                if (!isCurrentSessionLocked(sessionEpoch)) return@launch
-                rotationAttempts = emptyList()
+            // BACKSTOP for the cancel in applyFailoverPreferences: this timer was scheduled under
+            // one set of preferences and fires up to an hour later, possibly concurrently with the
+            // settings edit that disables the feature. Re-read the flow rather than the captured
+            // settings — the user may have edited them during the wait.
+            val proceed = synchronized(lock) {
+                val ok = shouldFireFailoverRetry(
+                    failoverEnabled = FailoverPreferences.state.value.enabled,
+                    isCurrentSession = isCurrentSessionLocked(sessionEpoch),
+                )
+                if (ok) rotationAttempts = emptyList()
+                ok
+            }
+            if (!proceed) {
+                LogRepository.append(
+                    "Failover: retry timer stood down (feature disabled or session ended)"
+                )
+                return@launch
             }
             if (retryByRotation) {
                 // rotateTunnel re-checks epoch + CONNECTED under the lock itself, so a stale timer
@@ -1063,9 +1110,7 @@ class XrayVpnService : VpnService() {
                 rotateTunnel(sessionEpoch)
                 return@launch
             }
-            // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op. Reads
-            // the settings flow rather than the captured value: the user may have edited them
-            // during the (up to one hour) wait.
+            // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
             applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
         }
     }
@@ -1218,6 +1263,15 @@ class XrayVpnService : VpnService() {
             if (!isCurrentSessionLocked(sessionEpoch)) return
             failoverSettings = settings
 
+            if (!settings.enabled) {
+                // ROOT FIX for a pending re-arm outliving the setting that authorised it. Gated on
+                // `enabled` specifically, NOT on the shouldRun check below: shouldRun is also false
+                // in PAUSED/ROTATING, and an unrelated settings save during a kill-switch pause
+                // must not silently drop a legitimate pending retry. Disabling the feature must.
+                failoverRearmJob?.cancel()
+                failoverRearmJob = null
+            }
+
             if (!shouldRunFailoverMonitor(
                     enabled = settings.enabled,
                     running = running,
@@ -1347,7 +1401,16 @@ class XrayVpnService : VpnService() {
         screenReceiver = null
     }
 
-    private fun stopVpn(expectedSessionEpoch: Long? = null) {
+    /**
+     * Tears the current session down.
+     *
+     * [stopService] is false for exactly one caller: `startVpn`'s unprotected-recovery restart,
+     * which needs the SESSION torn down but this service instance kept alive so it can immediately
+     * start a fresh one. Calling `stopSelf()` there would schedule our own destruction and
+     * `onDestroy` would then tear down the session we just started; skipping `stopForeground` also
+     * keeps the FGS promotion continuous across the restart instead of dropping and re-taking it.
+     */
+    private fun stopVpn(expectedSessionEpoch: Long? = null, stopService: Boolean = true) {
         synchronized(lock) {
             if (expectedSessionEpoch != null && !isCurrentSessionLocked(expectedSessionEpoch)) return
 
@@ -1376,7 +1439,7 @@ class XrayVpnService : VpnService() {
                 // No live session and no TUN yet — still stop any tailer we extracted
                 // defensively and exit cleanly.
                 tailerToStop?.stop()
-                stopSelf()
+                if (stopService) stopSelf()
                 return
             }
 
@@ -1406,8 +1469,10 @@ class XrayVpnService : VpnService() {
             // stopForeground won't remove either.
             VpnNotifications.cancelExposed(this)
             VpnNotifications.cancelFailoverBlackholed(this)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            if (stopService) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 
