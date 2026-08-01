@@ -496,10 +496,6 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   so the timeout only lands after the blocking call returns. Not a leak — the poll loop is sequential,
   ticks cannot overlap — detection is just slower. Accepted for v1. `PingCoordinator.probeWithBackstop`
   is the in-repo pattern if this ever needs real bounding.
-- **`HealthProbe`'s KDoc says implementations "MUST NOT throw"** without carving out
-  `CancellationException`, which must propagate. `Http204HealthProbe` gets it right; the *interface*
-  doc invites a future implementation to swallow CE, which would make the cancel-without-join windows
-  genuinely racy over `consecutiveFailures`. Doc-level, unfixed.
 - **`TunnelHealthMonitor` has no constructor validation.** `failureThreshold <= 0` fires on the first
   failure (`>=` comparison); `intervalMs <= 0` hot-spins the loop. Both are unreachable through
   `FailoverPreferences.coerce`, which is the only production source.
@@ -530,10 +526,6 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   between. Unreachable from the UI (during a rotation the state is `CONNECTING`, so `canConnect` is
   false and the tile returns `Stop`); it needs a duplicated/queued intent. The outcome is still correct
   — epoch discipline no-ops the rotation's `.onSuccess`.
-- **Two comments still say the ACTION_STOP dispatch is "synchronous"** (`MainActivity` and
-  `VpnViewModel`, in the ERROR-Disconnect explanation). It is dispatched via `tunnelOpScope.launch`; the
-  safety claim ("`stopVpn` never awaits", so the ~5 s `startForeground` deadline is met) holds, but the
-  wording should say *does not await*. Cosmetic; open.
 - **`shouldEstablishBlackholeTunnel` is redundant at its only call site** (its state arm is dead behind
   the stand-down above it), and 3 of its 4 tests cover unreachable branches — coverage that looks
   stronger than it is.
@@ -547,10 +539,12 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   "try again", so a wrong label misexplains without misleading into a wrong action.
 - **`PingCoordinator`'s cross-run dedup can hand `pickFastest` a stale `Success`** from an earlier run,
   producing a winner chosen from non-fresh data with no message. See [`ping-test.md`](ping-test.md).
-- **The settings-screen hint string overpromises slightly.** `failover_hint` reads "If no server works,
-  the tunnel is kept up so your traffic is never exposed." That is true for both *contained* outcomes
-  but not for `UNPROTECTED`, where `establish()` itself failed. The give-up **notifications** were
-  rewritten to be honest per outcome; this hint was not. Copy-level, both locales, unfixed.
+> **Note on `failover_hint`.** An earlier draft of this string read "the tunnel is kept up so your
+> traffic is never exposed" — true for both *contained* outcomes but **false for `UNPROTECTED`**,
+> where `establish()` itself failed. It was rewritten (commit `4091571`) to promise a pause rather
+> than a guarantee, and to say the app will tell you when even that is impossible. Keep any future
+> edit to this string honest about `UNPROTECTED`: the give-up notifications are per-outcome for
+> exactly this reason, and a settings hint that contradicts them is the same defect one screen over.
 
 ## Deferred: extract a `FailoverEngine` behind a `TunnelHost` seam
 
