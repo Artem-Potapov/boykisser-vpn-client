@@ -99,7 +99,7 @@ import com.justme.xtls_core_proxy.state.AutoPingLatch
 import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
-import com.justme.xtls_core_proxy.state.poolForProfile
+import com.justme.xtls_core_proxy.state.canConnect
 import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
@@ -727,7 +727,7 @@ private fun MainScreen(
                 onDisconnect()
             },
             onConnectFastest = {
-                viewModel.connectFastest(poolForProfile(view, profile))
+                viewModel.connectFastest(profile)
                 menuProfile = null
             },
             onPingTest = {
@@ -1028,13 +1028,6 @@ private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionStat
             state == VpnConnectionState.CONNECTING ||
             state == VpnConnectionState.PAUSED ||
             state == VpnConnectionState.BLACKHOLED)
-}
-
-private fun canConnect(state: VpnConnectionState): Boolean {
-    return state != VpnConnectionState.CONNECTED &&
-        state != VpnConnectionState.CONNECTING &&
-        state != VpnConnectionState.PAUSED &&
-        state != VpnConnectionState.BLACKHOLED
 }
 
 /**

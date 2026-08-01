@@ -588,6 +588,9 @@
     <string name="failover_connect_fastest">Подключиться к самому быстрому</string>
     <string name="failover_connect_fastest_progress">Поиск самого быстрого сервера…</string>
     <string name="failover_connect_fastest_cancel">Отмена</string>
+    <string name="failover_connect_fastest_no_response_error">Ни один сервер не ответил, поэтому не удалось выбрать самый быстрый. Попробуйте позже.</string>
+    <string name="failover_connect_fastest_busy_error">Некоторые из этих серверов уже проверялись в другом месте, поэтому не удалось получить свежий результат. Попробуйте ещё раз через момент.</string>
+    <string name="failover_connect_fastest_state_changed_error">Подключение изменилось во время работы функции «Подключиться к самому быстрому», поэтому она была отменена. Попробуйте снова.</string>
 
     <!-- Failover settings screen -->
     <string name="failover_title">Автопереключение</string>

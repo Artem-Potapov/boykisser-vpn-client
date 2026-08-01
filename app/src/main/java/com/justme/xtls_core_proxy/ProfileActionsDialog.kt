@@ -87,9 +87,14 @@ fun ProfileActionsDialog(
                     icon = painterResource(R.drawable.ic_bolt),
                     label = stringResource(R.string.failover_connect_fastest),
                     // Mirrors the Connect row above: disabled (not hidden) for the same reason —
-                    // CONNECTED/CONNECTING/PAUSED/BLACKHOLED would make the eventual connect() call a
-                    // silent "VPN already running" no-op (see XrayVpnService.startVpn), so the probe
-                    // must never be allowed to run to only discover that at the end.
+                    // CONNECTED/CONNECTING/PAUSED/BLACKHOLED would make an immediate connect() call a
+                    // silent "VPN already running" no-op (see XrayVpnService.startVpn). This is a
+                    // TAP-TIME gate only — the probe that follows can run for minutes, during which
+                    // the connection state can change again. The real guarantee against a stale
+                    // winner is FastestConnectRunner's delivery-time re-check of the identical
+                    // canConnect rule, immediately before it ever surfaces a winner; this gate is
+                    // just the cheap, obvious no-op prevention for the common case of tapping the
+                    // row while a session is already live.
                     enabled = canConnect,
                     onClick = onConnectFastest
                 )

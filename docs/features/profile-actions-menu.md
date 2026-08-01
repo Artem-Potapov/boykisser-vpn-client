@@ -74,24 +74,60 @@ vector drawables under `res/drawable/`.
 
 ### Connect to fastest
 
-"Connect to fastest" probes every profile in the long-pressed profile's current group — the manual
-("My profiles") partition, or the matching subscription group — via the existing
-[ping-test](ping-test.md) `PingCoordinator`/`pingStates` machinery
-(`state/VpnViewModel.poolForProfile` resolves the pool from a single `Profile` back to its group),
-then connects to whichever profile answered fastest. Unlike every other row, it does **not**
-dismiss the dialog by itself finishing synchronously — the probe run continues after the dialog
-closes (`menuProfile = null` still fires immediately on tap, matching the dismissal idiom, but the
-underlying `VpnViewModel.connectFastest` coroutine is not tied to the dialog's lifetime).
+"Connect to fastest" probes the long-pressed profile's pool — resolved by
+[`failover/FailoverPoolResolver.resolve`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverPoolResolver.kt)
+(the manual "My profiles" partition, or the matching subscription's profiles pulled straight from
+the DAO) — via the existing [ping-test](ping-test.md) `PingCoordinator` machinery, then connects to
+whichever profile answered fastest. Pool resolution deliberately reuses `FailoverPoolResolver`
+rather than deriving a separate view-based pool: that object's own KDoc calls it "the single place
+that changes when user-curated pools land," and a second, independently-derived pool here would
+silently diverge from what auto-failover itself rotates through once curated pools exist.
 
-Because the probe run can take up to `timeout * ceil(n / concurrency)` (several minutes at the
-ping-test preference bounds), `MainScreen` shows a dedicated progress row (spinner + "Finding the
-fastest server…" + a Cancel button) whenever `VpnViewModel.connectFastestActive` is true, and each
-pooled server's row/group-header spinner lights up for free since the run marks pool ids
-`PingState.Testing` through the same `pingStates` map a manual ping test uses. Cancelling (via that
-button, or `VpnViewModel.cancelConnectFastest()`) resets any pool id still on `Testing` back to
-`Idle` rather than leaving it spinning forever — see `VpnViewModel.connectFastest`'s doc for why that
-reset is necessary (`PingCoordinator.runGroup` does not itself emit a terminal state for an id whose
-probe was cancelled mid-flight).
+The row taps dismiss the dialog immediately (`menuProfile = null`, matching every other row's
+idiom), but unlike every other row the underlying work does **not** finish synchronously with that
+tap — `VpnViewModel.connectFastest` starts a probe run that keeps going after the dialog has already
+closed.
+
+Because that run can take up to `timeout * ceil(n / concurrency)` (several minutes at the ping-test
+preference bounds), `MainScreen` shows a dedicated progress row (spinner + "Finding the fastest
+server…" + a Cancel button) whenever `VpnViewModel.connectFastestActive` is true. Each pooled
+server's row/group-header spinner lights up too, for free — but only for the *fresh* ids this run
+actually admits: `PingCoordinator.runGroup` skips (does not re-mark) any id already in flight from
+another active run (auto-ping, a manual ping test, or an overlapping connect-fastest pool), so a
+pool id that was already `Testing` before this run started may show no visible change at all.
+Cancelling (via that button, or `VpnViewModel.cancelConnectFastest()`) resets any of *this run's*
+pool ids still on `Testing` back to `Idle` rather than leaving them spinning forever — see
+`failover/FastestConnectRunner.start`'s doc for why that reset is necessary
+(`PingCoordinator.runGroup` does not itself emit a terminal state for an id whose probe was
+cancelled mid-flight).
+
+All of the sequencing above — job replacement, the delivery-time re-gate below, cancellation
+cleanup, and the busy/no-response distinction — lives in
+[`failover/FastestConnectRunner`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt),
+a framework-free class `VpnViewModel` owns one instance of. It is unit-tested directly (see Testing
+below) the same way `PingCoordinatorTest` exercises `PingCoordinator` itself, without needing
+`AndroidViewModel`/Room/`Context`.
+
+**A discarded run always tells the user why**, never silently: if no pool id resolved to a
+successful probe, `LogRepository.emitError` fires one of two distinct messages —
+`failover_connect_fastest_no_response_error` if every id was probed fresh and none answered, or
+`failover_connect_fastest_busy_error` if at least one pool id was already `Testing` (owned by
+another active run) before this run started, since in that case "no server responded" would be
+misleading — the server may be fine, this run just never got a fresh read on it.
+
+**The winner is re-gated at delivery time, not only at the tap that started the run** (Task 10
+review Important 1). A run spanning minutes means the connection state can leave the connectable
+set (`CONNECTED`/`CONNECTING`/`PAUSED`/`BLACKHOLED`) while it is in flight — another Connect action,
+the QS tile, or auto-failover can all cause this. `FastestConnectRunner` re-checks
+`state/VpnViewModel.canConnect` (a shared top-level function, not duplicated) against the fresh
+connection state immediately before ever setting the winner; if it now fails, the winner is
+discarded and `failover_connect_fastest_state_changed_error` is reported instead. **The row's own
+`enabled = canConnect` (checked once, at tap time) is a cheap, obvious no-op-prevention gate only —
+it does NOT by itself guarantee correctness of a winner minutes later.** Without the delivery-time
+re-check, a stale winner firing into a no-longer-connectable state would have `connect()` silently
+keep the OLD tunnel up (`XrayVpnService.startVpn`'s "VPN already running" no-op) while
+unconditionally overwriting `ActiveProfileRepository`'s active profile id to the NEW one — the UI
+would then report the WRONG server as connected while traffic kept flowing through the old one.
 
 The winning profile is surfaced as `VpnViewModel.fastestWinnerId` (ViewModel state) rather than the
 ViewModel calling `connect()` directly: every other Connect action in this app is gated by
@@ -102,11 +138,6 @@ it becomes non-null, calls the same `onConnect` callback every other Connect row
 it via `consumeFastestWinner()`. Surfacing the winner as state (not a callback captured by the
 long-running coroutine) also means an Activity recreation (rotation) mid-probe cannot fire the
 connect flow against a destroyed Activity — the observer re-subscribes fresh on every recomposition.
-
-The row itself is disabled (not hidden) whenever `canConnect` is false, mirroring the Connect row
-directly above it: `XrayVpnService.startVpn` no-ops with "VPN already running" for a start dispatched
-while a session is already live, so the multi-minute probe must never be allowed to run only to
-discover that at the very end.
 
 ## Copy link
 
@@ -179,7 +210,9 @@ notification action.
 | [`config/ProfileConfigCodec.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ProfileConfigCodec.kt) | VLESS URI reconstruction (`toVlessUri`) |
 | [`config/Hysteria2ConfigCodec.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/Hysteria2ConfigCodec.kt) | Hysteria2 link reconstruction (`toShareLink`) |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Connect-to-fastest pure logic — `pickFastest` (lowest-latency successful candidate) and `clearStaleTesting` (post-cancel `pingStates` cleanup) |
-| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `poolForProfile` (group resolution), `connectFastest`/`cancelConnectFastest`/`connectFastestActive`/`fastestWinnerId`/`consumeFastestWinner` |
+| [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free orchestrator — job replacement/cancellation, the delivery-time `canConnect` re-gate, busy-vs-no-response messaging (`FastestConnectOutcome`) |
+| [`failover/FailoverPoolResolver.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverPoolResolver.kt) | Single source of truth for "the pool a profile belongs to" — shared with auto-failover, `resolve(dao, profile)` |
+| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `canConnect` (shared connectability check, also used by `MainActivity`), owns the one `FastestConnectRunner` instance, `connectFastest`/`cancelConnectFastest`/`connectFastestActive`/`fastestWinnerId`/`consumeFastestWinner` delegate to it |
 
 ## Testing
 
@@ -191,7 +224,7 @@ JVM unit tests (`:app:testDebugUnitTest`):
 | [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | `toShareLink` round-trips: common fields (sni, alpn, insecure, salamander), port-hopping + salamander, finalmask blob carried verbatim |
 | [`FastestPickTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestPickTest.kt) | `pickFastest`: lowest latency wins, ignores `Unavailable`/`Testing`, null when nothing succeeded, ignores results for ids outside the candidate list |
 | [`ClearStaleTestingTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/ClearStaleTestingTest.kt) | `clearStaleTesting`: resets in-pool `Testing` ids to `Idle`, leaves resolved ids untouched, never touches `Testing` ids outside the pool |
-| [`PoolForProfileTest`](../../app/src/test/java/com/justme/xtls_core_proxy/state/PoolForProfileTest.kt) | `poolForProfile`: manual profile → whole manual partition, subscription profile → its `SubGroup`, orphaned subscription id → falls back to `listOf(profile)` |
+| [`FastestConnectRunnerTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestConnectRunnerTest.kt) | `FastestConnectRunner` sequencing, driven with `kotlinx-coroutines-test` against a real (not faked) `PingCoordinator`: a superseding run's `active` flag survives the superseded run's own cancellation-driven cleanup; `cancel()` resets in-pool `Testing` ids to `Idle`; a winner found after `canConnect` turns false is discarded and reported `STATE_CHANGED`, never delivered; a winner found while still connectable is delivered; no winner with nothing pre-existing in flight reports `NO_RESPONSE`; no winner with a pool id already `Testing` beforehand reports `BUSY` instead |
 
 `ProfileActionsDialog` itself has no dedicated unit test — it is a pure Compose rendering component
 with no business logic of its own.
