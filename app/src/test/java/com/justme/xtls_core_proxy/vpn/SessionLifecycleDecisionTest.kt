@@ -3,6 +3,7 @@ package com.justme.xtls_core_proxy.vpn
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -468,6 +469,43 @@ class SessionLifecycleDecisionTest {
             assertFalse(
                 "another owner drives the tunnel in $state",
                 shouldEstablishBlackholeTunnel(hasTunnel = false, tunnelState = state)
+            )
+        }
+    }
+
+    // --- A refused start must not leave the app claiming the server it refused ---
+
+    @Test
+    fun refusedStart_restoresTheProfileTheTunnelIsActuallyOn() {
+        // Every connect path writes ActiveProfileRepository BEFORE dispatching ACTION_START. When
+        // startVpn refuses that start, traffic keeps flowing through the running profile while the
+        // UI/QS tile would keep labelling the requested one as connected.
+        assertEquals(
+            7L,
+            activeProfileIdToRestoreOnRefusedStart(requestedProfileId = 12L, currentProfileId = 7L)
+        )
+    }
+
+    @Test
+    fun refusedStartOfTheRunningProfile_restoresNothing() {
+        // The eager write already stored exactly what is running; rewriting it would churn
+        // SharedPreferences and re-emit to every observer for no change.
+        assertNull(
+            activeProfileIdToRestoreOnRefusedStart(requestedProfileId = 7L, currentProfileId = 7L)
+        )
+    }
+
+    @Test
+    fun refusedStartWithNoSessionProfile_restoresNothing() {
+        // currentProfileId is a plain Long carrying -1L when unset (stopVpn resets it), and Room
+        // never issues a non-positive profile id. Writing one back would point the UI at nothing.
+        for (unset in listOf(-1L, 0L)) {
+            assertNull(
+                "id $unset is not a real profile; restoring it would write garbage",
+                activeProfileIdToRestoreOnRefusedStart(
+                    requestedProfileId = 12L,
+                    currentProfileId = unset,
+                )
             )
         }
     }

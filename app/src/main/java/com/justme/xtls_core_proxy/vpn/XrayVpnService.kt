@@ -284,6 +284,16 @@ class XrayVpnService : VpnService() {
             if (running) {
                 if (!shouldRestartForRecovery(running, giveUpOutcome)) {
                     LogRepository.append("VPN already running")
+                    // The caller recorded the requested profile as active before dispatching this
+                    // start; we are refusing it, so roll that write back to the profile the tunnel
+                    // is really on or the UI and the QS tile would label a server we never
+                    // connected to as connected. Same rollback duty as rotateTunnel's bring-up
+                    // failure arm, from the other side: ActiveProfileRepository must only ever
+                    // name a profile some tunnel actually carries. setActiveProfileId writes via
+                    // apply(), so this holds no disk I/O under the lock.
+                    activeProfileIdToRestoreOnRefusedStart(profileId, currentProfileId)?.let {
+                        ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, it)
+                    }
                     return
                 }
                 // The user acted on the "turn the VPN off and on again, or choose another server"

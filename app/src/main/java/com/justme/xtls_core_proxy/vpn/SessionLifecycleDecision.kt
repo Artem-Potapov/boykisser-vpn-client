@@ -246,3 +246,24 @@ internal fun shouldRestartForRecovery(
     running: Boolean,
     giveUpOutcome: FailoverGiveUpOutcome?,
 ): Boolean = running && giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED
+
+/**
+ * Which profile id must be written back to `ActiveProfileRepository` when `startVpn` takes its
+ * "VPN already running" early return — or `null` when nothing should be written.
+ *
+ * Every connect path (the per-server rows, the profile-actions dialog, the QS tile, always-on via
+ * `resolveActiveAndStart`, connect-to-fastest) records the requested profile as active BEFORE
+ * dispatching the start. When the start is refused, traffic keeps flowing through
+ * [currentProfileId] while the UI and the tile would go on labelling [requestedProfileId] as the
+ * connected server — the one fact a VPN client must never get wrong.
+ *
+ * Applies ONLY to the refusal; the UNPROTECTED recovery restart really does go on to start
+ * [requestedProfileId], so it must keep the caller's write. `null` covers the two cases where a
+ * write would be wrong or pointless: the request already matches the running session, and no real
+ * session profile exists (the field carries -1L when unset and Room never issues a non-positive id,
+ * so restoring one would point the app at nothing).
+ */
+internal fun activeProfileIdToRestoreOnRefusedStart(
+    requestedProfileId: Long,
+    currentProfileId: Long,
+): Long? = currentProfileId.takeIf { it > 0L && it != requestedProfileId }
