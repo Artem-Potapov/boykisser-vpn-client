@@ -588,6 +588,11 @@
     <string name="failover_unprotected_title">Connection is not protected</string>
     <string name="failover_unprotected_body">No server responded, and we could not pause your connection either — so it is currently unprotected. Tap to turn the VPN off and on again, or choose another server.</string>
 
+    <!-- Connect-to-fastest -->
+    <string name="failover_connect_fastest">Connect to fastest</string>
+    <string name="failover_connect_fastest_progress">Finding the fastest server…</string>
+    <string name="failover_connect_fastest_cancel">Cancel</string>
+
     <!-- Failover settings screen -->
     <string name="failover_title">Auto-failover</string>
     <string name="settings_failover_title">Auto-failover</string>

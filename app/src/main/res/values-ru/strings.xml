@@ -584,6 +584,11 @@
     <string name="failover_unprotected_title">Соединение не защищено</string>
     <string name="failover_unprotected_body">Ни один сервер не ответил, и приостановить соединение тоже не удалось — сейчас оно не защищено. Нажмите, чтобы выключить и снова включить VPN или выбрать другой сервер.</string>
 
+    <!-- Connect-to-fastest -->
+    <string name="failover_connect_fastest">Подключиться к самому быстрому</string>
+    <string name="failover_connect_fastest_progress">Поиск самого быстрого сервера…</string>
+    <string name="failover_connect_fastest_cancel">Отмена</string>
+
     <!-- Failover settings screen -->
     <string name="failover_title">Автопереключение</string>
     <string name="settings_failover_title">Автопереключение</string>

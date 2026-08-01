@@ -12,6 +12,8 @@ import com.justme.xtls_core_proxy.config.ConfigBuilder
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
+import com.justme.xtls_core_proxy.failover.clearStaleTesting
+import com.justme.xtls_core_proxy.failover.pickFastest
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
@@ -60,6 +62,22 @@ fun shouldAutoPing(autoOnOpen: Boolean, alreadyConsumed: Boolean): Boolean =
 @Suppress("UNUSED_PARAMETER")
 fun autoPingServers(profiles: List<Profile>, subscriptions: List<Subscription>): List<Profile> =
     profiles.sortedWith(compareBy({ it.subscriptionId != null }, { it.subscriptionId }, { it.id }))
+
+/**
+ * The "Connect fastest" candidate pool for [profile]: the profiles sharing its group in [view] — the
+ * manual ("My profiles") partition when [profile] has no subscription, otherwise the matching
+ * [SubGroup]'s profiles. The ProfileActionsDialog long-press menu only ever knows a single [Profile],
+ * so the pool has to be derived from the group it currently renders under rather than passed in
+ * directly. Falls back to `listOf(profile)` if the subscription id has no matching group (e.g. a
+ * stale reference mid-recomposition), so the action is never silently unavailable.
+ */
+internal fun poolForProfile(view: ProfilesView, profile: Profile): List<Profile> =
+    if (profile.subscriptionId == null) {
+        view.manual
+    } else {
+        view.groups.firstOrNull { it.subscription.id == profile.subscriptionId }?.profiles
+            ?: listOf(profile)
+    }
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -115,6 +133,40 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pingStates = MutableStateFlow<Map<Long, PingState>>(emptyMap())
     val pingStates: StateFlow<Map<Long, PingState>> = _pingStates.asStateFlow()
+
+    // Held so a running connect-to-fastest probe can be cancelled (Task 10: worst case is
+    // timeout * ceil(n / concurrency) — up to ~2.25 min at the preference bounds — and the UI must
+    // offer a way out). Only ever cancelled/replaced from the main thread (Compose callbacks), so a
+    // plain var is safe here — same discipline as the rest of this ViewModel's Job-holding fields.
+    private var connectFastestJob: Job? = null
+
+    // Guards the finally-block "am I still the active run" check in connectFastest — see that
+    // function's doc for why a captured Int is used instead of comparing against the Job itself.
+    private var connectFastestGeneration = 0
+
+    private val _connectFastestActive = MutableStateFlow(false)
+    /** True while a connect-to-fastest probe run (see [connectFastest]) is in flight. */
+    val connectFastestActive: StateFlow<Boolean> = _connectFastestActive.asStateFlow()
+
+    private val _fastestWinnerId = MutableStateFlow<Long?>(null)
+    /**
+     * The winning profile id from the most recent [connectFastest] run, or null once consumed. The
+     * ViewModel deliberately does NOT call [connect] itself here: every other Connect action in this
+     * app routes through MainActivity's permission-checked flow (notification permission, then
+     * `VpnService.prepare()` consent) before ever calling [connect], and the ViewModel has no access
+     * to that Activity-owned `ActivityResultLauncher` machinery. Surfacing the winner as state and
+     * letting the Compose layer consume it through the SAME `onConnect` callback every other row uses
+     * (see MainActivity's `MainScreen`) keeps that invariant intact and — because it is ViewModel
+     * state observed fresh on every recomposition, not a callback captured for the life of the
+     * coroutine — survives an Activity recreation (rotation) mid-probe without capturing a stale
+     * Activity instance.
+     */
+    val fastestWinnerId: StateFlow<Long?> = _fastestWinnerId.asStateFlow()
+
+    /** Consumes [fastestWinnerId] so it does not re-fire on the next recomposition. */
+    fun consumeFastestWinner() {
+        _fastestWinnerId.value = null
+    }
 
     val connectionState = LogRepository.connectionState
 
@@ -364,6 +416,68 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pingTestProfile(profile: Profile) = pingTestGroup(listOf(profile))
+
+    /**
+     * Probes every profile in [pool] via the existing [pingCoordinator] (unchanged, reused as-is —
+     * mirrors [pingTestGroup]) and, once the fastest successful responder is known, surfaces it via
+     * [fastestWinnerId] rather than connecting directly (see that property's doc for why). Replaces
+     * any run already in flight rather than stacking a second one, so [connectFastestActive] tracks
+     * exactly one run at a time.
+     *
+     * Cancellation (see [cancelConnectFastest]): cancelling this Job propagates into `runGroup`'s
+     * child probes, but a probe already inside `probeWithBackstop` holds its native slot on a
+     * `viewModelScope`-parented orphan (bounded-orphan pattern, unaffected by this Job's cancellation
+     * — see `docs/features/ping-test.md`), so the *native* work and its slot accounting are untouched.
+     * What cancellation DOES break is `pingStates`: `runGroup` rethrows the cancellation from inside
+     * its per-id `finally`, ahead of `onUpdate`, so an id that was still in flight is left on
+     * `Testing` forever unless something resets it — [clearStaleTesting] in the `finally` below is
+     * that reset, run for both cancellation and normal completion (a no-op on the happy path).
+     *
+     * [connectFastestGeneration] (bumped BEFORE the old job is cancelled) guards the `finally`'s
+     * `_connectFastestActive` write rather than comparing against the `Job` returned below: with
+     * `viewModelScope`'s `Dispatchers.Main.immediate`, calling `cancel()` from a Compose callback
+     * already on the main thread can resume — and run the finally of — the job being replaced
+     * SYNCHRONOUSLY, inside this very function, before `job` is assigned. A captured `Int` local has
+     * no such ordering hazard: it is fully assigned before the coroutine literal is even created.
+     */
+    fun connectFastest(pool: List<Profile>): Job {
+        val generation = ++connectFastestGeneration
+        connectFastestJob?.cancel()
+        val ids = pool.mapTo(HashSet()) { it.id }
+        val job = viewModelScope.launch {
+            _connectFastestActive.value = true
+            try {
+                if (pool.isEmpty()) return@launch
+                val prefs = PingPreferences.load(getApplication())
+                val byId = pool.associateBy { it.id }
+                pingCoordinator.runGroup(
+                    ids = byId.keys.toList(),
+                    concurrency = prefs.concurrency,
+                    onUpdate = { id, state -> _pingStates.update { it + (id to state) } },
+                    probe = { id ->
+                        probeProfile(byId.getValue(id), prefs.targetUrl, prefs.timeoutMs)
+                    }
+                )
+                val winner = pickFastest(_pingStates.value, pool) ?: return@launch
+                _fastestWinnerId.value = winner.id
+            } finally {
+                _pingStates.update { clearStaleTesting(it, ids) }
+                // Only the most recently started run may report itself finished: a superseded run
+                // reaching this finally (e.g. an already-cancelled prior run unwinding after a newer
+                // one was started) must not stomp the newer run's still-in-flight `true`.
+                if (connectFastestGeneration == generation) {
+                    _connectFastestActive.value = false
+                }
+            }
+        }
+        connectFastestJob = job
+        return job
+    }
+
+    /** Stops an in-flight [connectFastest] run. See that function's doc for cancellation semantics. */
+    fun cancelConnectFastest() {
+        connectFastestJob?.cancel()
+    }
 
     private suspend fun probeProfile(
         profile: Profile,

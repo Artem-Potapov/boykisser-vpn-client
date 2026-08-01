@@ -99,6 +99,7 @@ import com.justme.xtls_core_proxy.state.AutoPingLatch
 import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
+import com.justme.xtls_core_proxy.state.poolForProfile
 import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
@@ -481,6 +482,20 @@ private fun MainScreen(
     val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
+    // Connect-to-fastest (Task 10): the ViewModel never calls connect() itself for this — it surfaces
+    // the winner as state instead of a captured callback so a config-change (rotation) mid-probe can't
+    // fire onConnect against a destroyed Activity. This effect re-subscribes with the CURRENT onConnect
+    // on every recomposition (including a fresh one after recreation), consumes the winner exactly
+    // once, then hands it to the SAME permission-checked onConnect every other Connect action uses —
+    // see VpnViewModel.fastestWinnerId's doc for the full rationale.
+    val fastestWinnerId by viewModel.fastestWinnerId.collectAsState()
+    LaunchedEffect(fastestWinnerId) {
+        val winnerId = fastestWinnerId ?: return@LaunchedEffect
+        onConnect(winnerId)
+        viewModel.consumeFastestWinner()
+    }
+    val connectingFastest by viewModel.connectFastestActive.collectAsState()
+
     var menuProfile by remember { mutableStateOf<Profile?>(null) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -566,6 +581,32 @@ private fun MainScreen(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+
+            // Connect-to-fastest can run for up to timeout * ceil(n / concurrency) — several minutes
+            // at the preference bounds — so it needs a visible, cancellable in-progress affordance
+            // rather than a fire-and-forget dialog action. Per-server progress is already covered for
+            // free: connectFastest marks each pooled id PingState.Testing, which lights up the same
+            // group-header spinner a regular ping test uses.
+            if (connectingFastest) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.failover_connect_fastest_progress),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    TextButton(onClick = { viewModel.cancelConnectFastest() }) {
+                        Text(stringResource(R.string.failover_connect_fastest_cancel))
+                    }
+                }
             }
 
             if (showPromo && !bannerDismissed) {
@@ -684,6 +725,10 @@ private fun MainScreen(
             onDisconnect = {
                 menuProfile = null
                 onDisconnect()
+            },
+            onConnectFastest = {
+                viewModel.connectFastest(poolForProfile(view, profile))
+                menuProfile = null
             },
             onPingTest = {
                 viewModel.pingTestProfile(profile)

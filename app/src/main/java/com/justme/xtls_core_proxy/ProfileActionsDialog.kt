@@ -42,6 +42,7 @@ fun ProfileActionsDialog(
     shareLink: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onConnectFastest: () -> Unit,
     onPingTest: () -> Unit,
     onEdit: () -> Unit,
     onCopyLink: () -> Unit,
@@ -82,6 +83,16 @@ fun ProfileActionsDialog(
                         onClick = onConnect
                     )
                 }
+                ProfileActionRow(
+                    icon = painterResource(R.drawable.ic_bolt),
+                    label = stringResource(R.string.failover_connect_fastest),
+                    // Mirrors the Connect row above: disabled (not hidden) for the same reason —
+                    // CONNECTED/CONNECTING/PAUSED/BLACKHOLED would make the eventual connect() call a
+                    // silent "VPN already running" no-op (see XrayVpnService.startVpn), so the probe
+                    // must never be allowed to run to only discover that at the end.
+                    enabled = canConnect,
+                    onClick = onConnectFastest
+                )
                 ProfileActionRow(
                     icon = painterResource(R.drawable.ic_speedometer),
                     label = stringResource(R.string.ping_action_test),
