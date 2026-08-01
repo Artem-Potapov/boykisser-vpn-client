@@ -35,22 +35,23 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
 │       │   │   ├── config/         ConfigBuilder (mandatory normalization + fragmentation→mux→DNS→routing→core overlays), ConfigSanitizer (read-only inverse diagnostic), overlay models/preferences, LogSettings, profile codecs/share links, JsonFormatter → docs/features/
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
+│       │   │   ├── failover/       Auto-failover → docs/features/auto-failover.md: FailoverPreferences (+ the timeout<interval coerce), HealthProbe/Http204HealthProbe (204 through the LIVE tun), NetworkAvailability (offline guard), TunnelHealthMonitor (terminal-after-fire poll loop), FailoverDecision (nextCandidate + sliding thrash cap), FailoverPoolResolver (SPEC 2 SEAM, shared with connect-to-fastest), FailoverSettingsActivity + FailoverSettingsPersistDecision, FastestConnectRunner/FastestPick
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
-│       │   │   ├── log/            LogRepository (sanitized state/log surface), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
+│       │   │   ├── log/            LogRepository (sanitized state/log surface; VpnConnectionState incl. BLACKHOLED), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
 │       │   │   ├── privacy/        Device identity (HWID): settings repo + pure header/UA/rejection/hint logic + HwidSettingsActivity → docs/features/hwid-device-identity.md
-│       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/; DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
+│       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/ (the Tunnel → Auto-failover row opens failover/FailoverSettingsActivity); DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
 │       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; SubscriptionRefreshCoordinator loads device-identity settings and augments fetch errors with HWID/UA guidance; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
-│       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features), StartCommandDecision, VpnNotifications
+│       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features; also the failover rotation/give-up/blackhole wiring), StartCommandDecision, SessionLifecycleDecision (pure kill/revive/ROTATE transition + give-up rules), VpnNotifications (ids 1101/1103/1104/1105 + their channels)
 │       │   └── res/
-│       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon)
+│       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon; ic_bolt.xml — connect-to-fastest)
 │       │       ├── values/         strings.xml (source of truth), colors, themes
 │       │       ├── values-ru/      Russian strings.xml
 │       │       └── xml/            backup_rules, data_extraction_rules, locales_config
@@ -60,6 +61,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
 │   │   ├── app-appearance.md        Theme modes (System/Light/Dark/True Dark) + Material You; live repo recompose; Theme.kt inline-SDK-guard gotcha
 │   │   ├── auto-connect-boot.md     Stateless explainer + deep-link to OS Always-on VPN (no boot receiver, no local state)
+│   │   ├── auto-failover.md        Tunnel health watchdog, rotation engine, three-outcome fail-closed give-up (blackhole TUN), BLACKHOLED state, "disconnect now, stop if re-arm fails", connect-to-fastest
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
 │   │   ├── config-sanitization.md  Read-only inverse diagnostic over the effective runtime pipeline
@@ -83,7 +85,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   │   ├── sideloading-warning.md
 │   │   └── xray-settings.md         MTU/IPv6/sniffing/domain strategy overlay + linked core version
 │   ├── play-policy-declarations.md Play Console policy declaration answers
-│   ├── qa/                         QA scenarios
+│   ├── qa/                         QA scenarios (incl. auto-failover-qa.md — the hardware-only failover matrix)
 │   └── superpowers/                Working artifacts (plans/specs); specs not committed
 ├── gradle/
 │   ├── libs.versions.toml          Version catalog — single source of dep versions
@@ -275,6 +277,18 @@ view, which raced the separate `subscriptions` load) and is consumed once per ap
 process-scoped `AutoPingLatch` (an `object` whose atomic consumed bit re-arms only on process death). See
 [`docs/features/ping-test.md`](docs/features/ping-test.md).
 
+**Auto-failover is a third, live-observed settings rail** — neither session-captured like
+`TuningSettings` nor per-probe like `PingPreferences`. `XrayVpnService` **seeds**
+`FailoverPreferences.load(...)` on connect (load-bearing: the process-global StateFlow starts at
+`DEFAULT`, so an observer-only wiring would leave failover silently dead on every process-fresh connect
+path — process death, always-on restart, a first-launch tile connect) and then observes
+`FailoverPreferences.state` for the session. While `CONNECTED`, a `TunnelHealthMonitor` probes the
+**live tunnel** (a plain-Kotlin HTTP 204 through the tun — *not* `MeasureLatency`, whose throwaway
+instance is `protect()`'d out of the tun) and, after N consecutive failures, `rotateTunnel` reserves
+`CONNECTED → ROTATING` and swaps to a sibling from `FailoverPoolResolver`. Rotation is a peer of the
+kill-switch's kill/revive and shares its epoch/lock discipline and its screen receiver. See
+[`docs/features/auto-failover.md`](docs/features/auto-failover.md).
+
 Two cross-cutting fail-closed guarantees layer onto this flow (both are leak-proofing and reason
 together — change them as a pair), plus a third normalization on the same chokepoint:
 
@@ -300,6 +314,15 @@ together — change them as a pair), plus a third normalization on the same chok
   [`docs/features/routing-rules.md`](docs/features/routing-rules.md),
   [`docs/features/xray-settings.md`](docs/features/xray-settings.md), and
   [`docs/features/dns-leak-enforcement.md`](docs/features/dns-leak-enforcement.md).
+- **Auto-failover's give-up is a fourth fail-closed guarantee, at the *runtime* layer rather than the
+  config layer.** When no server can be brought up, the service re-establishes a **blackhole TUN** —
+  same routes, addresses, DNS servers and split-tunnel plan as a real bring-up, but no protector and no
+  Xray, so packets enter an fd nobody reads and are dropped. "Just keep the dead tunnel up" is NOT
+  equivalent: the all-servers-dead path tears the TUN down *before* the final bring-up fails, so
+  exposure would depend on where bring-up died. The three outcomes
+  (`CONTAINED_BY_LIVE_TUNNEL` / `CONTAINED_BY_BLACKHOLE` / `UNPROTECTED`) must never share one
+  user-facing message, and the uncontained one must never inherit containment copy. See
+  [`docs/features/auto-failover.md`](docs/features/auto-failover.md).
 
 ## Dormant / Temporarily-Disabled Features
 These feature **entry points** are intentionally switched off in the working tree. The disabling is
@@ -401,7 +424,17 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   details, and has no profile/settings write or reconnect path.
 - Loop-avoidance is socket-level via `VpnService.protect()` (a global Xray dial controller in the Go
   bridge), not app-exclusion, so the whole app is tunneled and only Xray's own sockets bypass — no
-  app traffic leaks around the tun. See `docs/features/failclosed-startup.md`.
+  app traffic leaks around the tun. See `docs/features/failclosed-startup.md`. **Whole-app tunneling is
+  also what makes auto-failover's health probe valid** — reverting it would silently turn the watchdog
+  into a clear-network measurement that never fires.
+- Auto-failover never releases traffic to the clear network on purpose: exhausting the pool
+  re-establishes a **blackhole TUN** (unread fd, DNS aimed into it, same split-tunnel capture), and the
+  only outcome that admits exposure (`UNPROTECTED`) says so honestly on every surface, gets exactly one
+  automatic recovery rotation, and then **stops the service** rather than running while protecting
+  nothing. `VpnConnectionState.BLACKHOLED` is a live, stoppable state — every surface that treats a
+  running session as stoppable must include it (tile Stop gate ×2, tile render, `canConnect`, the
+  in-app Disconnect gate). Widening that enum needs a **grep sweep**, not a green build: it is read by
+  plain boolean chains the compiler cannot flag. See `docs/features/auto-failover.md`.
 - Xray-core writes a **raw, unredacted** error log to the app-private `filesDir/logs/xray-core.log`
   during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory
   `LogRepository` buffer — never that file. Do not add a code path that reads or shares the file
@@ -474,6 +507,27 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   Sourcing from the grouped union raced the separately-loaded `subscriptions` query and skipped every
   subscription server ~30% of launches; do not reintroduce that dependency. Extend the coordinator/latch
   rather than reintroducing a per-run tester or a ViewModel-scoped consumed bit.
+- Auto-failover extension points (see `docs/features/auto-failover.md`):
+  - `failover/FailoverPoolResolver.kt` — the **SPEC 2 SEAM**. `resolve(dao, current)` is the single
+    place that changes when user-curated pools land; keep the signature stable and keep the logic there.
+    Both auto-failover's `rotateTunnel` **and** connect-to-fastest's `FastestConnectRunner` resolve
+    through it — do not add a second pool derivation, which would diverge with no compile-time signal.
+  - `failover/FailoverDecision.kt` — the pure decision point (`nextCandidate(pool, currentId,
+    recentlyFailed)`, `admitRotation(attempts, now, maxRotations, windowMs)`). No clock, no Android;
+    `now` is always passed in, so the sliding thrash window is testable without waiting. Latency-ordered
+    candidate selection belongs here, behind a process-scoped ping repository (deferred).
+  - `failover/HealthProbe.kt` — the probe seam. Any implementation must probe the **live tunnel**, not a
+    throwaway core instance, must not throw (except `CancellationException`, which MUST propagate), and
+    must stay valid under whole-app tunneling.
+  - `vpn/SessionLifecycleDecision.kt` — every service-side rule is a pure function there
+    (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
+    `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`,
+    `classifyGiveUpOutcome`, `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`,
+    `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`). Add rules there, not as new
+    inline `when` branches in the service. **`stopVpn` must never gain anything that awaits** — the
+    UNPROTECTED recovery restart calls it on the main thread and cannot dispatch-and-await without
+    deadlocking. The *sequencing* around these rules is still untested off-device; the recorded
+    follow-up is a `vpn/FailoverEngine` behind a narrow `TunnelHost` seam.
 - Profile config extension points:
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and
@@ -482,7 +536,12 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   `app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt`
   for TUN setup, DNS/routes, and foreground notification behavior. `onStartCommand` routing is a pure
   `vpn/StartCommandDecision.kt`; split-tunnel / whole-app self-handling is a pure
-  `split/SplitTunnelPlanner.kt` — extend those rather than inlining new `when` branches in the service.
+  `split/SplitTunnelPlanner.kt`; kill / revive / **rotate** transition ownership and the failover
+  give-up rules are pure `vpn/SessionLifecycleDecision.kt` — extend those rather than inlining new
+  `when` branches in the service. There are now **three** tunnel operations (`killTunnel`,
+  `reviveTunnel`, `rotateTunnel`) sharing one lock, one epoch scheme and one screen receiver; all three
+  reserve their transition under `lock` before any async work and route every escape through a single
+  fail path. Preserve that shape.
 - Bridge extension points:
   - Kotlin reflection candidates in
     `app/src/main/java/com/justme/xtls_core_proxy/bridge/XrayBridge.kt` (`classNames` list).

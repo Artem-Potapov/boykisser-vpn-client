@@ -20,7 +20,7 @@ per-section sub-screens. Sections appear in this fixed order:
 | Section | String resource | Real rows today |
 |---|---|---|
 | UI | `settings_section_ui` | Language (→ `LanguageSettingsActivity`), App appearance (→ `AppearanceSettingsActivity`) |
-| Tunnel | `settings_section_tunnel` | Split tunnel, Kill switch, Auto-connect on boot, Fragmentation, Mux.Cool |
+| Tunnel | `settings_section_tunnel` | Split tunnel, Kill switch, **Auto-failover**, Auto-connect on boot, Fragmentation, Mux.Cool |
 | Privacy | `settings_section_privacy` | Device identity (HWID) (→ `HwidSettingsActivity`; [hwid-device-identity.md](hwid-device-identity.md)) |
 | Advanced | `settings_section_advanced` | XRAY, DNS, Config sanitization, Routing rules |
 | Diagnostics | `settings_section_diagnostics` | Logs, Ping test |
@@ -73,11 +73,13 @@ fun SettingsRow(
   `KeyboardArrowRight` chevron; a row with `onClick = null` (or `enabled = false`) renders with no
   chevron and no click affordance.
 
-## The seven promoted rows
+## The eight promoted rows
 
 Plans 1–3 promoted all former Tunnel/Advanced/Diagnostics placeholders to real destinations; Privacy
-adds Device identity:
+adds Device identity, and the auto-failover branch adds Auto-failover:
 
+- Tunnel → Auto-failover (`failover.FailoverSettingsActivity`; [auto-failover.md](auto-failover.md)) —
+  sits directly after Kill switch. Not a promoted placeholder: a wholly new row.
 - Tunnel → Mux.Cool (`MuxSettingsActivity`; [mux.md](mux.md))
 - Privacy → Device identity (HWID) (`HwidSettingsActivity`; [hwid-device-identity.md](hwid-device-identity.md))
 - Advanced → XRAY (`XraySettingsActivity`; [xray-settings.md](xray-settings.md))
@@ -104,6 +106,11 @@ Device identity (HWID) under Privacy follows the same **autosave** control model
 change, no Save button) but is prefs-only — it is not part of `TuningSettings` and takes effect on
 the next subscription refresh. See [hwid-device-identity.md](hwid-device-identity.md).
 
+Auto-failover under Tunnel also autosaves, and is a third variety again: it is **not** part of
+`TuningSettings` and it is **not** deferred to the next connection — `XrayVpnService` observes
+`FailoverPreferences.state` for the live session, so the enable toggle takes effect immediately and a
+timing change rebuilds the running health monitor. See [auto-failover.md](auto-failover.md).
+
 The per-control commit model is deliberately typed:
 
 - **Enums, toggles, and dropdowns persist immediately** on selection — resolver choice, IPv6/sniffing
@@ -128,6 +135,21 @@ The per-control commit model is deliberately typed:
   screen-open `initial` (otherwise a valid edit made earlier in the same session gets reverted), and
   re-derive validity **inline** rather than reading the composition-time `xxxValid` val, which is a
   stale pre-keystroke read. `MuxSettingsActivity.persist()` is the reference implementation.
+
+- **A CROSS-FIELD bound must be DERIVED from the same expression the repository's `coerce()` uses,
+  never restated.** Auto-failover is the cautionary example. Its rule is
+  `probeTimeout ≤ probeInterval − TIMEOUT_HEADROOM_MS`; the screen's accept test was written as the
+  looser `timeout < interval`, so at interval 10 000 a typed 9 500 showed **no error**, was accepted,
+  and was then silently rewritten to 9 000 by `save()` — a ~999 ms silent-rewrite window at every
+  interval value, while the screen's own error string already stated the correct rule. Worse, ten unit
+  tests written against the restated rule *encoded* the defect instead of catching it (one asserted
+  19 500 accepted at a fallback interval of 20 000, whose real ceiling is 19 000). Both the persist
+  decision and the display validity now compute
+  `(effectiveInterval − TIMEOUT_HEADROOM_MS).coerceAtLeast(TIMEOUT_MIN)`, so there is **one** rule and
+  `coerce()` is the final backstop rather than the enforcement point. Note the ceiling must be derived
+  from the **effective** (post-fallback) interval, so that editing either field re-validates the pair.
+  Auto-failover additionally keeps a `lastPersisted` state re-read via `load()` **after** each save, so
+  display validity and the persisted value share one source of truth.
 
 ## The remaining `BuildConfig.DEBUG` placeholder convention
 
@@ -182,7 +204,7 @@ To promote a placeholder (or add a wholly new setting) to a real row:
 
 | File | Role |
 |---|---|
-| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: six fixed sections, seven promoted rows, `open(cls)` navigation helper, and the one remaining debug placeholder. |
+| [`settings/SettingsHubActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/SettingsHubActivity.kt) | The hub screen: six fixed sections, eight promoted rows, `open(cls)` navigation helper, and the one remaining debug placeholder. |
 | [`ui/SettingsComponents.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/ui/SettingsComponents.kt) | `SettingsSectionHeader`, `SettingsRow` — the shared primitives (also used by `LogsActivity`). |
 | [`settings/AboutActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/settings/AboutActivity.kt) | App name, `BuildConfig.VERSION_NAME`, purpose blurb, GitHub link button (placeholder URL `https://github.com/` — flagged as a known follow-up, not yet the real repo URL), license line. Destination of the About row. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Destination of the Diagnostics → Logs row; see [`logs-screen.md`](logs-screen.md). |
@@ -205,4 +227,7 @@ To promote a placeholder (or add a wholly new setting) to a real row:
   logic to unit test).
 - **On-device (manual)**: confirm debug shows the disabled Check for updates row with a DEBUG badge;
   confirm release omits that row but shows all six sections, including Privacy and Advanced, and opens
-  all seven promoted destinations.
+  all eight promoted destinations. The Tunnel → Auto-failover chain is **verified on device**
+  (SM-S918B): the row renders beside Kill switch and lands on `.failover.FailoverSettingsActivity`.
+  A direct `am start` of that Activity is correctly **refused** ("not exported") — `exported="false"`
+  matches every sibling settings screen; do not "fix" it.

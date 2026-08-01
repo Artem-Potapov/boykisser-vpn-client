@@ -128,6 +128,10 @@ housekeeping rather than user-visible behavior.
   `BasicAlertDialog`, not a bottom sheet; see [profile-actions-menu.md](profile-actions-menu.md)). No
   per-row gauge icon; the result appears as a badge line below the server name (mirroring the
   `sanitizedDns` badge).
+- **Connect to fastest:** a *third* caller of the same machinery, in the same long-press dialog. It
+  probes the long-pressed profile's failover pool and connects to the fastest responder. See
+  "Connect-to-fastest as a coordinator caller" below and
+  [auto-failover.md](auto-failover.md) / [profile-actions-menu.md](profile-actions-menu.md).
 - **"My profiles" group:** manually-added profiles (`subscriptionId == null`) are gathered into a
   synthetic expandable group. It has no DB row; the expand-state key is the string literal `"manual"`.
   The group has no refresh action and no "last seen" subtitle, but it does have the speedometer and is
@@ -150,10 +154,47 @@ housekeeping rather than user-visible behavior.
   Activity recreation (rotation/theme), a new `VpnViewModel`, ordinary navigation, resume, and
   recomposition all observe the consumed bit and do not repeat it. Only process death re-arms it.
 
+## Connect-to-fastest as a coordinator caller
+
+[`failover/FastestConnectRunner`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt)
+is a third caller of `PingCoordinator.runGroup`. **`PingCoordinator`, `PingTester` and `AutoPingLatch`
+are UNMODIFIED by it** — it composes on top of the existing API rather than changing it. Two
+consequences a maintainer needs to know:
+
+- **It introduces cancellation, which this feature previously had none of.** Group and single tests
+  are fire-and-forget (tapping again is a no-op, no cancel in v1). A connect-fastest run can last
+  `timeout × ceil(n / concurrency)` — minutes at the preference bounds — so it has a visible Cancel,
+  and starting a second run supersedes (cancels) the first. `runGroup` rethrows a caller-cancellation
+  `CancellationException` from inside its per-id `finally` **before** calling `onUpdate` for that id,
+  so a cancelled in-flight id never receives a terminal `PingState` of its own and its row would spin
+  on `Testing` forever. `failover/FastestPick.clearStaleTesting(states, ids)` (pure, unit-tested)
+  resets exactly *that run's* ids from `Testing` back to `Idle` in the runner's `finally`. It is
+  scoped to the run's own ids specifically so a concurrent group test's spinners survive.
+- **`inFlight` and the native-slot accounting are deliberately left alone on cancel.** The orphaned
+  probe's own `finally` releases the native slot when the JNI call actually returns; `inFlight` is
+  released by `runGroup`'s uncontended `Mutex` fast path, which completes even on a cancelled
+  coroutine.
+
+**Known limitation — cross-run dedup can produce a stale winner.** `runGroup`'s cross-run de-dup skips
+ids already in flight from another run (launch-time auto-ping probes *every* profile, so this is easy
+to hit). Those ids get no fresh probe, and `pickFastest` reads whatever is in `pingStates` — which may
+be a **stale `Success` from an earlier run**, producing a winner chosen from non-fresh data with **no
+message to the user**. The runner detects "at least one pool id was already `Testing` when I started"
+and reports `FastestConnectOutcome.BUSY` instead of `NO_RESPONSE` when *nothing* wins, but that
+heuristic does not cover the stale-success case. Not fixed here: the fix belongs in `PingCoordinator`
+(e.g. letting a caller await another run's result for a deduped id), which Task 10 was forbidden to
+modify.
+
 ## Preferences and bounds
 
 `PingPreferences` stores four global values in `xray_prefs` and is read **fresh when a probe is
 accepted**; unlike VPN connection tuning, ping settings have no session-capture rail.
+
+**The target URL has a second consumer.** [Auto-failover](auto-failover.md)'s tunnel health probe
+(`Http204HealthProbe`) reads `PingPreferences.load(...).targetUrl` in `applyFailoverPreferences`, so
+editing the target here also changes what the health watchdog probes while connected. One target, one
+place to change it — but do not treat this preference as ping-only when changing its semantics or its
+validation.
 
 | Preference | Default | Validation / meaning |
 |---|---|---|
@@ -218,6 +259,11 @@ build does not prove the release path.
   only when the fake native call returns; a saturated ceiling returns `Unavailable`; cancellation does
   not leak a slot. Subsumes the deleted `PingTesterTest`/`PingTesterRebuildDecisionTest`.
 - **`PingTesterBackstopTest`** (JVM): `backstopFor` is the configured timeout + `BACKSTOP_MARGIN_MS`.
+- **`FastestConnectRunnerTest` / `FastestPickTest` / `ClearStaleTestingTest`** (JVM): the
+  connect-to-fastest caller, driven against a **real** (not faked) `PingCoordinator` — supersede
+  semantics with disjoint *and* identical pools, cancel-resets-`Testing` scoped to the run's own ids,
+  and the `BUSY` vs `NO_RESPONSE` distinction. Listed in full in
+  [profile-actions-menu.md](profile-actions-menu.md#testing).
 - **`AutoPingLatchTest`** (JVM): `consume()` wins exactly once; a fresh facade still sees `isConsumed`;
   `resetForTest()` persists nothing.
 - **`AutoPingServersTest`** (JVM): `autoPingServers` includes subscription-imported servers even when

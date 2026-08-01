@@ -8,7 +8,7 @@ https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite
 ## Iran: "chocolate4u/Iran-v2ray-rules"
 https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat
 
-https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat
+https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geosite.dat
 
 ## Russia: "runetfreedom/russia-v2ray-rules-dat"
 https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat

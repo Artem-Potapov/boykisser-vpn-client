@@ -58,7 +58,7 @@ mirroring the existing `TileClickDecision`):
 
 | Incoming action | Decision | Service effect |
 | --- | --- | --- |
-| `ACTION_START` + valid profile id | `StartProfile(id)` | `startVpn(id)` |
+| `ACTION_START` + valid profile id | `StartProfile(id)` | `startVpn(id)` — see "`startVpn` while already running" below |
 | `ACTION_START` + sentinel id | `RefuseNoProfile` | error state + `stopSelf()` (pre-existing) |
 | `ACTION_STOP` | `Stop` | `tunnelOpScope.launch { stopVpn() }` — user-stop is marshalled OFF the main thread (see note below) |
 | `ACTION_NOTIFICATION_DISMISSED` | `RepostNotification` | `if (running)` marshal `repostOngoingNotification()` onto `tunnelOpScope` (serializes behind in-flight kill/revive writers on the same notification id) `else stopSelf()`; when state is **PAUSED**, restores both the quiet FGS line and the separate exposed heads-up |
@@ -68,6 +68,31 @@ mirroring the existing `TileClickDecision`):
 last `ACTION_START` (profile id included) and reconnects the same profile. The decision is **total** —
 every concrete action is enumerated — specifically so the Android 14+ `ACTION_NOTIFICATION_DISMISSED`
 start doesn't fall through a catch-all `else` into a spurious auto-connect.
+
+### `startVpn` while already running: idempotent, with one narrow exception
+
+"Start while running" is **idempotent by design** — the tile, `START_REDELIVER_INTENT` crash recovery
+and stray/duplicated intents all depend on it, so a general restart would let a stray intent bounce a
+perfectly healthy tunnel. [Auto-failover](auto-failover.md) added two things to that early-return arm:
+
+- **An active-profile rollback.** Every connect path (per-server rows, the profile-actions dialog, the
+  QS tile, always-on, connect-to-fastest) records the requested profile as active **before**
+  dispatching the start. When the start is refused, traffic keeps flowing through the session's real
+  `currentProfileId` while the UI and the tile would go on labelling the *requested* profile as
+  connected — the one fact a VPN client must never get wrong. The pure
+  `activeProfileIdToRestoreOnRefusedStart(requested, current)` (in `SessionLifecycleDecision.kt`)
+  returns the id to write back, or `null` when the request already matches the running session or no
+  real session profile exists (the field carries `-1L` when unset; Room never issues a non-positive
+  id). `setActiveProfileId` uses `apply()`, so no disk I/O is held under `lock`.
+- **A recovery restart, for exactly one state.** `shouldRestartForRecovery(running, giveUpOutcome)` is
+  true **only** for auto-failover's `UNPROTECTED` give-up — the service is running but owns no tunnel
+  and is protecting nothing, so the early return would swallow the user's only in-app recovery. It
+  tears the dead session down with `stopVpn(stopService = false)` (keeping this service instance and
+  its foreground promotion alive) and falls through to the normal start path for a fresh epoch. This
+  arm deliberately does **not** roll the active profile back — it really does go on to start the
+  requested profile. **That `stopVpn` runs on the main thread; the constraint that keeps it safe is
+  documented in [auto-failover.md](auto-failover.md) ("RISK 1") — nothing that awaits may ever be added
+  to `stopVpn`.**
 
 ### User-stop runs OFF the main thread
 
@@ -85,8 +110,8 @@ tears that down. Moving the work changes the **thread, not the locking**: `stopV
 **`onDestroy` and `onRevoke` keep the SYNCHRONOUS `stopVpn()`** — those must complete teardown inline
 (the system is destroying the service / revoking permission), so they are deliberately not marshalled.
 
-The screen-state `BroadcastReceiver` (kill-switch screen-off/on polling pause) no longer takes the full
-lock on the main thread either: it reads a `@Volatile` epoch mirror (`activeEpochVolatile`, authored
+The screen-state `BroadcastReceiver` (screen-off/on polling pause — shared by the kill-switch monitor
+**and** auto-failover's health monitor) no longer takes the full lock on the main thread either: it reads a `@Volatile` epoch mirror (`activeEpochVolatile`, authored
 only under `lock` alongside `activeSessionEpoch`) to cheaply reject a stale session, then enqueues the
 actual `pausePolling()`/`resumePolling()` onto `tunnelOpScope`, where the monitor field is read and the
 session re-checked under `lock` — race-free, just off the main thread.
@@ -167,6 +192,28 @@ intent-filter, which is all the always-on / boot mechanism needs.
   Always-on VPN, reboot, VPN comes up on the active profile. (3) **Crash:**
   `adb shell am kill com.justme.xtls_core_proxy` (a low-memory-style kill, not force-stop) → service
   restarts and reconnects. (4) **Explicit stop (always-on OFF):** stop from app/tile → stays down.
+
+## Coordination with auto-failover
+
+[Auto-failover](auto-failover.md) depends on both halves of this document, and extends the fail-closed
+posture to a case 2A did not cover.
+
+- **Whole-app tunneling is what makes the health probe valid.** Because self-exclusion is gone and only
+  `protect()`'d Xray sockets bypass, auto-failover's plain-Kotlin `HttpURLConnection` 204 probe travels
+  `tun → xray → proxy → internet` — the exact path user traffic takes. It deliberately does *not* use
+  `XrayBridge.measureLatency`, whose throwaway instance is `protect()`'d **out** of the tun and would
+  therefore answer "can this config reach that server", not "is the live tunnel passing traffic".
+  **Reverting whole-app tunneling would silently make the watchdog meaningless** — it would start
+  measuring the clear network and would never fire. Treat the two as coupled.
+- **The give-up posture is a fail-closed guarantee of the same family as the ones above.** 2A's
+  `START_REDELIVER_INTENT` gives auto-recovery for a *crash*; auto-failover has to answer the different
+  question of what happens when the tunnel is alive but no server works. "Leave the dead tunnel up"
+  does not hold — the all-servers-dead path tears the TUN down before the final bring-up fails, so
+  whether the user is exposed would depend on *where* bring-up died. So the service re-establishes a
+  **blackhole TUN** (same routes, addresses, DNS servers and split-tunnel plan; no protector, no Xray)
+  and packets are dropped into an fd nobody reads. When even that fails, the state is reported honestly
+  as unprotected rather than with containment copy, and a second consecutive failure stops the service.
+  See [auto-failover.md](auto-failover.md).
 
 ## Coordination with 2B
 

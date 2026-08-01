@@ -18,13 +18,13 @@ A tile that worked only on already-permitted users would be useless on first lau
               │   → STATE_INACTIVE         │
               │                            │
               │   CONNECTING / CONNECTED   │
-              │   / PAUSED                 │
+              │   / PAUSED / BLACKHOLED    │
               │   → STATE_ACTIVE           │
               └────────────────────────────┘
 
 [User taps]
    │
-   ├── if state ∈ {CONNECTING, CONNECTED, PAUSED}
+   ├── if state ∈ {CONNECTING, CONNECTED, PAUSED, BLACKHOLED}
    │       └── unlockAndRun { startForegroundService(ACTION_STOP) }
    │
    └── else (DISCONNECTED, ERROR)
@@ -189,6 +189,25 @@ When the QS panel is pulled down from the lock screen, `TileService.isLocked` re
 - `startActivityAndCollapse` on a locked device behaves differently across API levels. Wrapping the dispatch in `unlockAndRun` consistently delivers the Activity launch after unlock.
 
 ## Known limitations
+
+**`BLACKHOLED` is `STATE_ACTIVE`, and the Stop gate is duplicated.** [Auto-failover](auto-failover.md)
+added `VpnConnectionState.BLACKHOLED` — the service is still running and still owns a TUN, so the tile
+must stay a working **Stop** control, exactly like `PAUSED`. Mapping it to `STATE_INACTIVE` (as `ERROR`
+is) would dispatch `ACTION_START` on tap, which `startVpn` no-ops with "VPN already running" — a dead
+control in the state where the user most needs a live one. **Widening this enum needs a grep sweep, not
+a green build:** the two exhaustive `when` sites are compiler-checked, but the Stop gate exists as a
+plain boolean chain in *two* places — `decideTileClick` **and** `handleClick`'s no-IO fast path — plus
+`sendStopIntent`'s comment. Adding the state to the render while missing the chains once left the tile
+rendering active and behaving dead, which is strictly worse than looking dead.
+
+**`ERROR` remains `STATE_INACTIVE`, and that is an accepted compromise.** `ERROR` now conflates two
+situations: "session dying, VPN off" (where `Start` *is* the right tile action) and auto-failover's
+`UNPROTECTED` give-up (service running but unprotected, where `Stop` would be). A tile has one action,
+so it cannot serve both. Giving `UNPROTECTED` its own connection state was explicitly declined as too
+much machinery for a state that is rare and bounded to one `rotationWindowMs` by the auto-stop. The
+working exits from `UNPROTECTED` are the in-app **Disconnect** (the gate includes `ERROR`), the **Stop
+action on the ongoing notification**, and Connect-from-`UNPROTECTED`, which restarts the session. **This
+is a ledgered, accepted residual — do not "fix" the tile mapping without revisiting that decision.**
 
 **`STATE_ACTIVE` during `CONNECTING`.** Quick Settings only has `STATE_ACTIVE` / `STATE_INACTIVE` / `STATE_UNAVAILABLE`. The current mapping marks `CONNECTING` as `STATE_ACTIVE` (consistent with the toggle semantics — a tap during CONNECTING means "stop"). A double-tap during the 1–3 s connect window will therefore fire `ACTION_STOP`. Considered acceptable because the alternative (`STATE_UNAVAILABLE`) makes the tile look broken to users in low-bandwidth conditions where CONNECTING is long-lived.
 

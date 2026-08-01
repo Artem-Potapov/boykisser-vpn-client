@@ -81,7 +81,9 @@ the DAO) — via the existing [ping-test](ping-test.md) `PingCoordinator` machin
 whichever profile answered fastest. Pool resolution deliberately reuses `FailoverPoolResolver`
 rather than deriving a separate view-based pool: that object's own KDoc calls it "the single place
 that changes when user-curated pools land," and a second, independently-derived pool here would
-silently diverge from what auto-failover itself rotates through once curated pools exist.
+silently diverge from what auto-failover itself rotates through once curated pools exist. The
+failover-side halves of this feature — the shared pool, the two re-gates as a fail-closed pattern, and
+the service's refused-start rollback — are documented in [auto-failover.md](auto-failover.md).
 
 The row taps dismiss the dialog immediately (`menuProfile = null`, matching every other row's
 idiom), but unlike every other row the underlying work does **not** finish synchronously with that
@@ -141,6 +143,16 @@ would have `connect()` silently keep the OLD tunnel up (`XrayVpnService.startVpn
 running" no-op) while unconditionally overwriting `ActiveProfileRepository`'s active profile id to
 the NEW one — the UI would then report the WRONG server as connected while traffic kept flowing
 through the old one.
+
+**A third backstop now sits under both of them, in the service.** The root cause of that symptom is
+that `VpnViewModel.connect` writes `ActiveProfileRepository.setActiveProfileId` **unconditionally**
+before dispatching `ACTION_START`, which makes "UI names B while traffic flows through A" possible on
+*every* connect path, not just this one. `XrayVpnService.startVpn`'s "VPN already running" early return
+therefore rolls the active profile back to the session's real `currentProfileId`, via the pure
+`activeProfileIdToRestoreOnRefusedStart(requested, current)` in `vpn/SessionLifecycleDecision.kt`. The
+two re-gates above are still the right place to stop a *wrong connect from being attempted* (and to
+tell the user why); the rollback is what guarantees the reported active server stays truthful if one
+slips through. See [failclosed-startup.md](failclosed-startup.md) and [auto-failover.md](auto-failover.md).
 
 The winning profile is surfaced as `VpnViewModel.fastestWinnerId` (ViewModel state) rather than the
 ViewModel calling `connect()` directly: every other Connect action in this app is gated by
@@ -238,7 +250,7 @@ JVM unit tests (`:app:testDebugUnitTest`):
 | [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | `toShareLink` round-trips: common fields (sni, alpn, insecure, salamander), port-hopping + salamander, finalmask blob carried verbatim |
 | [`FastestPickTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestPickTest.kt) | `pickFastest`: lowest latency wins, ignores `Unavailable`/`Testing`, null when nothing succeeded, ignores results for ids outside the candidate list |
 | [`ClearStaleTestingTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/ClearStaleTestingTest.kt) | `clearStaleTesting`: resets in-pool `Testing` ids to `Idle`, leaves resolved ids untouched, never touches `Testing` ids outside the pool |
-| [`FastestConnectRunnerTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestConnectRunnerTest.kt) | `FastestConnectRunner` sequencing, driven with `kotlinx-coroutines-test` against a real (not faked) `PingCoordinator`: a superseding run's `active` flag survives the superseded run's own cancellation-driven cleanup; `cancel()` resets in-pool `Testing` ids to `Idle`; a winner found after `canConnect` turns false is discarded and reported `STATE_CHANGED`, never delivered; a winner found while still connectable is delivered; no winner with nothing pre-existing in flight reports `NO_RESPONSE`; no winner with a pool id already `Testing` beforehand reports `BUSY` instead |
+| [`FastestConnectRunnerTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestConnectRunnerTest.kt) (7) | `FastestConnectRunner` sequencing, driven with `kotlinx-coroutines-test` against a real (not faked) `PingCoordinator`: a superseding run's `active` flag survives the superseded run's own cancellation-driven cleanup; the same holds for a supersede with an **identical** pool (two long-presses in one subscription — the realistic case — with no false `BUSY`); `cancel()` resets in-pool `Testing` ids to `Idle`; a winner found after `canConnect` turns false is discarded and reported `STATE_CHANGED`, never delivered; a winner found while still connectable is delivered; no winner with nothing pre-existing in flight reports `NO_RESPONSE`; no winner with a pool id already `Testing` beforehand reports `BUSY` instead |
 
 `ProfileActionsDialog` itself has no dedicated unit test — it is a pure Compose rendering component
 with no business logic of its own.
