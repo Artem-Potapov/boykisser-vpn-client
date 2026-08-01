@@ -488,11 +488,28 @@ private fun MainScreen(
     // on every recomposition (including a fresh one after recreation), consumes the winner exactly
     // once, then hands it to the SAME permission-checked onConnect every other Connect action uses —
     // see VpnViewModel.fastestWinnerId's doc for the full rationale.
+    //
+    // CONSUMPTION-side re-gate (Task 10 review round 2, Important): FastestConnectRunner already
+    // re-checks canConnect at the moment it PRODUCES a winner, but that only bounds the probe's own
+    // multi-minute window. The winner can then sit unconsumed indefinitely if the app is backgrounded
+    // before this effect runs (the Compose frame clock pauses below STARTED) — e.g. the user starts a
+    // run, backgrounds the app, connects via the QS tile, then returns. Without a SECOND check right
+    // here, `onConnect(winnerId)` would still fire: connect() would no-op ("VPN already running")
+    // while overwriting ActiveProfileRepository's active id to the stale winner, misreporting which
+    // server traffic is on — the exact Important-1 symptom, just via a different, unbounded gap.
+    // `state` is already collected above, so this is a live read, not a stale snapshot.
     val fastestWinnerId by viewModel.fastestWinnerId.collectAsState()
     LaunchedEffect(fastestWinnerId) {
         val winnerId = fastestWinnerId ?: return@LaunchedEffect
-        onConnect(winnerId)
-        viewModel.consumeFastestWinner()
+        if (canConnect(state)) {
+            onConnect(winnerId)
+            viewModel.consumeFastestWinner()
+        } else {
+            // Discard, never silently: reports the same STATE_CHANGED message the production-side
+            // re-gate uses, since from the user's perspective this is the identical outcome — a
+            // winner was found but never delivered because the connection state changed.
+            viewModel.discardFastestWinner()
+        }
     }
     val connectingFastest by viewModel.connectFastestActive.collectAsState()
 
@@ -586,8 +603,11 @@ private fun MainScreen(
             // Connect-to-fastest can run for up to timeout * ceil(n / concurrency) — several minutes
             // at the preference bounds — so it needs a visible, cancellable in-progress affordance
             // rather than a fire-and-forget dialog action. Per-server progress is already covered for
-            // free: connectFastest marks each pooled id PingState.Testing, which lights up the same
-            // group-header spinner a regular ping test uses.
+            // free for the FRESH ids this run actually admits: connectFastest marks those pooled ids
+            // PingState.Testing (via PingCoordinator.runGroup, which lights up the same group-header
+            // spinner a regular ping test uses). An id already Testing from another active run is
+            // skipped, not re-marked — see docs/features/profile-actions-menu.md's "Connect to
+            // fastest" section for why that also drives the BUSY-vs-NO_RESPONSE outcome message.
             if (connectingFastest) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(

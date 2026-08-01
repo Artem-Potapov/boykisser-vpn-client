@@ -81,6 +81,63 @@ class FastestConnectRunnerTest {
         releaseA.complete(Unit)
     }
 
+    /**
+     * Task 10 review round 2, Minor 4: the previous supersede test above uses DISJOINT pools ({1}
+     * then {2}). The realistic production case is two long-presses on the SAME subscription in
+     * quick succession — an IDENTICAL pool both times — where the superseded run's
+     * `clearStaleTesting`/`PingCoordinator.inFlight` release races the new run's own `runGroup`
+     * admission of the SAME ids. This is not a defect hunt (the review traced this race to benign in
+     * production); this test pins that already-correct behaviour so a future change cannot silently
+     * regress it.
+     */
+    @Test
+    fun start_supersedingWithAnIdenticalPool_stillResolvesTheNewRunCorrectly_noFalseBusy() = runTest {
+        val coordinator = PingCoordinator(nativeCeiling = 5)
+        val pingStates = MutableStateFlow<Map<Long, PingState>>(emptyMap())
+        val pool = listOf(profile(1), profile(2))
+        val releaseSlowId = CompletableDeferred<Unit>()
+        val outcomes = mutableListOf<FastestConnectOutcome>()
+        val runner = FastestConnectRunner(
+            scope = this,
+            pingCoordinator = coordinator,
+            pingStates = pingStates,
+            // The SAME pool object both times — e.g. two long-presses on profiles in one subscription
+            // before the first run finished — as opposed to the disjoint-pool supersede test above.
+            resolvePool = { pool },
+            loadPreferences = { PingPreferences.DEFAULT },
+            probe = { p, _ ->
+                if (p.id == 1L) releaseSlowId.await()
+                PingState.Success(p.id) // lower id = lower (== faster) latency
+            },
+            canConnect = { true },
+            onOutcome = { outcomes += it },
+        )
+
+        runner.start(profile(1))
+        runCurrent() // id=2 resolves immediately; id=1 stays in flight, gated on releaseSlowId
+        assertEquals(PingState.Success(2L), pingStates.value[2L])
+        assertEquals(PingState.Testing, pingStates.value[1L])
+
+        // Second long-press on the SAME subscription while id=1's probe is still in flight from the
+        // first run — id=1 is still admitted (in PingCoordinator's cross-run inFlight set) at the
+        // exact moment this call resolves the (identical) pool and is about to re-admit it.
+        runner.start(profile(1))
+        runCurrent()
+
+        releaseSlowId.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(
+            "superseding with the IDENTICAL pool must not make the new run see its own ids as " +
+                "falsely busy",
+            outcomes.contains(FastestConnectOutcome.BUSY)
+        )
+        assertEquals(1L, runner.winnerId.value) // profile(1)'s latency (1) beats profile(2)'s (2)
+        assertFalse(runner.active.value)
+        assertEquals(PingState.Success(1L), pingStates.value[1L])
+        assertEquals(PingState.Success(2L), pingStates.value[2L])
+    }
+
     @Test
     fun cancel_resetsInFlightPoolIdsBackToIdle_andClearsActive() = runTest {
         val coordinator = PingCoordinator(nativeCeiling = 5)

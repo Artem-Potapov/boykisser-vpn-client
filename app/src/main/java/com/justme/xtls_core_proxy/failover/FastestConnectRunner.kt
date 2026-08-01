@@ -81,6 +81,13 @@ internal class FastestConnectRunner(
     private val canConnect: () -> Boolean,
     private val onOutcome: (FastestConnectOutcome) -> Unit,
 ) {
+    // Neither of the two fields below is synchronized: [start] and [cancel] must only ever be
+    // called from the confined thread [scope] runs on (production: the main thread, via Compose
+    // callbacks through `viewModelScope`, which is `Dispatchers.Main.immediate`). That confinement
+    // is exactly what makes the ordering argument in [generation]'s comment hold — a concurrent
+    // caller from another thread would race both fields. This class accepts an arbitrary
+    // [CoroutineScope] for testability (see `FastestConnectRunnerTest`, which drives it from a
+    // single-threaded `TestScope`), but production callers must preserve main-thread confinement.
     private var runningJob: Job? = null
 
     // Guards the finally-block "am I still the active run" check below rather than comparing

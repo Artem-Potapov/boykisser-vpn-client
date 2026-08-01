@@ -183,12 +183,32 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
      * state observed fresh on every recomposition, not a callback captured for the life of the
      * coroutine — survives an Activity recreation (rotation) mid-probe without capturing a stale
      * Activity instance.
+     *
+     * [FastestConnectRunner]'s own `canConnect` re-check only guards the moment this is PRODUCED —
+     * it bounds the probe's window, but not the gap after. This value can then sit unconsumed
+     * indefinitely (the Compose frame clock pauses below `STARTED` while the app is backgrounded),
+     * so `MainScreen` re-checks `canConnect` a SECOND time at CONSUMPTION, right before calling
+     * `onConnect`, and calls [discardFastestWinner] instead when that fails (Task 10 review round 2,
+     * Important). Two checks around this unbounded gap are correct, not redundant.
      */
     val fastestWinnerId: StateFlow<Long?> = fastestConnectRunner.winnerId
 
     /** Consumes [fastestWinnerId] so it does not re-fire on the next recomposition. */
     fun consumeFastestWinner() {
         fastestConnectRunner.consumeWinner()
+    }
+
+    /**
+     * Consumes a pending [fastestWinnerId] that failed the CONSUMPTION-side re-gate — see that
+     * property's doc. Reports the same `STATE_CHANGED` message [FastestConnectRunner]'s own
+     * production-side re-gate uses via `onOutcome`, since from the user's perspective this is the
+     * identical outcome: a winner was found but never delivered because the connection state
+     * changed. Keeps that messaging in one place rather than duplicating the string lookup in
+     * `MainActivity`.
+     */
+    fun discardFastestWinner() {
+        consumeFastestWinner()
+        LogRepository.emitError(R.string.failover_connect_fastest_state_changed_error)
     }
 
     private val defaultUserAgent = "XTLSCoreProxy/${BuildConfig.VERSION_NAME}"
