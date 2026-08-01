@@ -587,4 +587,21 @@
     <string name="failover_no_response_body">Your server stopped responding and there is no other one to switch to. You are still protected, but pages may not load. Tap to choose another server or turn the VPN off.</string>
     <string name="failover_unprotected_title">Connection is not protected</string>
     <string name="failover_unprotected_body">No server responded, and we could not pause your connection either — so it is currently unprotected. Tap to turn the VPN off and on again, or choose another server.</string>
+
+    <!-- Failover settings screen -->
+    <string name="failover_title">Auto-failover</string>
+    <string name="settings_failover_title">Auto-failover</string>
+    <string name="settings_failover_subtitle">Switch servers automatically when one stops responding</string>
+    <string name="failover_cd_back">Back</string>
+    <string name="failover_enabled">Enable auto-failover</string>
+    <string name="failover_enabled_hint">Probes the tunnel while connected and switches to another server in the same subscription if it stops passing traffic.</string>
+    <string name="failover_interval">Probe interval (5000–300000 ms)</string>
+    <string name="failover_interval_error">Enter 5000–300000</string>
+    <string name="failover_timeout">Probe timeout (ms, must be below the interval)</string>
+    <string name="failover_timeout_error">Enter 1000 up to interval minus 1000</string>
+    <string name="failover_threshold">Failures before switching (1–10)</string>
+    <string name="failover_threshold_error">Enter 1–10</string>
+    <string name="failover_max_rotations">Max switches per window (1–10)</string>
+    <string name="failover_max_rotations_error">Enter 1–10</string>
+    <string name="failover_hint">If no server works, the tunnel is kept up so your traffic is never exposed.</string>
 </resources>

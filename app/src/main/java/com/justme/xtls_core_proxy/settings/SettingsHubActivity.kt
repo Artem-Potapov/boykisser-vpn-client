@@ -34,6 +34,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.BuildConfig
 import com.justme.xtls_core_proxy.R
+import com.justme.xtls_core_proxy.failover.FailoverSettingsActivity
 import com.justme.xtls_core_proxy.i18n.LanguageSettingsActivity
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
 import com.justme.xtls_core_proxy.killswitch.KillSwitchSettingsActivity
@@ -119,6 +120,12 @@ private fun SettingsHubScreen(onBack: () -> Unit) {
                 title = stringResource(R.string.settings_kill_title),
                 subtitle = stringResource(R.string.settings_kill_subtitle),
                 onClick = { open(KillSwitchSettingsActivity::class.java) }
+            )
+            HorizontalDivider()
+            SettingsRow(
+                title = stringResource(R.string.settings_failover_title),
+                subtitle = stringResource(R.string.settings_failover_subtitle),
+                onClick = { open(FailoverSettingsActivity::class.java) }
             )
             HorizontalDivider()
             SettingsRow(
