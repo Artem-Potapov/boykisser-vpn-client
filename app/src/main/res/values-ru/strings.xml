@@ -607,5 +607,5 @@
     <string name="failover_threshold_error">Введите 1–10</string>
     <string name="failover_max_rotations">Максимум переключений за окно (1–10)</string>
     <string name="failover_max_rotations_error">Введите 1–10</string>
-    <string name="failover_hint">Если ни один сервер не работает, туннель остаётся включённым, чтобы трафик не был раскрыт.</string>
+    <string name="failover_hint">Если ни один сервер не работает, мы приостанавливаем соединение ради вашей защиты — и сообщим, если это тоже не получится.</string>
 </resources>

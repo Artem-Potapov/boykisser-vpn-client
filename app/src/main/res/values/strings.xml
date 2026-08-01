@@ -611,5 +611,5 @@
     <string name="failover_threshold_error">Enter 1–10</string>
     <string name="failover_max_rotations">Max switches per window (1–10)</string>
     <string name="failover_max_rotations_error">Enter 1–10</string>
-    <string name="failover_hint">If no server works, the tunnel is kept up so your traffic is never exposed.</string>
+    <string name="failover_hint">If no server works, we pause your connection to keep you protected — and we\'ll let you know if that isn\'t possible either.</string>
 </resources>

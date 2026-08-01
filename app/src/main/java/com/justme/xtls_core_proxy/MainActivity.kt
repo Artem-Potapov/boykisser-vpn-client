@@ -574,9 +574,11 @@ private fun MainScreen(
                 // already stopSelf()'d. That tap does NOT hit a no-op: disconnect() dispatches
                 // startForegroundService(ACTION_STOP), which CREATES the service. It is safe only
                 // because that start reaches stopVpn's `!shouldStop && tunInterface == null` early
-                // return and stopSelf() synchronously, well inside Android's ~5 s startForeground
-                // deadline. Anything that makes the ACTION_STOP path await work before that point
-                // turns this into ForegroundServiceDidNotStartInTimeException — keep it synchronous.
+                // return, and stopVpn does not await anything — onStartCommand dispatches it via
+                // tunnelOpScope.launch, but stopVpn has no suspension points, so it runs and calls
+                // stopSelf() well inside Android's ~5 s startForeground deadline. Anything that
+                // makes the ACTION_STOP path await work before that point turns this into
+                // ForegroundServiceDidNotStartInTimeException — keep stopVpn free of awaits.
                 // The tap also clears the active profile even though the session never connected;
                 // accepted, since the user asked to disconnect.
                 if (state == VpnConnectionState.CONNECTED ||
