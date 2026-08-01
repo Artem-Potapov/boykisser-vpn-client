@@ -99,19 +99,59 @@ class FailoverSettingsPersistDecisionTest {
 
     @Test
     fun timeoutValidity_reEvaluatesWhenFallbackIntervalIsUsed() {
-        // interval input is invalid -> effective interval falls back to lastGood (20_000).
-        // A timeout of 19_500 is valid against that fallback even though it would not be
-        // valid against the (rejected) raw interval input.
+        // interval input is invalid -> effective interval falls back to lastGood (20_000), whose
+        // real ceiling is 20_000 - TIMEOUT_HEADROOM_MS (1_000) = 19_000. A timeout of 18_500 sits
+        // inside that ceiling and must be accepted against the fallback, even though it would not
+        // be valid at all against the (rejected) raw interval input.
         val result = resolveFailoverSettings(
             enabled = true,
             intervalInput = "not-a-number",
-            timeoutInput = "19500",
+            timeoutInput = "18500",
             thresholdInput = "5",
             maxRotationsInput = "7",
             lastGood = lastGood,
         )
         assertEquals(lastGood.probeIntervalMs, result.probeIntervalMs)
-        assertEquals(19_500L, result.probeTimeoutMs)
+        assertEquals(18_500L, result.probeTimeoutMs)
+    }
+
+    @Test
+    fun timeoutJustInsideHeadroom_isAccepted() {
+        // coerce()'s real ceiling is interval - TIMEOUT_HEADROOM_MS = 10_000 - 1_000 = 9_000,
+        // not interval - 1 (see timeoutInsideCoerceGap_isRejected_fallsBackToLastGood below).
+        val result = resolveFailoverSettings(
+            enabled = true,
+            intervalInput = "10000",
+            timeoutInput = "9000",
+            thresholdInput = "5",
+            maxRotationsInput = "7",
+            lastGood = lastGood,
+        )
+        assertEquals(10_000L, result.probeIntervalMs)
+        assertEquals(9_000L, result.probeTimeoutMs)
+    }
+
+    @Test
+    fun timeoutInsideCoerceGap_isRejected_fallsBackToLastGood() {
+        // 9_500 is below the raw interval (10_000) but ABOVE coerce()'s real ceiling of
+        // interval - TIMEOUT_HEADROOM_MS (9_000). Accepting it here would let FailoverPreferences
+        // .save() -> coerce() silently rewrite the user's typed 9_500 down to 9_000 with no error
+        // ever shown on screen — this pins that ~999ms-wide silent-rewrite gap shut.
+        val result = resolveFailoverSettings(
+            enabled = true,
+            intervalInput = "10000",
+            timeoutInput = "9500",
+            thresholdInput = "5",
+            maxRotationsInput = "7",
+            lastGood = lastGood,
+        )
+        assertEquals(10_000L, result.probeIntervalMs)
+        assertEquals(
+            "9_500 sits inside the coerce() silent-rewrite gap and must be rejected here, " +
+                "not silently coerced later",
+            lastGood.probeTimeoutMs,
+            result.probeTimeoutMs,
+        )
     }
 
     @Test

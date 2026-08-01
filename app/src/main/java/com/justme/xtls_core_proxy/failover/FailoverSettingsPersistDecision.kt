@@ -8,8 +8,11 @@ package com.justme.xtls_core_proxy.failover
  *
  * The timeout is validated against the *effective* interval `i` (the just-resolved value, which
  * may itself be a fallback), not the raw interval input and not lastGood.probeIntervalMs — so
- * editing either field re-validates the pair. [FailoverPreferences.coerce] inside
- * [FailoverPreferences.save] remains the final backstop for the timeout-below-interval invariant.
+ * editing either field re-validates the pair. The accept ceiling is derived exactly the way
+ * [FailoverPreferences.coerce] derives it (`i - TIMEOUT_HEADROOM_MS`, floored at `TIMEOUT_MIN`) —
+ * NOT `i - 1` — so a value this function accepts can never be silently rewritten downward by
+ * `coerce()` inside [FailoverPreferences.save] with no error ever shown on screen. `coerce()`
+ * remains the final backstop for the invariant; this mirrors it rather than replacing it.
  */
 internal fun resolveFailoverSettings(
     enabled: Boolean,
@@ -22,8 +25,10 @@ internal fun resolveFailoverSettings(
     val i = intervalInput.trim().toLongOrNull()
         ?.takeIf { it in FailoverPreferences.INTERVAL_MIN..FailoverPreferences.INTERVAL_MAX }
         ?: lastGood.probeIntervalMs
+    val timeoutCeiling = (i - FailoverPreferences.TIMEOUT_HEADROOM_MS)
+        .coerceAtLeast(FailoverPreferences.TIMEOUT_MIN)
     val t = timeoutInput.trim().toLongOrNull()
-        ?.takeIf { it >= FailoverPreferences.TIMEOUT_MIN && it < i }
+        ?.takeIf { it in FailoverPreferences.TIMEOUT_MIN..timeoutCeiling }
         ?: lastGood.probeTimeoutMs
     val th = thresholdInput.trim().toIntOrNull()
         ?.takeIf { it in FailoverPreferences.THRESHOLD_MIN..FailoverPreferences.THRESHOLD_MAX }

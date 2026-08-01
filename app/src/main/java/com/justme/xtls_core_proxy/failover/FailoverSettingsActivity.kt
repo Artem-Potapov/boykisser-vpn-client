@@ -60,6 +60,11 @@ private fun FailoverScreen(onBack: () -> Unit) {
     var threshold by remember { mutableStateOf(initial.failureThreshold.toString()) }
     var maxRotations by remember { mutableStateOf(initial.maxRotations.toString()) }
 
+    // Single source of truth for "what is actually persisted right now", kept in step with
+    // persist()'s own `lastGood` re-read so display validity (below) never disagrees with what
+    // gets saved. Seeded from `initial`, then advanced after every persist() call.
+    var lastPersisted by remember { mutableStateOf(initial) }
+
     fun persist() {
         // Per-control autosave (reference: PingTestSettingsActivity.persist() /
         // XraySettingsActivity.persist()). Each invalid field holds its own last-good PERSISTED
@@ -71,18 +76,29 @@ private fun FailoverScreen(onBack: () -> Unit) {
             context,
             resolveFailoverSettings(enabled, interval, timeout, threshold, maxRotations, lastGood),
         )
+        // Re-read (not the pre-coerce `resolveFailoverSettings` result) so lastPersisted reflects
+        // exactly what save()/coerce() actually stored.
+        lastPersisted = FailoverPreferences.load(context)
     }
 
-    // Display-only validity, derived the same way persist() derives its effective interval —
-    // used solely to drive isError/supportingText on this screen; the actual saved value always
-    // comes from resolveFailoverSettings() against the freshly-read `lastGood`, not `initial`.
+    // Display-only validity, derived the same way persist() derives its effective interval and
+    // ceiling — used solely to drive isError/supportingText on this screen; the actual saved
+    // value always comes from resolveFailoverSettings() against a freshly-read FailoverPreferences
+    // .load(context), not this composable's state. Falls back to `lastPersisted` (updated after
+    // every persist() call), not the screen-open-time `initial`, so this can't go stale relative
+    // to an edit made earlier in the same session.
     val effectiveIntervalForDisplay = interval.trim().toLongOrNull()
         ?.takeIf { it in FailoverPreferences.INTERVAL_MIN..FailoverPreferences.INTERVAL_MAX }
-        ?: initial.probeIntervalMs
+        ?: lastPersisted.probeIntervalMs
     val intervalValid = interval.trim().toLongOrNull()
         ?.let { it in FailoverPreferences.INTERVAL_MIN..FailoverPreferences.INTERVAL_MAX } == true
+    // Ceiling mirrors FailoverPreferences.coerce() exactly (interval - TIMEOUT_HEADROOM_MS,
+    // floored at TIMEOUT_MIN) — NOT interval - 1 — so this can't show "no error" for a value
+    // coerce() would silently rewrite downward on save.
+    val timeoutCeilingForDisplay = (effectiveIntervalForDisplay - FailoverPreferences.TIMEOUT_HEADROOM_MS)
+        .coerceAtLeast(FailoverPreferences.TIMEOUT_MIN)
     val timeoutValid = timeout.trim().toLongOrNull()
-        ?.let { it >= FailoverPreferences.TIMEOUT_MIN && it < effectiveIntervalForDisplay } == true
+        ?.let { it in FailoverPreferences.TIMEOUT_MIN..timeoutCeilingForDisplay } == true
     val thresholdValid = threshold.trim().toIntOrNull()
         ?.let { it in FailoverPreferences.THRESHOLD_MIN..FailoverPreferences.THRESHOLD_MAX } == true
     val maxRotationsValid = maxRotations.trim().toIntOrNull()
