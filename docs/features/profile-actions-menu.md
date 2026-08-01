@@ -115,29 +115,43 @@ successful probe, `LogRepository.emitError` fires one of two distinct messages �
 another active run) before this run started, since in that case "no server responded" would be
 misleading — the server may be fine, this run just never got a fresh read on it.
 
-**The winner is re-gated at delivery time, not only at the tap that started the run** (Task 10
-review Important 1). A run spanning minutes means the connection state can leave the connectable
-set (`CONNECTED`/`CONNECTING`/`PAUSED`/`BLACKHOLED`) while it is in flight — another Connect action,
-the QS tile, or auto-failover can all cause this. `FastestConnectRunner` re-checks
-`state/VpnViewModel.canConnect` (a shared top-level function, not duplicated) against the fresh
-connection state immediately before ever setting the winner; if it now fails, the winner is
-discarded and `failover_connect_fastest_state_changed_error` is reported instead. **The row's own
-`enabled = canConnect` (checked once, at tap time) is a cheap, obvious no-op-prevention gate only —
-it does NOT by itself guarantee correctness of a winner minutes later.** Without the delivery-time
-re-check, a stale winner firing into a no-longer-connectable state would have `connect()` silently
-keep the OLD tunnel up (`XrayVpnService.startVpn`'s "VPN already running" no-op) while
-unconditionally overwriting `ActiveProfileRepository`'s active profile id to the NEW one — the UI
-would then report the WRONG server as connected while traffic kept flowing through the old one.
+**The winner is re-gated TWICE, not once** (Task 10 review Important 1, then round 2's Important):
+once when it is *produced*, and again when it is *consumed* — two independent checkpoints around
+one unbounded gap, not a redundant pair.
+
+- **Production-side (`FastestConnectRunner`):** a run spanning minutes means the connection state
+  can leave the connectable set (`CONNECTED`/`CONNECTING`/`PAUSED`/`BLACKHOLED`) while it is in
+  flight — another Connect action, the QS tile, or auto-failover can all cause this.
+  `FastestConnectRunner` re-checks `state/VpnViewModel.canConnect` (a shared top-level function, not
+  duplicated) against the fresh connection state immediately before ever setting the winner; if it
+  now fails, the winner is discarded and `failover_connect_fastest_state_changed_error` is reported.
+- **Consumption-side (`MainActivity`):** the production-side check only bounds the probe's own
+  window. The winner can then sit unconsumed for an UNBOUNDED time if the app is backgrounded before
+  `MainScreen`'s `LaunchedEffect(fastestWinnerId)` runs — the Compose frame clock pauses below
+  `STARTED`, so nothing consumes it until the user returns, however much later that is (they may
+  connect elsewhere via the QS tile or always-on VPN in the meantime). `MainScreen` re-checks
+  `canConnect(state)` again, right before calling `onConnect(winnerId)`; on failure it calls
+  `VpnViewModel.discardFastestWinner()` (consumes + reports the same `STATE_CHANGED` message)
+  instead.
+
+**The row's own `enabled = canConnect` (checked once, at tap time) is a cheap, obvious
+no-op-prevention gate only — it does NOT by itself guarantee correctness of a winner minutes, or
+longer, later.** Without BOTH re-checks, a stale winner firing into a no-longer-connectable state
+would have `connect()` silently keep the OLD tunnel up (`XrayVpnService.startVpn`'s "VPN already
+running" no-op) while unconditionally overwriting `ActiveProfileRepository`'s active profile id to
+the NEW one — the UI would then report the WRONG server as connected while traffic kept flowing
+through the old one.
 
 The winning profile is surfaced as `VpnViewModel.fastestWinnerId` (ViewModel state) rather than the
 ViewModel calling `connect()` directly: every other Connect action in this app is gated by
 `MainActivity`'s permission-checked flow (notification permission, then `VpnService.prepare()`
 consent) before ever calling `VpnViewModel.connect`, and the ViewModel has no access to that
 Activity-owned `ActivityResultLauncher` machinery. `MainScreen` observes `fastestWinnerId` and, when
-it becomes non-null, calls the same `onConnect` callback every other Connect row uses, then consumes
-it via `consumeFastestWinner()`. Surfacing the winner as state (not a callback captured by the
-long-running coroutine) also means an Activity recreation (rotation) mid-probe cannot fire the
-connect flow against a destroyed Activity — the observer re-subscribes fresh on every recomposition.
+it becomes non-null and the consumption-side re-check passes, calls the same `onConnect` callback
+every other Connect row uses, then consumes it via `consumeFastestWinner()`. Surfacing the winner as
+state (not a callback captured by the long-running coroutine) also means an Activity recreation
+(rotation) mid-probe cannot fire the connect flow against a destroyed Activity — the observer
+re-subscribes fresh on every recomposition.
 
 ## Copy link
 
