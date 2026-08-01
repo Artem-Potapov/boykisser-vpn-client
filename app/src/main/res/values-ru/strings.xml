@@ -18,6 +18,8 @@
     <string name="vpn_status_unprotected">Защита не работает — переподключитесь</string>
     <string name="vpn_status_switching">Переключаемся на другой сервер…</string>
     <string name="vpn_failover_unprotected_error">Не удалось сохранить защиту соединения. Выключите и снова включите VPN или выберите другой сервер.</string>
+    <string name="vpn_failover_stopped_error">Не удалось связаться ни с одним сервером, поэтому VPN отключён. Выберите сервер и попробуйте снова.</string>
+    <string name="vpn_notification_action_stop">Выключить</string>
     <string name="vpn_status_connected">Подключено</string>
     <string name="vpn_status_connecting">Подключение</string>
     <string name="vpn_exposed_title">⚠️ VPN ОТКЛЮЧЁН — вы раскрыты</string>

@@ -49,6 +49,21 @@ class TileClickDecisionTest {
     }
 
     @Test
+    fun blackholed_alwaysDecidesStop_regardlessOfOtherInputs() {
+        // BLACKHOLED means the service is RUNNING and still owns a TUN, so the tile renders
+        // STATE_ACTIVE. Without this branch the click falls through to Start -> ACTION_START ->
+        // "VPN already running", i.e. a tile that looks live and does nothing — a worse failure
+        // than one that visibly looks dead. Consent is already granted while running, so the
+        // handoff branch does not save it either.
+        assertEquals(TileClickDecision.Stop,
+            decideTileClick(VpnConnectionState.BLACKHOLED, profileId = 12L,
+                needsVpnConsent = false, needsNotifPermission = false))
+        assertEquals(TileClickDecision.Stop,
+            decideTileClick(VpnConnectionState.BLACKHOLED, profileId = null,
+                needsVpnConsent = true, needsNotifPermission = true))
+    }
+
+    @Test
     fun disconnected_noProfile_decidesNoProfileToast() {
         assertEquals(TileClickDecision.NoProfileToast,
             decideTileClick(VpnConnectionState.DISCONNECTED, profileId = null,

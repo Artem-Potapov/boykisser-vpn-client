@@ -534,10 +534,16 @@ private fun MainScreen(
                 // BLACKHOLED must offer Disconnect for the same reason the QS tile must stay
                 // ACTIVE: the tunnel is up and holding traffic, and canConnect() disables the
                 // per-profile Connect buttons, so without this the user has no in-app way out.
+                // ERROR is here too: a failover give-up that could not contain the traffic leaves
+                // the service RUNNING in ERROR while telling the user to turn the VPN off, and this
+                // was the only surface that could do it. Rendering it for a genuinely dying session
+                // as well is accepted and harmless — stopVpn early-returns when nothing is running,
+                // and confirming the VPN really is off during an error is defensible on its own.
                 if (state == VpnConnectionState.CONNECTED ||
                     state == VpnConnectionState.CONNECTING ||
                     state == VpnConnectionState.PAUSED ||
-                    state == VpnConnectionState.BLACKHOLED
+                    state == VpnConnectionState.BLACKHOLED ||
+                    state == VpnConnectionState.ERROR
                 ) {
                     OutlinedButton(onClick = onDisconnect) {
                         Text(stringResource(R.string.main_button_disconnect))

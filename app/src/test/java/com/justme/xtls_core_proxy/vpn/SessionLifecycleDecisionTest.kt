@@ -346,6 +346,49 @@ class SessionLifecycleDecisionTest {
         )
     }
 
+    // --- "Disconnect now, stop if the re-arm fails": exactly one automatic recovery attempt ---
+
+    @Test
+    fun firstUnprotectedGiveUp_reArmsRatherThanStopping() {
+        // Forfeiting the re-arm would switch the VPN off without the user asking for it.
+        assertFalse(
+            shouldStopServiceOnGiveUp(
+                outcome = FailoverGiveUpOutcome.UNPROTECTED,
+                unprotectedRetryConsumed = false,
+            )
+        )
+    }
+
+    @Test
+    fun secondUnprotectedGiveUp_stopsTheService() {
+        // The one recovery attempt has been spent and traffic is STILL not contained; the honest
+        // off state beats an indefinite "running but unprotected" one.
+        assertTrue(
+            shouldStopServiceOnGiveUp(
+                outcome = FailoverGiveUpOutcome.UNPROTECTED,
+                unprotectedRetryConsumed = true,
+            )
+        )
+    }
+
+    @Test
+    fun containedGiveUps_neverStopTheService_evenAfterARetry() {
+        // Traffic is contained in both, so there is nothing to be honest about turning off.
+        for (outcome in listOf(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+        )) {
+            assertFalse(
+                "$outcome is contained and must keep its existing re-arm behaviour",
+                shouldStopServiceOnGiveUp(outcome, unprotectedRetryConsumed = false)
+            )
+            assertFalse(
+                "$outcome must not inherit the stop from a spent unprotected retry",
+                shouldStopServiceOnGiveUp(outcome, unprotectedRetryConsumed = true)
+            )
+        }
+    }
+
     @Test
     fun blackhole_isNotEstablished_inAnyOtherState() {
         for (state in listOf(

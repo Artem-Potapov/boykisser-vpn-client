@@ -199,3 +199,18 @@ internal fun classifyGiveUpOutcome(
     blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
     else -> FailoverGiveUpOutcome.UNPROTECTED
 }
+
+/**
+ * "Disconnect now, stop if the re-arm fails": whether a give-up should switch the service off
+ * rather than schedule another re-arm.
+ *
+ * Only [FailoverGiveUpOutcome.UNPROTECTED] can ever stop the service, and only once its single
+ * automatic recovery attempt has already been spent ([unprotectedRetryConsumed]). The first
+ * unprotected give-up must NOT stop: forfeiting the re-arm would switch the VPN off without the
+ * user asking. The two contained outcomes never stop at all — traffic is held in a tunnel either
+ * way, so there is nothing to be honest about turning off.
+ */
+internal fun shouldStopServiceOnGiveUp(
+    outcome: FailoverGiveUpOutcome,
+    unprotectedRetryConsumed: Boolean,
+): Boolean = outcome == FailoverGiveUpOutcome.UNPROTECTED && unprotectedRetryConsumed

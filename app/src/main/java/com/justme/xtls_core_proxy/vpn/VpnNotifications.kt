@@ -223,8 +223,12 @@ internal object VpnNotifications {
      * Give-up variant for a tunnel that is STILL UP and still proxying: the no-candidate and
      * thrash-cap give-ups both run before any teardown, so nothing was blocked — there was simply
      * nowhere to rotate to. Reporting that with [postFailoverBlackholed]'s "your connection is
-     * paused on purpose" copy would be plainly false, so it gets its own wording (and names the
-     * server, which is the actionable part).
+     * paused on purpose" copy would be plainly false, so it gets its own wording.
+     *
+     * It deliberately does NOT name the server: two of the three give-up call sites (the thrash-cap
+     * denial and failRotation) have no profile name in scope, and threading one through would mean
+     * mirroring the name in a new @Volatile field purely for cosmetics. The name is already in the
+     * log line.
      */
     fun postFailoverNoResponse(context: Context) {
         postGiveUp(

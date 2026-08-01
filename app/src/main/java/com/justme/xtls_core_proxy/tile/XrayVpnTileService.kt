@@ -59,9 +59,12 @@ class XrayVpnTileService : TileService() {
 
     private fun handleClick() {
         val state = LogRepository.connectionState.value
+        // Must mirror decideTileClick's Stop gate exactly — this is the same rule duplicated for
+        // the no-IO fast path, so BLACKHOLED (service running, TUN owned) belongs in both.
         if (state == VpnConnectionState.CONNECTING ||
             state == VpnConnectionState.CONNECTED ||
-            state == VpnConnectionState.PAUSED
+            state == VpnConnectionState.PAUSED ||
+            state == VpnConnectionState.BLACKHOLED
         ) {
             // Stop path needs no IO; only the dispatch waits for unlock.
             runOrDeferUnlock { executeDecision(TileClickDecision.Stop) }

@@ -15,7 +15,7 @@ import com.justme.xtls_core_proxy.log.VpnConnectionState
  * or any system services.
  */
 internal sealed interface TileClickDecision {
-    /** State is active (CONNECTING / CONNECTED / PAUSED) — dispatch ACTION_STOP. */
+    /** State is active (CONNECTING / CONNECTED / PAUSED / BLACKHOLED) — dispatch ACTION_STOP. */
     data object Stop : TileClickDecision
 
     /** No profile exists — toast the user; do nothing else. */
@@ -38,9 +38,13 @@ internal fun decideTileClick(
     needsVpnConsent: Boolean,
     needsNotifPermission: Boolean,
 ): TileClickDecision {
+    // Every state in which the SERVICE IS RUNNING belongs here, not just the pretty ones.
+    // BLACKHOLED still owns a TUN, so a Start dispatched from it would only reach startVpn's
+    // "VPN already running" early return — the tile would render STATE_ACTIVE and do nothing.
     if (state == VpnConnectionState.CONNECTING ||
         state == VpnConnectionState.CONNECTED ||
-        state == VpnConnectionState.PAUSED
+        state == VpnConnectionState.PAUSED ||
+        state == VpnConnectionState.BLACKHOLED
     ) {
         return TileClickDecision.Stop
     }

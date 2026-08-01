@@ -149,6 +149,15 @@ class XrayVpnService : VpnService() {
      */
     @Volatile private var giveUpOutcome: FailoverGiveUpOutcome? = null
 
+    /**
+     * Whether the single automatic recovery attempt granted to an UNPROTECTED give-up has been
+     * spent. "Disconnect now, stop if the re-arm fails": the first unprotected give-up re-arms, and
+     * if the re-armed rotation also fails to bring anything up we stop the service rather than
+     * leaving it running-but-unprotected forever. Cleared wherever [giveUpOutcome] is.
+     * Guarded by `lock`.
+     */
+    private var unprotectedRetryConsumed: Boolean = false
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -681,6 +690,7 @@ class XrayVpnService : VpnService() {
                             // with a real Xray-backed tunnel, so the give-up alert would now be
                             // actively misleading — it claims the internet is off while it works.
                             giveUpOutcome = null
+                            unprotectedRetryConsumed = false
                             VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             // A kill-switch event deferred during this revive must now be replayed
@@ -826,6 +836,7 @@ class XrayVpnService : VpnService() {
                             // blackhole would now claim the internet is off while it works. This
                             // also covers a rotation kicked off by the re-arm timer.
                             giveUpOutcome = null
+                            unprotectedRetryConsumed = false
                             VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             pendingKillLabel.also { pendingKillLabel = null }
@@ -903,7 +914,6 @@ class XrayVpnService : VpnService() {
         episodeFailedIds = emptySet()
         stopFailoverMonitorLocked()
         reconcileScreenReceiverLocked(sessionEpoch)
-        scheduleFailoverRearmLocked(sessionEpoch)
 
         if (sessionTunnelState != SessionTunnelState.CONNECTED) {
             // Another owner holds this session's tunnel — most importantly the kill-switch's PAUSED
@@ -912,6 +922,7 @@ class XrayVpnService : VpnService() {
             LogRepository.append(
                 "Failover: tunnel is $sessionTunnelState; leaving it to its owner"
             )
+            scheduleFailoverRearmLocked(sessionEpoch, retryByRotation = false)
             return
         }
 
@@ -929,6 +940,25 @@ class XrayVpnService : VpnService() {
         }
 
         val outcome = classifyGiveUpOutcome(hadTunnel, blackholeEstablished)
+
+        if (shouldStopServiceOnGiveUp(outcome, unprotectedRetryConsumed)) {
+            // The one automatic recovery attempt has been spent and traffic is STILL not contained.
+            // Leaving a service running that cannot protect anything — while its own copy tells the
+            // user to reconnect — is the dishonest option. Land in the real off state instead.
+            LogRepository.append(
+                "Failover: recovery attempt also failed to bring up a tunnel; stopping the VPN"
+            )
+            giveUpOutcome = null
+            unprotectedRetryConsumed = false
+            // Both surfaces, because stopVpn clears the foreground notification: the in-app error
+            // for a user who is looking, the 1102 error notification (its own id, survives
+            // stopForeground) for one who is not.
+            LogRepository.emitError(R.string.vpn_failover_stopped_error)
+            postErrorNotification(R.string.vpn_failover_stopped_error)
+            stopVpn(expectedSessionEpoch = sessionEpoch)
+            return
+        }
+
         giveUpOutcome = outcome
         // State first, then the notifications — same ordering discipline as killTunnel.
         LogRepository.setConnectionState(
@@ -962,6 +992,12 @@ class XrayVpnService : VpnService() {
                 VpnNotifications.postFailoverUnprotected(this)
             }
         }
+
+        // Scheduled LAST, and only on the paths that keep the service alive. An unprotected give-up
+        // spends its single recovery attempt here; a second one lands in the stop branch above.
+        val retryByRotation = outcome == FailoverGiveUpOutcome.UNPROTECTED
+        if (retryByRotation) unprotectedRetryConsumed = true
+        scheduleFailoverRearmLocked(sessionEpoch, retryByRotation = retryByRotation)
     }
 
     /**
@@ -987,6 +1023,7 @@ class XrayVpnService : VpnService() {
             if (tunInterface == null) return
             LogRepository.append("Failover: tunnel is passing traffic again; clearing the give-up state")
             giveUpOutcome = null
+            unprotectedRetryConsumed = false
             // The episode is demonstrably over, so the sliding thrash window starts clean too.
             rotationAttempts = emptyList()
             LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
@@ -1002,9 +1039,16 @@ class XrayVpnService : VpnService() {
      * This lives in the single funnel every give-up passes through: the thrash-cap and no-candidate
      * give-ups call [giveUpRotationLocked] directly and never go through [failRotation], so wiring
      * the timer there would leave the common "all servers dead" case permanently disarmed.
+     *
+     * [retryByRotation] is set only for an UNPROTECTED give-up, where restarting the health monitor
+     * would achieve nothing: there is NO tunnel, so its probe travels the clear network, succeeds
+     * for the wrong reason, and can never ask for a rotation. That state's one recovery attempt has
+     * to be a rotation driven directly from here. Every other give-up leaves a tunnel in place, so
+     * the monitor is the right thing to re-arm.
+     *
      * Caller must hold `lock`.
      */
-    private fun scheduleFailoverRearmLocked(sessionEpoch: Long) {
+    private fun scheduleFailoverRearmLocked(sessionEpoch: Long, retryByRotation: Boolean) {
         val windowMs = failoverSettings.rotationWindowMs
         failoverRearmJob?.cancel()
         failoverRearmJob = serviceScope.launch {
@@ -1012,6 +1056,12 @@ class XrayVpnService : VpnService() {
             synchronized(lock) {
                 if (!isCurrentSessionLocked(sessionEpoch)) return@launch
                 rotationAttempts = emptyList()
+            }
+            if (retryByRotation) {
+                // rotateTunnel re-checks epoch + CONNECTED under the lock itself, so a stale timer
+                // is a no-op here too.
+                rotateTunnel(sessionEpoch)
+                return@launch
             }
             // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op. Reads
             // the settings flow rather than the captured value: the user may have edited them
@@ -1316,6 +1366,7 @@ class XrayVpnService : VpnService() {
             rotationAttempts = emptyList()
             episodeFailedIds = emptySet()
             giveUpOutcome = null
+            unprotectedRetryConsumed = false
             // Keep stop, global TUN/Xray teardown, and the next start admission under one lock.
             // This prevents an old full stop from tearing down a newer session's resources.
             val tailerToStop = logTailer
@@ -1419,6 +1470,14 @@ class XrayVpnService : VpnService() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setOnlyAlertOnce(true)
             .setDeleteIntent(notificationDismissIntent())
+            // A Stop action on the ONGOING notification is the one surface that is present in every
+            // running state, including the failover give-up states where the app UI may be closed
+            // and the copy is actively telling the user to turn the VPN off.
+            .addAction(
+                R.drawable.boykisser_notification_icon,
+                localizedString(R.string.vpn_notification_action_stop),
+                notificationStopIntent()
+            )
             .build()
     }
 
@@ -1439,6 +1498,24 @@ class XrayVpnService : VpnService() {
         return PendingIntent.getService(
             this,
             0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /**
+     * PendingIntent behind the ongoing notification's Stop action. Same shape as
+     * [notificationDismissIntent] — an explicit service Intent, not background-blocked because the
+     * target is this already-running foreground service. The distinct request code is defensive
+     * rather than strictly required (PendingIntent matching runs `Intent.filterEquals`, which does
+     * compare the action, so the differing actions already separate them); it keeps them separate
+     * even if one of these Intents ever loses its action.
+     */
+    private fun notificationStopIntent(): PendingIntent {
+        val intent = Intent(this, XrayVpnService::class.java).setAction(ACTION_STOP)
+        return PendingIntent.getService(
+            this,
+            1,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
