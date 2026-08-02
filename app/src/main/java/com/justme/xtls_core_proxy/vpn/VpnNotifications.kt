@@ -160,11 +160,13 @@ internal object VpnNotifications {
      * off for [triggerLabel], and that app is still going through the VPN. Like every poster here,
      * `notify()` is a silent no-op when POST_NOTIFICATIONS is denied.
      *
-     * During the session this behaves like [postFailover] rather than [postExposed]: it reports a
-     * COMPLETED event ("we did not act on it") that stays true while the session lasts, so nothing
-     * retracts it mid-session — in particular a later successful rotation must not. What it does NOT
-     * outlive is the session itself, because the body is present-tense about an app still being
-     * tunnelled; [cancelKillSwitchNotApplied] clears it on stop.
+     * The body is present-tense about an app still being tunnelled, so
+     * [cancelKillSwitchNotApplied] retracts it exactly when the tunnel it describes goes away:
+     * `stopVpn` (the session ends) and `killTunnel` (the deferred kill finally lands — the app is no
+     * longer tunnelled, and 1103 is about to say the VPN is off for everything on this same
+     * high-importance channel). Deliberately NOT retracted by a later successful rotation or by
+     * `reviveTunnel`: those restore a tunnel, and the record that one kill went unapplied stays
+     * true. `setAutoCancel(true)` covers only a user tap, so it is not a lifecycle on its own.
      */
     fun postKillSwitchNotApplied(context: Context, triggerLabel: String) {
         createExposedChannel(context)

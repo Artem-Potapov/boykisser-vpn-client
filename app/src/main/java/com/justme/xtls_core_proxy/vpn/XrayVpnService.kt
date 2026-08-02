@@ -646,6 +646,12 @@ class XrayVpnService : VpnService() {
                     // paused status line; the loud heads-up exposed alert is a SEPARATE
                     // notification on the high channel (id 1103) so it can actually alert.
                     updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
+                    // 1106 says a kill was DEFERRED and the listed app is still tunnelled. The kill
+                    // has now landed and the tunnel is gone, so that notice is false — and it lives
+                    // on this same high-importance channel, so leaving it up would pair "VPN is OFF
+                    // for every app" with "that app is still going through the VPN". Retract before
+                    // posting so the two contradictory heads-ups never coexist.
+                    VpnNotifications.cancelKillSwitchNotApplied(this@XrayVpnService)
                     VpnNotifications.postExposed(
                         this@XrayVpnService,
                         triggerPackageLabel,
@@ -1561,7 +1567,8 @@ class XrayVpnService : VpnService() {
             VpnNotifications.cancelExposed(this)
             VpnNotifications.cancelFailoverBlackholed(this)
             // 1106 asserts in the present tense that a listed app is still going through the VPN.
-            // After a stop that is simply false, and it has no auto-cancel path of its own.
+            // After a stop that is simply false, and its setAutoCancel(true) only clears it if the
+            // user taps it.
             VpnNotifications.cancelKillSwitchNotApplied(this)
             if (stopService) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
