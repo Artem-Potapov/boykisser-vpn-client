@@ -541,10 +541,6 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   window that *is* closed. **A naive port of `killTunnel`'s guard would break the `UNPROTECTED` retry
   path**, which legitimately rotates with `failoverMonitor == null`: the check must be on `enabled`, not
   on the monitor.
-- **The no-candidate give-up has no epoch re-check** after its off-lock DB work (`getById`,
-  `FailoverPoolResolver.resolve`). A stop-then-restart in that window would let an old-epoch give-up
-  stop the new session's monitor and overwrite its connection state. The auto-stop branch cannot be
-  reached that way.
 - **The single automatic recovery rotation excludes the last-known-good server**, because
   `nextCandidate` filters out `currentId` and `currentProfileId` was rolled back to it.
 - **`UNPROTECTED` can briefly coexist with a live tunnel and a running core** — `bringUpTunnel` releases

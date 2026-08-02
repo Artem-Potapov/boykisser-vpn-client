@@ -829,6 +829,15 @@ class XrayVpnService : VpnService() {
                 val next = FailoverDecision.nextCandidate(pool, current.id, failed)
                 if (next == null) {
                     synchronized(lock) {
+                        // Same ownership re-check as the bring-up block below, and for the same
+                        // reason: getById and FailoverPoolResolver.resolve both ran OFF-LOCK just
+                        // above, so a stop+restart in that window would otherwise let this
+                        // old-epoch give-up stop the NEW session's monitor, unregister its shared
+                        // screen receiver, and write BLACKHOLED over a healthy tunnel — with its
+                        // re-arm keyed to the dead epoch, so nothing would ever clear it.
+                        if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
+                            return@launch
+                        }
                         giveUpRotationLocked(session.epoch, "no healthy candidate left in pool")
                     }
                     return@launch
