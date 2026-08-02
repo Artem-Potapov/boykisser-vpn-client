@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.state.ConnectAction
+import com.justme.xtls_core_proxy.state.connectLabelRes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,10 +80,10 @@ internal fun ProfileActionsDialog(
                 } else {
                     ProfileActionRow(
                         icon = rememberVectorPainter(Icons.Filled.PlayArrow),
-                        label = stringResource(
-                            if (action == ConnectAction.RECONNECT) R.string.main_button_reconnect
-                            else R.string.main_button_connect
-                        ),
+                        // isConnecting = false: the row only renders for a NON-active profile
+                        // (isConnectedProfile shows Disconnect instead), and only the active
+                        // profile can be the one connecting.
+                        label = stringResource(connectLabelRes(action, isConnecting = false)),
                         enabled = action != ConnectAction.UNAVAILABLE,
                         onClick = onConnect
                     )

@@ -31,8 +31,10 @@ internal enum class FastestConnectOutcome {
 
     /**
      * A winner was found, but [FastestConnectRunner]'s `canConnect` check failed at delivery time —
-     * the connection state left the connectable set (CONNECTED/CONNECTING/PAUSED/BLACKHOLED) while
-     * the multi-minute probe was running. The winner is discarded rather than delivered: connecting
+     * the connection state left the connectable set (CONNECTED/CONNECTING/PAUSED) while the
+     * multi-minute probe was running. A give-up state (BLACKHOLED) is NOT in that set and DELIVERS:
+     * `state/ConnectAction` maps it to RECONNECT, since choosing another server is exactly the
+     * remedy a give-up offers. The winner is discarded rather than delivered: connecting
      * it now would either no-op ("VPN already running") while `ActiveProfileRepository`'s active id
      * still gets overwritten to the new (never-actually-connected) profile, misreporting which
      * server traffic is on.

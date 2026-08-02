@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.state
 
+import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -30,14 +31,44 @@ class ConnectActionTest {
     }
 
     @Test
-    fun everyStateIsMappedExplicitly() {
-        // Guards the enum-widening hazard this branch hit once already: a new VpnConnectionState
-        // must break this `when` at compile time rather than falling into a silent default.
-        for (state in VpnConnectionState.entries) {
+    fun everyConnectionStateHasADeliberateMapping() {
+        // Guards the branch's signature defect: BLACKHOLED was once added to VpnConnectionState and
+        // picked up by the two `when` sites the compiler forced, while four boolean chains that also
+        // read it were missed. This pins the whole partition, so adding a state fails here with the
+        // new state named rather than silently inheriting a neighbour's behaviour.
+        val expected = mapOf(
+            VpnConnectionState.DISCONNECTED to ConnectAction.CONNECT,
+            VpnConnectionState.ERROR to ConnectAction.CONNECT,
+            VpnConnectionState.BLACKHOLED to ConnectAction.RECONNECT,
+            VpnConnectionState.CONNECTING to ConnectAction.UNAVAILABLE,
+            VpnConnectionState.CONNECTED to ConnectAction.UNAVAILABLE,
+            VpnConnectionState.PAUSED to ConnectAction.UNAVAILABLE,
+        )
+        assertEquals(VpnConnectionState.entries.toSet(), expected.keys)
+        expected.forEach { (state, action) -> assertEquals(state.name, action, connectAction(state)) }
+    }
+
+    @Test
+    fun aGiveUpStateLabelsTheAffordanceReconnect() {
+        // The label half of the rule must agree with the enablement half: RECONNECT is the one
+        // action whose button text differs, and it is the whole point of the give-up affordance.
+        assertEquals(R.string.main_button_reconnect, connectLabelRes(ConnectAction.RECONNECT, false))
+        assertEquals(R.string.main_button_connect, connectLabelRes(ConnectAction.CONNECT, false))
+        assertEquals(
+            R.string.main_button_connect,
+            connectLabelRes(ConnectAction.UNAVAILABLE, false)
+        )
+    }
+
+    @Test
+    fun aConnectingSessionLabelsProgressRatherThanItsAction() {
+        // isConnecting is a transient progress state, not a fourth action, and it outranks every
+        // action's own label while it holds.
+        for (action in ConnectAction.entries) {
             assertEquals(
-                "connectAction must map $state explicitly",
-                true,
-                connectAction(state) in ConnectAction.entries
+                action.name,
+                R.string.main_button_connecting,
+                connectLabelRes(action, isConnecting = true)
             )
         }
     }

@@ -3,6 +3,7 @@ package com.justme.xtls_core_proxy.state
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.justme.xtls_core_proxy.BuildConfig
@@ -71,9 +72,18 @@ fun autoPingServers(profiles: List<Profile>, subscriptions: List<Subscription>):
  * is neither "connectable" nor "nothing to do": the tunnel is still there, the engine simply
  * stopped trying, and the honest affordance is **Reconnect**.
  *
- * This is the single home for the rule. It previously existed as five hand-written enumerations
- * (`canConnect`, `isActive`, `decideTileClick`, `XrayVpnTileService.handleClick`, and the
- * Disconnect gate), and one of those copies drifted and shipped a dead QS-tile control.
+ * This is the single home for the **connect-affordance** rule — nothing else may re-enumerate which
+ * states offer a connect, and [connectLabelRes] keeps the label half under the same exhaustive
+ * `when` so it cannot drift from the enablement half.
+ *
+ * It is NOT the single home for knowledge about [VpnConnectionState]'s partitions. Four other
+ * hand-written enumerations over the same enum survive this one, each encoding a DIFFERENT rule:
+ * `MainActivity.isActive` (which profile renders as the active one), `MainActivity`'s Disconnect
+ * gate (which states are stoppable), `tile/TileClickDecision.decideTileClick` and
+ * `tile/XrayVpnTileService`'s active check (what a QS-tile tap and its render mean). They are plain
+ * boolean chains the compiler cannot flag, and one of them drifted once already and shipped a dead
+ * QS-tile control. **Widening `VpnConnectionState` still requires the grep sweep `AGENTS.md`
+ * mandates** — this enum removes one member of that class, not the class.
  *
  * It lives here (not in `MainActivity`) so [FastestConnectRunner] can re-check it at delivery time,
  * not only at the menu tap that started the probe — see that class's KDoc ("Delivery-time re-gate")
@@ -97,6 +107,22 @@ internal fun connectAction(state: VpnConnectionState): ConnectAction = when (sta
     VpnConnectionState.CONNECTED,
     VpnConnectionState.CONNECTING,
     VpnConnectionState.PAUSED -> ConnectAction.UNAVAILABLE
+}
+
+/**
+ * The label for the connect affordance. Lives beside [connectAction] and switches on it with an
+ * exhaustive `when`, so a fourth [ConnectAction] is a compile error here as well as at the
+ * enablement site — the labelling half of the rule must not be able to drift from the enablement
+ * half. [isConnecting] is passed separately because it is a transient progress state, not a fourth
+ * action: the affordance is [ConnectAction.UNAVAILABLE] throughout it.
+ */
+@StringRes
+internal fun connectLabelRes(action: ConnectAction, isConnecting: Boolean): Int = when {
+    isConnecting -> R.string.main_button_connecting
+    else -> when (action) {
+        ConnectAction.RECONNECT -> R.string.main_button_reconnect
+        ConnectAction.CONNECT, ConnectAction.UNAVAILABLE -> R.string.main_button_connect
+    }
 }
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {

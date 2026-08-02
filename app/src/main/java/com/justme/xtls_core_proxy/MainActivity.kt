@@ -101,6 +101,7 @@ import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.state.connectAction
+import com.justme.xtls_core_proxy.state.connectLabelRes
 import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
@@ -1008,15 +1009,7 @@ private fun ProfileRow(
                 enabled = action != ConnectAction.UNAVAILABLE,
                 modifier = Modifier.padding(start = 8.dp)
             ) {
-                Text(
-                    stringResource(
-                        when {
-                            isConnecting -> R.string.main_button_connecting
-                            action == ConnectAction.RECONNECT -> R.string.main_button_reconnect
-                            else -> R.string.main_button_connect
-                        }
-                    )
-                )
+                Text(stringResource(connectLabelRes(action, isConnecting)))
             }
         }
     }
