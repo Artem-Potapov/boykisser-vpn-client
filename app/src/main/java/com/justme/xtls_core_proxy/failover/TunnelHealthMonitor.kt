@@ -54,7 +54,7 @@ class TunnelHealthMonitor(
      *
      * NOTE this does NOT make the fire path race-free on its own — a cancel arriving between the
      * threshold check and the listener call would still land, whoever won the swap. That is why
-     * the unhealthy listener is invoked unconditionally above, with no liveness gate.
+     * the unhealthy listener is invoked unconditionally below, with no liveness gate.
      */
     private val job = AtomicReference<Job?>(null)
 
@@ -170,11 +170,23 @@ class TunnelHealthMonitor(
                 reportedUnhealthy = false
                 if (!reportedHealthy) {
                     reportedHealthy = true
-                    // Guarded like the unhealthy listener below: this scope has no
+                    // Invoked unconditionally, for the same reason as the unhealthy listener
+                    // below: the latch above is already set, so a liveness gate here would swallow
+                    // the recovery signal PERMANENTLY. pausePolling() preserves reportedHealthy,
+                    // so the relaunched loop never retries, and clearGiveUpStateOnRecovery — whose
+                    // own KDoc warns the user would otherwise be "left staring at an error state
+                    // over a working connection until they stopped and restarted the VPN by hand"
+                    // — would never run again for this session. Safe on a cancelled coroutine: it
+                    // re-checks session ownership, giveUpOutcome, tunnel state and tunInterface
+                    // under `lock` before it acts, so a stale call is a no-op.
+                    //
+                    // Caught locally, UNLIKE the unhealthy listener below: this scope has no
                     // CoroutineExceptionHandler, and the enclosing launch-site catch would end the
-                    // whole poll loop over a throw from a caller's recovery handler.
+                    // whole poll loop over a throw from a caller's recovery handler. The unhealthy
+                    // path can rely on that launch-site catch precisely because it is terminal —
+                    // the loop ends either way. This path continues, so it must survive.
                     val h = healthyListener
-                    if (h != null && currentCoroutineContext().isActive) {
+                    if (h != null) {
                         try {
                             h.invoke()
                         } catch (ce: CancellationException) {
