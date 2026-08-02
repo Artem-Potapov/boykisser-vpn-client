@@ -595,7 +595,9 @@
     <string name="failover_connect_fastest_no_response_error">Ни один сервер не ответил, поэтому не удалось выбрать самый быстрый. Попробуйте позже.</string>
     <string name="failover_connect_fastest_busy_error">Некоторые из этих серверов уже проверялись в другом месте, поэтому не удалось получить свежий результат. Попробуйте ещё раз через момент.</string>
     <string name="failover_connect_fastest_state_changed_error">Подключение изменилось во время работы функции «Подключиться к самому быстрому», поэтому она была отменена. Попробуйте снова.</string>
-    <string name="connect_request_superseded">Вы уже выбрали сервер, поэтому подключаемся к нему.</string>
+
+    <!-- Connect request handling — shared across every source that can park pendingProfileId (manual tap, connect-to-fastest winner, QS-tile hand-off) -->
+    <string name="connect_request_superseded">Вы уже выбрали сервер, поэтому мы оставили его.</string>
 
     <!-- Failover settings screen -->
     <string name="failover_title">Автопереключение</string>

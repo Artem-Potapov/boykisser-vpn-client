@@ -305,10 +305,13 @@ internal fun shouldReleaseGiveUpOnDisable(
 /**
  * Whether an incoming start request may claim the single `pendingProfileId` slot.
  *
- * That slot is shared by the manual Connect lambda and by connect-fastest's winner delivery, and
- * a permission dialog can park a manual choice in it for minutes. An automatic winner arriving
- * meanwhile must not silently replace a server the user picked by hand — no refusal occurs on
- * that path, so nothing downstream would ever notice the substitution.
+ * THREE callers write that slot: the manual Connect lambda, connect-fastest's winner delivery, and
+ * the QS-tile hand-off. A system permission dialog can park any of them in it for minutes, and that
+ * dialog is a modal CONTINUATION of the request that raised it — so answering it must complete THAT
+ * request. Hence one uniform rule, "whichever request parked first wins", rather than a per-source
+ * hierarchy: no refusal occurs on an overwrite, so nothing downstream would ever notice the
+ * substitution, and a rule that applied to only some of the three writers would be an asymmetry the
+ * user has no way to observe or predict.
  */
 internal fun shouldOverwritePendingConnect(pending: Long, incoming: Long): Boolean =
     pending == -1L || pending == incoming
