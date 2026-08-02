@@ -159,6 +159,10 @@ internal object VpnNotifications {
      * must therefore stay strictly factual: no server could be reached, so the VPN was NOT turned
      * off for [triggerLabel], and that app is still going through the VPN. Like every poster here,
      * `notify()` is a silent no-op when POST_NOTIFICATIONS is denied.
+     *
+     * No cancel counterpart, for [postFailover]'s reason rather than [postExposed]'s: this reports a
+     * COMPLETED event ("we did not act on it") that stays true afterwards, not an ongoing state, so
+     * `setAutoCancel(true)` is the whole lifecycle. A later successful rotation must not retract it.
      */
     fun postKillSwitchNotApplied(context: Context, triggerLabel: String) {
         createExposedChannel(context)
