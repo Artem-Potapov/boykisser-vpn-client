@@ -218,6 +218,28 @@ class TunnelHealthMonitorTest {
         m.stop()
     }
 
+    @Test
+    fun theUnhealthyListenerIsInvokedUnconditionallyOnceTheThresholdIsReached() = runTest {
+        // Regression guard for the swallow hazard. pausePolling() runs on tunnelOpScope, a different
+        // thread from this poll loop, and captures `job` before nulling it — so a screen-off landing
+        // between `job = null` and the listener call used to make currentCoroutineContext().isActive
+        // false and SKIP the rotation request, while isStarted = false made resumePolling() return
+        // early. Failover then stayed dead for the whole session over a dead tunnel, with no signal.
+        //
+        // The two-thread interleaving itself is NOT reproducible on StandardTestDispatcher. What this
+        // pins is the contract that replaced it: reaching the threshold always invokes the listener,
+        // with no liveness condition attached. Verified to bite by mutation (see the report).
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fired = AtomicInteger(0)
+        val m = monitor(FakeProbe(healthy = false), FakeAvailability(), dispatcher, threshold = 1)
+
+        m.start(onHealthy = null) { fired.incrementAndGet() }
+        runCurrent()
+        m.stop()
+
+        assertEquals("reaching the threshold must always request a rotation", 1, fired.get())
+    }
+
     // NOTE for the six tests below: they call m.stop() BEFORE asserting. A monitor that never
     // reaches its threshold polls forever, and runTest only returns once the scheduler is idle — so
     // an assertion that throws before stop() strands the loop and HANGS the whole test task rather

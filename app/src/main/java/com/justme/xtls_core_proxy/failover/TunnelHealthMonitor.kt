@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.failover
 
 import com.justme.xtls_core_proxy.log.LogRepository
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -42,13 +43,20 @@ class TunnelHealthMonitor(
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
     /**
-     * @Volatile like every other mutable field here: the poll loop nulls this from its own
-     * coroutine when it goes terminal, while `stop`/`pausePolling`/`resumePolling` write it from
-     * the service's lifecycle lock — two different happens-before domains. It is benign today only
-     * because the terminal property actually rides on the already-@Volatile [isStarted]; that is a
-     * property of the current code, not a guarantee, so do not rely on it.
+     * The live poll-loop coroutine, or null when the monitor is stopped, paused, or terminal.
+     *
+     * An `AtomicReference` rather than a `@Volatile var` because two different threads retire it:
+     * the poll loop nulls it from its own coroutine when it goes terminal, while
+     * `stop`/`pausePolling` null it from the service's lifecycle lock. The old `job?.cancel();
+     * job = null` was a non-atomic check-then-act across that boundary, so both could act on the
+     * same job. Every retirement now goes through `getAndSet(null)`, so exactly one side wins and
+     * the loser sees null and does nothing.
+     *
+     * NOTE this does NOT make the fire path race-free on its own — a cancel arriving between the
+     * threshold check and the listener call would still land, whoever won the swap. That is why
+     * the unhealthy listener is invoked unconditionally above, with no liveness gate.
      */
-    @Volatile private var job: Job? = null
+    private val job = AtomicReference<Job?>(null)
 
     @Volatile private var listener: (() -> Unit)? = null
     @Volatile private var healthyListener: (() -> Unit)? = null
@@ -75,8 +83,8 @@ class TunnelHealthMonitor(
         consecutiveFailures = 0
         reportedUnhealthy = false
         reportedHealthy = false
-        job?.cancel()
-        job = scope.launch {
+        job.getAndSet(null)?.cancel()
+        val launched = scope.launch {
             try {
                 runPollLoop()
             } catch (t: CancellationException) {
@@ -89,12 +97,12 @@ class TunnelHealthMonitor(
                 LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
             }
         }
+        job.set(launched)
     }
 
     fun stop() {
         isStarted = false
-        job?.cancel()
-        job = null
+        job.getAndSet(null)?.cancel()
         listener = null
         healthyListener = null
         consecutiveFailures = 0
@@ -103,15 +111,14 @@ class TunnelHealthMonitor(
     }
 
     fun pausePolling() {
-        job?.cancel()
-        job = null
+        job.getAndSet(null)?.cancel()
         // consecutiveFailures / reportedUnhealthy intentionally preserved across a pause.
     }
 
     fun resumePolling() {
         if (!isStarted) return
-        if (job != null) return
-        job = scope.launch {
+        if (job.get() != null) return
+        val launched = scope.launch {
             try {
                 runPollLoop()
             } catch (t: CancellationException) {
@@ -120,6 +127,7 @@ class TunnelHealthMonitor(
                 LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
             }
         }
+        job.set(launched)
     }
 
     private suspend fun runPollLoop() {
@@ -190,12 +198,20 @@ class TunnelHealthMonitor(
                 // BOTH orderings, and also protects against the listener itself synchronously
                 // calling resumePolling() before this coroutine has returned.
                 isStarted = false
-                job = null
+                job.getAndSet(null)
                 LogRepository.append(
                     "Failover: tunnel unhealthy after $consecutiveFailures consecutive probe failures"
                 )
-                val l = listener
-                if (l != null && currentCoroutineContext().isActive) l.invoke()
+                // NO isActive GATE. pausePolling() runs on another thread (tunnelOpScope) and
+                // captures `job` before nulling it, so a screen-off landing between `job = null`
+                // above and this line would make isActive false and SWALLOW the rotation request
+                // — while isStarted = false makes resumePolling() early-return, leaving failover
+                // dead for the whole session over a dead tunnel, with no signal anywhere.
+                // Invoking on a cancelled coroutine is the safe direction: rotateTunnel re-checks
+                // epoch and CONNECTED under `lock`, so a stale request is a no-op, whereas a
+                // swallowed one is a permanently dead feature. The invocation is already guarded
+                // against throwing by the launch-site catch.
+                listener?.invoke()
                 return // terminal: only a fresh start() revives this monitor
             }
         }
