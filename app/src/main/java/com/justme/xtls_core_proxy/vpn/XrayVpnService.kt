@@ -951,6 +951,12 @@ class XrayVpnService : VpnService() {
      */
     private fun giveUpRotationLocked(sessionEpoch: Long, reason: String) {
         LogRepository.append("Failover: giving up ($reason)")
+        // A rotation has THREE exits, and this is the third. The two that commit CONNECTED replay a
+        // kill deferred during the rotation; a give-up must DROP it — replaying it up to
+        // rotationWindowMs later would tear down a just-restored tunnel and blame an app the user
+        // closed long ago. Cleared HERE, in the one funnel every give-up passes through, so no exit
+        // below (including the stand-down return) can leave the marker armed.
+        val deferredKillLabel = pendingKillLabel.also { pendingKillLabel = null }
         if (sessionTunnelState == SessionTunnelState.ROTATING) {
             sessionTunnelState = SessionTunnelState.CONNECTED
         }
@@ -966,6 +972,7 @@ class XrayVpnService : VpnService() {
                 "Failover: tunnel is $sessionTunnelState; leaving it to its owner"
             )
             scheduleFailoverRearmLocked(sessionEpoch, retryByRotation = false)
+            announceDroppedDeferredKillLocked(deferredKillLabel)
             return
         }
 
@@ -999,6 +1006,9 @@ class XrayVpnService : VpnService() {
             LogRepository.emitError(R.string.vpn_failover_stopped_error)
             postErrorNotification(R.string.vpn_failover_stopped_error)
             stopVpn(expectedSessionEpoch = sessionEpoch)
+            // After stopVpn there is no tunnel, so this is a no-op by rule rather than by omission:
+            // the VPN really is off for the kill-listed app, which is what the deferred kill wanted.
+            announceDroppedDeferredKillLocked(deferredKillLabel)
             return
         }
 
@@ -1041,6 +1051,31 @@ class XrayVpnService : VpnService() {
         val retryByRotation = outcome == FailoverGiveUpOutcome.UNPROTECTED
         if (retryByRotation) unprotectedRetryConsumed = true
         scheduleFailoverRearmLocked(sessionEpoch, retryByRotation = retryByRotation)
+        announceDroppedDeferredKillLocked(deferredKillLabel)
+    }
+
+    /**
+     * Tells the user that a kill-switch event deferred during a rotation was DROPPED because no
+     * server could be reached — so the listed app is still going through the tunnel they asked to
+     * have torn down. A silently non-functioning kill-switch is the failure mode this closes.
+     *
+     * Posts nothing when [deferredKillNoticeLabel] returns null: no kill was deferred, or the
+     * give-up left no tunnel at all (in which case the app is not behind a VPN and the claim would
+     * be false — those outcomes report themselves on their own surfaces).
+     *
+     * Caller must hold `lock`, and must have already settled the session state: same ordering
+     * discipline as [killTunnel] — state first, then notifications.
+     */
+    private fun announceDroppedDeferredKillLocked(deferredKillLabel: String?) {
+        val label = deferredKillNoticeLabel(
+            pendingKillLabel = deferredKillLabel,
+            tunnelStillUp = tunInterface != null,
+        ) ?: return
+        LogRepository.append(
+            "Kill-switch: dropping the kill deferred for $label — no server could be reached, so " +
+                "the tunnel was not torn down for it"
+        )
+        VpnNotifications.postKillSwitchNotApplied(this, label)
     }
 
     /**

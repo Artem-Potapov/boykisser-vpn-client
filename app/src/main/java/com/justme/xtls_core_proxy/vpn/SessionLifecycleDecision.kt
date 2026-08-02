@@ -105,6 +105,28 @@ internal fun shouldDeferKillDuringTransition(
         (tunnelState == SessionTunnelState.REVIVING || tunnelState == SessionTunnelState.ROTATING)
 
 /**
+ * The app label to announce when a failover give-up DISCHARGES a kill-switch event that was
+ * deferred by [shouldDeferKillDuringTransition] — or null when nothing may be announced.
+ *
+ * A rotation has three exits, not two. The two that commit CONNECTED replay the deferred kill;
+ * the give-up funnel is the third, and it must drop the event instead: replaying it up to
+ * `rotationWindowMs` later would tear down a just-restored tunnel and blame an app that closed
+ * long ago. Dropping it silently is not acceptable either — the user asked for the VPN to be off
+ * for that app and it is not — hence this notice.
+ *
+ * [tunnelStillUp] is what keeps the notice honest. It is the give-up's own fd state, so it covers
+ * every case in one rule: the two CONTAINED outcomes still own a TUN (a live one, or the blackhole
+ * — either way the listed app still sees a VPN, which is exactly what the kill-switch exists to
+ * prevent), while UNPROTECTED and the give-up that stops the service own no TUN at all. In those
+ * the app is NOT behind a VPN, so telling the user it still is would be the opposite of the truth,
+ * and both already report themselves on their own surfaces.
+ */
+internal fun deferredKillNoticeLabel(
+    pendingKillLabel: String?,
+    tunnelStillUp: Boolean,
+): String? = pendingKillLabel?.takeIf { tunnelStillUp }
+
+/**
  * The screen on/off receiver is SHARED by the kill-switch and failover monitors: hold it while
  * EITHER is live, release it only when NEITHER is.
  *

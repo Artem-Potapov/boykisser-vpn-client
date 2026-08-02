@@ -1,6 +1,8 @@
 package com.justme.xtls_core_proxy.vpn
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,6 +83,29 @@ class SessionLifecycleRotationTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun deferredKillNotice_namesTheApp_whenATunnelIsStillUp() {
+        // A give-up discharges the deferred kill instead of replaying it, so the user must be told
+        // their kill-switch did not act — the listed app is still riding the tunnel.
+        assertEquals(
+            "Bank",
+            deferredKillNoticeLabel(pendingKillLabel = "Bank", tunnelStillUp = true)
+        )
+    }
+
+    @Test
+    fun deferredKillNotice_isSilent_whenNoKillWasDeferred() {
+        // The overwhelmingly common give-up: nothing was deferred, so nothing may be posted.
+        assertNull(deferredKillNoticeLabel(pendingKillLabel = null, tunnelStillUp = true))
+    }
+
+    @Test
+    fun deferredKillNotice_isSilent_whenNoTunnelRemains() {
+        // UNPROTECTED (and the give-up that stops the service) leave NO tunnel, so the listed app
+        // is not behind a VPN after all. Claiming it still is would be the opposite of the truth.
+        assertNull(deferredKillNoticeLabel(pendingKillLabel = "Bank", tunnelStillUp = false))
     }
 
     @Test

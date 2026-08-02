@@ -27,6 +27,8 @@
     <string name="vpn_exposed_big">Прямо сейчас VPN отключён для всех приложений на устройстве — не только для %1$s. Ваш реальный IP-адрес, DNS-запросы и трафик раскрыты, пока вы не выйдете из этого приложения. Защита вернётся автоматически, когда оно перестанет быть активным.</string>
     <string name="vpn_exposed_channel_name">Предупреждения о раскрытии</string>
     <string name="vpn_exposed_channel_desc">Предупреждает, когда VPN отключён для всех приложений из-за открытого контролируемого приложения.</string>
+    <string name="kill_switch_not_applied_title">VPN всё ещё включён</string>
+    <string name="kill_switch_not_applied_body">Не удалось связаться ни с одним сервером, поэтому мы не отключили VPN для приложения %1$s. Его трафик по-прежнему идёт через VPN.</string>
     <string name="kill_switch_title">Kill-switch для приложений</string>
     <string name="kill_switch_enabled">Включить отключение при открытии</string>
     <string name="kill_switch_description">Полностью отключает VPN, когда одно из выбранных приложений становится активным. Автоматически переподключаться, когда оно уходит из активного состояния.</string>

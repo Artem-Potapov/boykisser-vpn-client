@@ -154,11 +154,38 @@ mutually-exclusive claims on the fd. The rules:
 
 | Situation | Behaviour | Why |
 |---|---|---|
-| Kill-switch event arrives during `ROTATING` | **Deferred**, not dropped (`shouldDeferKillDuringTransition`), recorded in `pendingKillLabel` and replayed once the rotation commits `CONNECTED` | The foreground monitor is edge-triggered and would never re-fire the event, leaving the tunnel CONNECTED with a kill-listed app foregrounded |
+| Kill-switch event arrives during `ROTATING` | **Deferred**, not dropped (`shouldDeferKillDuringTransition`), recorded in `pendingKillLabel`, and replayed if the rotation commits `CONNECTED`. If the rotation instead **gives up**, the funnel **drops** it and says so — see below | The foreground monitor is edge-triggered and would never re-fire the event, leaving the tunnel CONNECTED with a kill-listed app foregrounded |
 | Tunnel is `PAUSED` (kill-switch) | The health monitor is **stopped**, not paused (`shouldRunFailoverMonitor` is `CONNECTED`-only) | There is no tunnel, so every probe would fail and the engine would "rotate" a tunnel the kill-switch deliberately tore down. `stop()` (not `pausePolling()`) because pausing preserves the failure count, which would trip instantly on revive |
 | Revive commits `CONNECTED` | `reviveTunnel` calls `applyFailoverPreferences` **outside** the locked block | Nothing else restarts the monitor; without this, failover is dead for the rest of the session after the first kill-switch pause. It must run after `CONNECTED` is committed or it reads `REVIVING` and no-ops |
 | Give-up lands while the state is not `CONNECTED` | Stand down: log, re-arm the monitor timer, touch nothing | `PAUSED`'s compliance contract is literally "no tunnel must exist"; establishing a blackhole (or overwriting the PAUSED connection state) would break it outright |
 | Screen off / on | One shared `BroadcastReceiver` pauses/resumes **both** monitors | Registration used to belong entirely to the kill-switch, which failed failover two ways: with failover on and the kill-switch off (the **default** pairing) no receiver existed at all, and turning the kill-switch off mid-session tore the receiver out from under a running failover monitor. `shouldHoldScreenReceiver(killSwitchLive, failoverLive)` now owns it — hold while EITHER is live, release only when NEITHER is |
+
+### The third exit: a give-up must DISCHARGE the deferred kill
+
+A rotation has **three** exits, not two. `reviveTunnel`/`rotateTunnel`'s success arms replay
+`pendingKillLabel`; the give-up funnel is the third and it must **drop** it. Leaving the marker armed
+was a real merge blocker: the kill never fires, and then the re-arm rotation — up to
+`rotationWindowMs` (default **10 min**, max 1 h) later — replays it, tearing down a just-restored
+tunnel, setting `PAUSED`, and posting the 1103 "VPN is OFF — you're exposed" alert naming an app that
+closed long ago. The user loses protection they never asked to lose, for a stated reason that is false.
+
+So `giveUpRotationLocked` clears `pendingKillLabel` **at the top of the funnel** (one home, so no exit
+— including the stand-down early return — can leave it armed) and then **notifies**: a bare silent
+drop would leave the user with a silently non-functioning kill-switch. Replaying the kill on the two
+contained outcomes was rejected for the same reason the deferral exists: if the app has already left
+the foreground, the edge-triggered monitor has already fired, so the replay would strand the session
+`PAUSED` with an exposure alert and no revive.
+
+The notice is `VpnNotifications.postKillSwitchNotApplied` — **id 1106 on the existing
+`EXPOSED_CHANNEL_ID`**. Ids and channels are independent: a new *id* is mandatory (channels are welded
+at first post, so reusing 1103 would replace the exposure alert), while the kill-switch's
+high-importance exposure channel is already the semantically right home for "your kill-switch did not
+act". Whether it posts at all is the pure `deferredKillNoticeLabel(pendingKillLabel, tunnelStillUp)`:
+nothing was deferred → silent; **no tunnel remains** (`UNPROTECTED`, and the give-up that stops the
+service) → silent, because there the listed app genuinely is *not* behind a VPN and both of those
+outcomes already report themselves on their own surfaces. Both contained outcomes still own an fd —
+live or blackhole — and a blackhole TUN is still a VPN interface to the app that was trying to detect
+one, so the notice is true there.
 
 ## Give-up: three outcomes, one funnel, fail-closed
 
@@ -471,9 +498,9 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 | [`failover/FailoverSettingsPersistDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverSettingsPersistDecision.kt) | Pure `resolveFailoverSettings(...)` — the autosave rule extracted out of the Activity so it is JVM-testable (the codebase's `TileClickDecision`/`StartCommandDecision` shape). |
 | [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free Connect-to-fastest orchestration: generation-counter job replacement, delivery-time re-gate, `FastestConnectOutcome` (NO_RESPONSE / BUSY / STATE_CHANGED), cancellation cleanup. |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Pure `pickFastest(states, candidates)` and `clearStaleTesting(states, ids)`. |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`, `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`. |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`, `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, `establishBlackholeTunnelLocked`, `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |
-| [`vpn/VpnNotifications.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) | Channels 4 and 5 and ids 1104/1105; `postFailover`, the three `postFailover*` give-up variants (shared id + `postGiveUp` builder), `cancelFailoverBlackholed`. |
+| [`vpn/VpnNotifications.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) | Channels 4 and 5 and ids 1104/1105; `postFailover`, the three `postFailover*` give-up variants (shared id + `postGiveUp` builder), `cancelFailoverBlackholed`. Also id 1106 / `postKillSwitchNotApplied` — a new id on the kill-switch's **existing** exposure channel. |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `VpnConnectionState.BLACKHOLED`. |
 | `res/values/strings.xml`, `res/values-ru/strings.xml` | All failover strings, both locales (release lint fails on a missing one). |
 | `AndroidManifest.xml` | `ACCESS_NETWORK_STATE` (required — `cm.allNetworks` throws `SecurityException` without it) and the `FailoverSettingsActivity` entry (`exported="false"`, like every sibling settings screen). |
@@ -581,8 +608,8 @@ is itself the argument for doing it.
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (7) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
 | `vpn/SessionLifecycleDecisionTest` (42) | Every pure service rule above, including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the transition-defer guard. |
-| `vpn/SessionLifecycleRotationTest` (5) | Rotation reservation and the give-up predicates. |
-| `vpn/FailoverNotificationIdsTest` (3) | All four ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
+| `vpn/SessionLifecycleRotationTest` (8) | Rotation reservation, the give-up predicates, and `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left). |
+| `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `tile/TileClickDecisionTest` | `BLACKHOLED` → `Stop`, with and without a profile. |
 
 **Instrumented tests** (`:app:connectedDebugAndroidTest`, local only — not in CI):

@@ -40,6 +40,20 @@ internal object VpnNotifications {
      */
     const val EXPOSED_NOTIFICATION_ID = 1103
 
+    /**
+     * "Your kill-switch could not act" — posted when a failover give-up discharges a kill-switch
+     * event that was deferred during a rotation.
+     *
+     * It gets its OWN id for the same reason every other notice here does: a notification's channel
+     * is welded at its first post, so reusing 1103 would make this notice replace (or inherit the
+     * state of) the exposure alert. It does NOT get its own CHANNEL — ids and channels are
+     * independent, and [EXPOSED_CHANNEL_ID] is exactly the right one semantically: this is the
+     * kill-switch telling the user the VPN is not in the state they asked for, and its
+     * IMPORTANCE_HIGH is warranted because the listed app is being used right now under a tunnel
+     * the user believes is down.
+     */
+    const val KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID = 1106
+
     /** Channel for the routine, informational "switched server" notice. Default importance. */
     const val FAILOVER_CHANNEL_ID = "xray_vpn_failover_channel"
 
@@ -134,6 +148,33 @@ internal object VpnNotifications {
     fun cancelExposed(context: Context) {
         context.getSystemService(NotificationManager::class.java)
             .cancel(EXPOSED_NOTIFICATION_ID)
+    }
+
+    /**
+     * Posts the "the kill-switch could not act" notice under its own id on the existing
+     * high-importance [EXPOSED_CHANNEL_ID].
+     *
+     * Reached only from the failover give-up funnel, which drops a kill deferred during a rotation
+     * rather than replaying it minutes later onto a tunnel the user never asked to lose. The copy
+     * must therefore stay strictly factual: no server could be reached, so the VPN was NOT turned
+     * off for [triggerLabel], and that app is still going through the VPN. Like every poster here,
+     * `notify()` is a silent no-op when POST_NOTIFICATIONS is denied.
+     */
+    fun postKillSwitchNotApplied(context: Context, triggerLabel: String) {
+        createExposedChannel(context)
+        val body = localized(context, R.string.kill_switch_not_applied_body, triggerLabel)
+        val notification = NotificationCompat.Builder(context, EXPOSED_CHANNEL_ID)
+            .setSmallIcon(R.drawable.boykisser_notification_icon)
+            .setColor(ContextCompat.getColor(context, R.color.warning_red))
+            .setContentTitle(localized(context, R.string.kill_switch_not_applied_title))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(failoverContentIntent(context))
+            .build()
+        context.getSystemService(NotificationManager::class.java)
+            .notify(KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID, notification)
     }
 
     /**

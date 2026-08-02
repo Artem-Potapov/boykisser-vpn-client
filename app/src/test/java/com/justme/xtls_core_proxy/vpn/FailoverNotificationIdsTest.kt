@@ -26,6 +26,8 @@ class FailoverNotificationIdsTest {
             "EXPOSED_NOTIFICATION_ID" to VpnNotifications.EXPOSED_NOTIFICATION_ID,
             "FAILOVER_NOTIFICATION_ID" to VpnNotifications.FAILOVER_NOTIFICATION_ID,
             "FAILOVER_BLACKHOLE_NOTIFICATION_ID" to VpnNotifications.FAILOVER_BLACKHOLE_NOTIFICATION_ID,
+            "KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID" to
+                VpnNotifications.KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID,
         )
 
         assertEquals(
@@ -57,5 +59,8 @@ class FailoverNotificationIdsTest {
         // onto an allocated one.
         assertEquals(1104, VpnNotifications.FAILOVER_NOTIFICATION_ID)
         assertEquals(1105, VpnNotifications.FAILOVER_BLACKHOLE_NOTIFICATION_ID)
+        // 1106 = "the kill-switch could not act". It shares the EXPOSED channel deliberately (ids
+        // and channels are independent) but must never share an id, or it would replace 1103.
+        assertEquals(1106, VpnNotifications.KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID)
     }
 }
