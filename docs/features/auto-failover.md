@@ -474,7 +474,14 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
     server A**. Two checks around one unbounded gap are correct, not redundant.
 - **The service now rolls back too (T10b).** `activeProfileIdToRestoreOnRefusedStart(requested, current)`
   restores the session's real profile in `startVpn`'s "VPN already running" arm, closing
-  "UI names B while traffic flows through A" for **every** connect path, not just this one. The
+  "UI names B while traffic flows through A" for every connect path that reaches that refusal — not
+  just this one. It is **not** literally total, so do not read it as a proof. It can only restore what
+  `currentProfileId` already holds, and that field is written on the bring-up thread *after* the
+  session's Room read — so a refusal landing between `running = true` and that write still reads
+  `-1L`, and `activeProfileIdToRestoreOnRefusedStart` correctly writes nothing (restoring a
+  non-positive id would point the app at nothing). Unreachable in practice: `CONNECTING` is announced
+  almost immediately and gates every UI affordance, so a second start for a *different* profile has to
+  be a duplicated or queued intent that lands inside that window. The
   `UNPROTECTED` recovery restart deliberately does **not** roll back — it really does go on to start the
   requested profile, so it must keep the caller's write. `setActiveProfileId` uses `apply()`, so no disk
   I/O is held under `lock`.
@@ -549,6 +556,13 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   between. Unreachable from the UI (during a rotation the state is `CONNECTING`, so `canConnect` is
   false and the tile returns `Stop`); it needs a duplicated/queued intent. The outcome is still correct
   — epoch discipline no-ops the rotation's `.onSuccess`.
+- **The `UNPROTECTED` recovery restart flickers through `DISCONNECTED`.** `startVpn` reaches it via
+  `stopVpn(stopService = false)`, which publishes `DISCONNECTED` before the fall-through path
+  announces `CONNECTING` — so the UI and the QS tile briefly render Disconnected / `STATE_INACTIVE`
+  for a session that is being restarted, not stopped. Cosmetic, and the FGS promotion itself stays
+  continuous (`stopService = false` skips `stopForeground`). Suppressing it would mean either a
+  "restarting" flag threaded through `stopVpn` or reordering its state write, both of which touch the
+  one function that must never grow anything that awaits.
 - **`shouldEstablishBlackholeTunnel` is redundant at its only call site** (its state arm is dead behind
   the stand-down above it), and 3 of its 4 tests cover unreachable branches — coverage that looks
   stronger than it is.

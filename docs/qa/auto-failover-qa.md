@@ -341,6 +341,26 @@ kill-listed app right as the server dies). **PASS:** the kill is deferred and re
 rotation commits — the tunnel ends **Paused** with the exposed alert, not Connected with the
 kill-listed app in the foreground.
 
+**And the third exit — a rotation that GIVES UP.** Same interleave, but kill **every** server first so
+the rotation cannot commit (as in Test 2). The deferred kill must be **dropped, and announced**:
+
+**PASS:**
+- Log: `Kill-switch: dropping the kill deferred for <app>`.
+- A **"VPN is still on"** notification naming that app (id 1106, on the same high-importance channel
+  as the exposure alert — it may heads-up).
+- The session lands in the give-up state (**No server connection**), **not** `Paused`, and **no**
+  ⚠️ "VPN is OFF — you're exposed" alert appears.
+- **Then leave it alone for a full `rotationWindowMs`** (set it short for the test, or wait out the
+  10 min default) and let the re-arm rotation succeed by bringing a server back. **Nothing** must
+  replay: no `Paused`, no exposure alert, no teardown of the just-restored tunnel. This is the merge
+  blocker the drop exists to prevent.
+
+**FAIL:** an exposure alert or a `Paused` state at any point in this variant — especially the delayed
+one, which is the whole defect.
+
+**Note:** on the `UNPROTECTED` give-up (no tunnel at all) the 1106 notice is deliberately **absent** —
+there the app really is not behind a VPN, and that outcome reports itself.
+
 ---
 
 ## Test 11 — Live settings edits mid-session
@@ -460,19 +480,52 @@ the screen or overlap the progress row on a small display.
 
 **Why:** ruled explicitly into this matrix instead of being checked over the SSH-tunnelled adb link
 (which likely would not survive an active tun). This closes "UI names B while traffic flows through A"
-for **every** connect path.
+on the refused-start path.
+
+**You cannot reach this by tapping Connect while connected.** Every such control is gated by the same
+`canConnect` rule (`VpnViewModel.canConnect`), which is false in `CONNECTED`: the per-server row is
+disabled, the long-press dialog's **Connect** and **Connect to fastest** rows are disabled by the
+*same* value (`ProfileActionsDialog`), and the QS tile returns **Stop** while `CONNECTED`. A tester
+who tries that route finds every control dead and records a meaningless PASS.
+
+The reachable window is the one T10b actually guards: a start request for **B** is *authorised while
+the VPN is off*, then sits behind a system dialog while **A** comes up underneath it. `MainActivity`'s
+`onConnect` records `pendingProfileId = B` and writes **nothing** to `ActiveProfileRepository` until
+the dialog is answered — so A can take the session in between, and the grant then dispatches a start
+for B that `startVpn` refuses.
+
+**Setup:**
+- Two servers **A** and **B** with different exit IPs.
+- **A** is the *active* profile (connect to A once, then disconnect — always-on and the tile both
+  bring up whatever `ActiveProfileRepository` names).
+- **Always-on VPN enabled** for this app (Settings → Network → VPN → gear → Always-on). This also
+  means VPN consent is already granted, so `VpnService.prepare()` returns null later.
+- **Notification permission DENIED** for the app (Settings → Apps → *this app* → Notifications → off).
+  This is what makes the connect flow stop on a system dialog.
 
 **Steps:**
-1. Connect to server **A**. Confirm **Connected** and that A is highlighted.
-2. Without disconnecting, **tap Connect on server B** (the per-row action, or the long-press menu's
-   Connect — whichever is reachable; the row Connect may be disabled by `canConnect`, in which case
-   use the QS tile or the profile-actions dialog).
-3. Read the log: it should say `VPN already running`.
+1. Let always-on bring the VPN up on **A**. Confirm **Connected** and that A is highlighted.
+2. Tap **Disconnect**. The per-server Connect rows become enabled again.
+3. Immediately **tap Connect on server B**. The system **"Allow notifications?"** dialog appears.
+   **Do not answer it yet.**
+4. Wait ~10–30 s with the dialog open for the system's always-on watchdog to restart the VPN — it
+   comes up on the *active* profile, **A**, because step 3 wrote nothing. (Pull the shade down over
+   the dialog if you need to see the ongoing notification say **Connected**.)
+   *If always-on does not restart it on your device*, use the alternative in the note below.
+5. Now tap **Allow**. This runs `requestVpnPermissionAndConnect()` → `viewModel.connect(this, B)`,
+   which writes active = **B** and dispatches `ACTION_START` for B into a session already running A.
+6. Read the log: it should say `VPN already running`.
 
-**PASS:** **both** the in-app highlight **and** the QS tile label still say **A**. Traffic still flows
-through A (verify with an IP check if A and B have different exit IPs).
+**PASS:** **both** the in-app highlight **and** the QS tile label still say **A**, and an IP check
+still shows A's exit. The rollback fired.
 **FAIL:** the highlight or the tile switches to B while the tunnel is still A's — the misreported
 active server this rollback exists to prevent.
+
+**Alternative if always-on will not restart on demand (step 4):** with the app disconnected, tap
+**Connect on A**, answer its dialog, and *while A is still `CONNECTING`* tap **Connect on B**. The row
+disables itself as soon as `CONNECTING` is published, so this is a genuine race and may need several
+attempts — the always-on route above is the deterministic one. Do not substitute "tap Connect on B
+while connected": that control is disabled and proves nothing.
 
 **Known residual (expected, not a failure):** if the refusal lands while a rotation is in flight
 **and** that rotation then fails, the repository can be left naming the failed rotation target. Note it

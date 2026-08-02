@@ -886,8 +886,13 @@ class XrayVpnService : VpnService() {
                             pendingKillLabel.also { pendingKillLabel = null }
                         }
                         // The app's notion of "active profile" MUST follow, or the UI, the QS tile,
-                        // and the next manual reconnect all still point at the dead server. This is
-                        // also what makes START_REDELIVER_INTENT crash recovery correct.
+                        // and the next manual reconnect all still point at the dead server. It is
+                        // also what a system-initiated start reads: resolveActiveAndStart (always-on
+                        // / boot) brings up whatever ActiveProfileRepository names, so without this
+                        // an always-on restart would return to the server failover just rotated off.
+                        // NOT START_REDELIVER_INTENT, though — a redelivered intent carries the
+                        // original EXTRA_PROFILE_ID and StartCommandDecision.decide routes it by
+                        // that, never through the active profile.
                         ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, next.id)
                         VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)
                         applyFailoverPreferences(failoverSettings, session.epoch) // restart monitor
