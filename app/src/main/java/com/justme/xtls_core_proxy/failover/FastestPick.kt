@@ -22,8 +22,12 @@ internal fun pickFastest(states: Map<Long, PingState>, candidates: List<Profile>
  * `PingCoordinator.runGroup` rethrows a caller-cancellation `CancellationException` from inside its
  * per-id `try/finally` BEFORE calling `onUpdate` for that id, so cancelling a connect-fastest run
  * mid-flight leaves the still-in-flight ids with no terminal `PingState` of their own — without this
- * cleanup the row would spin on `Testing` forever. Scoped to [ids] so it never clobbers an unrelated,
- * concurrently-running group ping test's `Testing` rows.
+ * cleanup the row would spin on `Testing` forever.
+ *
+ * Scoped to [ids], so it never touches a row outside this run's resolved pool. Note the limit of
+ * that guarantee: [ids] is the whole resolved pool, including ids `runGroup` deduped and never
+ * admitted, so an overlapping concurrent group ping can briefly have one of its own `Testing` rows
+ * reset to `Idle` here. Self-healing — that run writes its own terminal state when it finishes.
  */
 internal fun clearStaleTesting(states: Map<Long, PingState>, ids: Set<Long>): Map<Long, PingState> =
     states.mapValues { (id, state) ->

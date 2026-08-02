@@ -160,9 +160,11 @@ internal object VpnNotifications {
      * off for [triggerLabel], and that app is still going through the VPN. Like every poster here,
      * `notify()` is a silent no-op when POST_NOTIFICATIONS is denied.
      *
-     * No cancel counterpart, for [postFailover]'s reason rather than [postExposed]'s: this reports a
-     * COMPLETED event ("we did not act on it") that stays true afterwards, not an ongoing state, so
-     * `setAutoCancel(true)` is the whole lifecycle. A later successful rotation must not retract it.
+     * During the session this behaves like [postFailover] rather than [postExposed]: it reports a
+     * COMPLETED event ("we did not act on it") that stays true while the session lasts, so nothing
+     * retracts it mid-session — in particular a later successful rotation must not. What it does NOT
+     * outlive is the session itself, because the body is present-tense about an app still being
+     * tunnelled; [cancelKillSwitchNotApplied] clears it on stop.
      */
     fun postKillSwitchNotApplied(context: Context, triggerLabel: String) {
         createExposedChannel(context)
@@ -179,6 +181,15 @@ internal object VpnNotifications {
             .build()
         context.getSystemService(NotificationManager::class.java)
             .notify(KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Clears the "kill-switch did not act" notice. Its body speaks in the present tense about an
+     * app still being tunnelled, so it must not outlive the session it describes.
+     */
+    fun cancelKillSwitchNotApplied(context: Context) {
+        context.getSystemService(NotificationManager::class.java)
+            .cancel(KILL_SWITCH_NOT_APPLIED_NOTIFICATION_ID)
     }
 
     /**

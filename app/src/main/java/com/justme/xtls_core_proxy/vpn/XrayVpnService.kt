@@ -1556,10 +1556,13 @@ class XrayVpnService : VpnService() {
             sessionTuning = TuningSettings.NONE
             LogRepository.setConnectionState(VpnConnectionState.DISCONNECTED)
             LogRepository.append("VPN stopped")
-            // The exposed alert and the failover give-up alert are separate notification ids;
-            // stopForeground won't remove either.
+            // These alerts each live under their own notification id; stopForeground removes none
+            // of them.
             VpnNotifications.cancelExposed(this)
             VpnNotifications.cancelFailoverBlackholed(this)
+            // 1106 asserts in the present tense that a listed app is still going through the VPN.
+            // After a stop that is simply false, and it has no auto-cancel path of its own.
+            VpnNotifications.cancelKillSwitchNotApplied(this)
             if (stopService) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()

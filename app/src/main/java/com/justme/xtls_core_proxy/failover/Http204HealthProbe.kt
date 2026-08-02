@@ -27,8 +27,12 @@ class Http204HealthProbe(
 ) : HealthProbe {
 
     override suspend fun isHealthy(): Boolean = withContext(Dispatchers.IO) {
-        // withTimeoutOrNull is belt-and-braces beyond the socket timeouts: connect/read timeouts do
-        // not bound a hung DNS resolution, which is a real outcome when the tunnel is dying.
+        // withTimeoutOrNull does NOT bound a hung DNS resolution: runProbe() is a plain blocking
+        // call with no suspension point, so cancellation has nothing to act on until it returns.
+        // The socket connect/read timeouts are the real bound. This wrapper only caps the wait
+        // once the blocking call has already returned control. Accepted for v1 — the poll loop is
+        // sequential so ticks cannot overlap, which makes this slower detection, never a leak.
+        // PingCoordinator.probeWithBackstop is the in-repo pattern if real bounding is ever needed.
         withTimeoutOrNull(timeoutMs) { runProbe() } ?: false
     }
 
