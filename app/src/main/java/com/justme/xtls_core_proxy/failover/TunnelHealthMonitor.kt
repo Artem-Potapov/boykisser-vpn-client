@@ -40,7 +40,15 @@ class TunnelHealthMonitor(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    private var job: Job? = null
+
+    /**
+     * @Volatile like every other mutable field here: the poll loop nulls this from its own
+     * coroutine when it goes terminal, while `stop`/`pausePolling`/`resumePolling` write it from
+     * the service's lifecycle lock — two different happens-before domains. It is benign today only
+     * because the terminal property actually rides on the already-@Volatile [isStarted]; that is a
+     * property of the current code, not a guarantee, so do not rely on it.
+     */
+    @Volatile private var job: Job? = null
 
     @Volatile private var listener: (() -> Unit)? = null
     @Volatile private var healthyListener: (() -> Unit)? = null

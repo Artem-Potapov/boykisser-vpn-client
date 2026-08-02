@@ -582,7 +582,7 @@
     <string name="failover_blackhole_title">Нет связи с сервером</string>
     <string name="failover_blackhole_body">Ни один из ваших серверов не ответил, поэтому соединение намеренно приостановлено. Так ваше настоящее местоположение остаётся скрытым, а не раскрывается незаметно. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
     <string name="failover_no_response_title">Сервер не отвечает</string>
-    <string name="failover_no_response_body">Ваш сервер перестал отвечать, а других для переключения нет. Защита работает, но страницы могут не открываться. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
+    <string name="failover_no_response_body">Ваш сервер перестал отвечать, и переключить вас на работающий не удалось. Защита работает, но страницы могут не открываться. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
     <string name="failover_unprotected_title">Соединение не защищено</string>
     <string name="failover_unprotected_body">Ни один сервер не ответил, и приостановить соединение тоже не удалось — сейчас оно не защищено. Нажмите, чтобы выключить и снова включить VPN или выбрать другой сервер.</string>
 
@@ -600,7 +600,7 @@
     <string name="settings_failover_subtitle">Автоматически менять сервер, когда текущий перестаёт отвечать</string>
     <string name="failover_cd_back">Назад</string>
     <string name="failover_enabled">Включить автопереключение</string>
-    <string name="failover_enabled_hint">Проверяет туннель во время подключения и переключается на другой сервер той же подписки, если трафик перестал проходить.</string>
+    <string name="failover_enabled_hint">Проверяет туннель во время подключения и переключается на другой ваш сервер, если трафик перестал проходить, — из той же подписки или из добавленных вами вручную.</string>
     <string name="failover_interval">Интервал проверки (5000–300000 мс)</string>
     <string name="failover_interval_error">Введите 5000–300000</string>
     <string name="failover_timeout">Таймаут проверки (мс, меньше интервала)</string>
