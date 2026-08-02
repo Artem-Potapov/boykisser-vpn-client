@@ -492,6 +492,54 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         ActiveProfileRepository.setActiveProfileId(context, null)
     }
 
+    private var reconnectJob: Job? = null
+
+    /**
+     * Stops the live session, waits for it to settle, then starts [profileId] — the mechanism behind
+     * [ConnectAction.RECONNECT], i.e. the one affordance a give-up state offers.
+     *
+     * A plain [connect] cannot do this: the service is still running, so `XrayVpnService.startVpn`
+     * takes its "VPN already running" early return (`shouldRestartForRecovery` is deliberately
+     * narrow — see `docs/features/auto-failover.md`), which is why the button was inert. And the
+     * in-service restart path is deliberately NOT widened to reach here: `CONTAINED_BY_LIVE_TUNNEL`
+     * still has a RUNNING Xray core, and that path calls `stopVpn` on the main thread, where
+     * `stopXray()` would become a real `instance.Close()` — the documented RISK-1 hazard, cleared
+     * only because `UNPROTECTED` implies an already-stopped core.
+     *
+     * `ACTION_STOP` already marshals onto the service's `tunnelOpScope`, so stop → settle → start
+     * keeps every blocking call off the main thread and needs no change to `stopVpn`. The
+     * sequencing itself lives in [ReconnectFlow] so it is unit-testable without a service (see
+     * `ReconnectFlowTest`).
+     *
+     * **Which give-up outcomes arrive here.** Both CONTAINED ones, and they share this single path:
+     * `CONTAINED_BY_LIVE_TUNNEL` and `CONTAINED_BY_BLACKHOLE` both surface as
+     * `VpnConnectionState.BLACKHOLED`, and the blackhole case deliberately gets NO separate
+     * "faster" path on the grounds that its core is already stopped — two restart paths would be
+     * one rule in two homes. `UNPROTECTED` does NOT arrive here: it surfaces as `ERROR`, which
+     * [connectAction] maps to a plain CONNECT (see `ConnectActionTest` — "reconnect" would
+     * overstate what is left when the core could not establish at all), and its recovery stays
+     * `startVpn`'s existing `shouldRestartForRecovery` restart, which is safe there precisely
+     * because that outcome implies an already-stopped core.
+     *
+     * No permission prompt precedes it, unlike [connect]'s call sites: a session is already running,
+     * so `VpnService.prepare()` consent has already been granted for this app.
+     *
+     * The closures capture the APPLICATION context, not [context] itself, because they run up to
+     * [ReconnectFlow.STOP_TIMEOUT_MS] later — `connect`/`disconnect` both reduce to it internally
+     * anyway, so this is identical behaviour without holding an Activity across that window.
+     */
+    fun reconnect(context: Context, profileId: Long) {
+        val appContext = context.applicationContext
+        reconnectJob?.cancel()
+        reconnectJob = ReconnectFlow(
+            connectionState = LogRepository.connectionState,
+            stop = { disconnect(appContext) },
+            start = { connect(appContext, it) },
+            onTimeout = { LogRepository.emitError(R.string.vpn_reconnect_timeout_error) },
+            dispatcher = Dispatchers.Main.immediate,
+        ).run(profileId, viewModelScope)
+    }
+
     fun pingTestGroup(profiles: List<Profile>) {
         if (profiles.isEmpty()) return
         val prefs = PingPreferences.load(getApplication())

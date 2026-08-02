@@ -21,6 +21,7 @@
     <string name="vpn_failover_disabled_while_blackholed">Автопереключение выключено, поэтому мы больше не ищем рабочий сервер. Соединение всё ещё приостановлено — нажмите «Переподключить», чтобы возобновить его.</string>
     <string name="vpn_failover_disabled_while_degraded">Автопереключение выключено, поэтому мы больше не ищем рабочий сервер. Защита работает, но страницы могут не открываться — нажмите «Переподключить», чтобы попробовать другой сервер.</string>
     <string name="vpn_failover_stopped_error">Не удалось связаться ни с одним сервером, поэтому VPN отключён. Выберите сервер и попробуйте снова.</string>
+    <string name="vpn_reconnect_timeout_error">Не удалось остановить текущее соединение, поэтому новое не запущено. Выключите и снова включите VPN.</string>
     <string name="vpn_notification_action_stop">Выключить</string>
     <string name="vpn_status_connected">Подключено</string>
     <string name="vpn_status_connecting">Подключение</string>

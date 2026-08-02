@@ -201,10 +201,25 @@ class MainActivity : LocalizedComponentActivity() {
                     onConnect = { profileId ->
                         // This lambda is the single choke point for BOTH a manual per-server tap
                         // and connect-to-fastest's winner delivery (MainScreen's
-                        // LaunchedEffect(fastestWinnerId) calls this same callback). Whichever
-                        // request parked first raised the system dialog that is still on screen;
-                        // answering it must complete THAT request, not a later contender.
-                        if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
+                        // LaunchedEffect(fastestWinnerId) calls this same callback), which is why
+                        // the RECONNECT branch below lives HERE and not in each caller: one
+                        // mechanism, one home, for every give-up outcome.
+                        //
+                        // A give-up leaves the service RUNNING (it still owns a TUN — live or
+                        // blackhole), so a plain connect() would hit startVpn's "VPN already
+                        // running" early return and do nothing. reconnect() sequences a stop and a
+                        // start instead. It needs no permission prompt: a session is already up,
+                        // so VpnService.prepare() consent was granted for this app, and the
+                        // pendingProfileId slot below exists only to survive those system dialogs.
+                        // Read live at tap time, not captured.
+                        if (connectAction(viewModel.connectionState.value) ==
+                            ConnectAction.RECONNECT
+                        ) {
+                            viewModel.reconnect(this@MainActivity, profileId)
+                        } else if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
+                            // Whichever request parked first raised the system dialog that is
+                            // still on screen; answering it must complete THAT request, not a
+                            // later contender.
                             pendingProfileId = profileId
                             if (needsNotificationPermission()) {
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
