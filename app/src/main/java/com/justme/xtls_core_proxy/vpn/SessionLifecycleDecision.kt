@@ -289,3 +289,15 @@ internal fun activeProfileIdToRestoreOnRefusedStart(
     requestedProfileId: Long,
     currentProfileId: Long,
 ): Long? = currentProfileId.takeIf { it > 0L && it != requestedProfileId }
+
+/**
+ * Whether switching auto-failover OFF must also release a give-up state it left behind.
+ *
+ * Disabling cancels [failoverRearmJob], which is the ONLY automatic recovery from a contained
+ * give-up. Leaving `giveUpOutcome` set would therefore strand the user behind a blackhole TUN as
+ * a direct result of turning the feature off — the most natural reaction to it having gone wrong.
+ */
+internal fun shouldReleaseGiveUpOnDisable(
+    enabled: Boolean,
+    giveUpOutcome: FailoverGiveUpOutcome?,
+): Boolean = !enabled && giveUpOutcome != null

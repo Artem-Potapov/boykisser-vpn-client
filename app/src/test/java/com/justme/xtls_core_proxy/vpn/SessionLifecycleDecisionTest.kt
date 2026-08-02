@@ -509,4 +509,27 @@ class SessionLifecycleDecisionTest {
             )
         }
     }
+
+    // --- Disabling auto-failover must release a give-up it left behind ---
+
+    @Test
+    fun disablingFailoverDuringAGiveUpMustReleaseIt() {
+        // Turning the feature off cancels the re-arm timer, which is the only automatic recovery
+        // from a contained give-up. Without releasing the state the user is stranded behind a
+        // blackhole TUN by the very act of switching the feature off.
+        assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE))
+        assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL))
+        assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.UNPROTECTED))
+    }
+
+    @Test
+    fun leavingFailoverEnabledNeverReleasesAGiveUp() {
+        // While enabled, clearGiveUpStateOnRecovery and the re-arm own this transition.
+        assertFalse(shouldReleaseGiveUpOnDisable(true, FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE))
+    }
+
+    @Test
+    fun disablingWithNoGiveUpShowingIsANoOp() {
+        assertFalse(shouldReleaseGiveUpOnDisable(false, null))
+    }
 }

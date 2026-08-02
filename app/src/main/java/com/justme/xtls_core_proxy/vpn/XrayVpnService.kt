@@ -1329,6 +1329,30 @@ class XrayVpnService : VpnService() {
                 // must not silently drop a legitimate pending retry. Disabling the feature must.
                 failoverRearmJob?.cancel()
                 failoverRearmJob = null
+
+                if (shouldReleaseGiveUpOnDisable(settings.enabled, giveUpOutcome)) {
+                    // The user switched the feature off, and the re-arm we just cancelled was the
+                    // only automatic way out of a contained give-up. Drop the episode state so
+                    // nothing stale survives, and stop the alert claiming a repair is pending.
+                    //
+                    // The TUN is deliberately NOT torn down and the connection state deliberately
+                    // STAYS BLACKHOLED. Both are load-bearing:
+                    //   * tearing the TUN down would drop the user onto the clear network as a
+                    //     side effect of a settings change — the exact thing this feature exists
+                    //     to prevent;
+                    //   * BLACKHOLED is the honest state (traffic really is held), and it is what
+                    //     makes connectAction() offer RECONNECT. Switching to ERROR here would
+                    //     offer a plain Connect, which startVpn refuses with "VPN already running"
+                    //     because the service is still up — a dead button, one state over.
+                    // Reconnect (VpnViewModel.reconnect) is the way back to a live tunnel.
+                    giveUpOutcome = null
+                    unprotectedRetryConsumed = false
+                    rotationAttempts = emptyList()
+                    VpnNotifications.cancelFailoverBlackholed(this)
+                    if (LogRepository.connectionState.value == VpnConnectionState.BLACKHOLED) {
+                        LogRepository.emitError(R.string.vpn_failover_disabled_while_blackholed)
+                    }
+                }
             }
 
             if (!shouldRunFailoverMonitor(
