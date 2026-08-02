@@ -12,7 +12,7 @@
     <string name="vpn_start_failed_error">VPN failed to start. See logs for details.</string>
     <string name="vpn_status_paused">Paused: %1$s is open</string>
     <string name="vpn_status_blackholed">No server connection — paused to keep you protected</string>
-    <string name="vpn_status_no_response">Server is not responding — no other server to try</string>
+    <string name="vpn_status_no_response">Server is not responding — couldn\'t switch to a working one</string>
     <string name="vpn_status_unprotected">Not protected — please reconnect</string>
     <string name="vpn_status_switching">Switching to another server…</string>
     <string name="vpn_failover_unprotected_error">We couldn\'t keep your connection protected. Please turn the VPN off and on again, or choose another server.</string>

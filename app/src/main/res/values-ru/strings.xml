@@ -14,7 +14,7 @@
     <string name="vpn_start_failed_error">Не удалось запустить VPN. Подробности в журнале.</string>
     <string name="vpn_status_paused">Приостановлено: открыто приложение %1$s</string>
     <string name="vpn_status_blackholed">Нет связи с сервером — пауза ради вашей защиты</string>
-    <string name="vpn_status_no_response">Сервер не отвечает — других серверов нет</string>
+    <string name="vpn_status_no_response">Сервер не отвечает — не удалось переключиться на рабочий</string>
     <string name="vpn_status_unprotected">Защита не работает — переподключитесь</string>
     <string name="vpn_status_switching">Переключаемся на другой сервер…</string>
     <string name="vpn_failover_unprotected_error">Не удалось сохранить защиту соединения. Выключите и снова включите VPN или выберите другой сервер.</string>
