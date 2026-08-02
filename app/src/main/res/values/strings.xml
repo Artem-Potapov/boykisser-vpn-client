@@ -599,6 +599,7 @@
     <string name="failover_connect_fastest_no_response_error">None of your servers responded, so connect-to-fastest could not pick one. Try again later.</string>
     <string name="failover_connect_fastest_busy_error">Some of these servers were already being tested elsewhere, so connect-to-fastest could not get a fresh result. Try again in a moment.</string>
     <string name="failover_connect_fastest_state_changed_error">The connection changed while connect-to-fastest was running, so it was cancelled. Try again.</string>
+    <string name="failover_connect_fastest_superseded_error">You already chose a server, so we kept that one instead of the fastest result.</string>
 
     <!-- Failover settings screen -->
     <string name="failover_title">Auto-failover</string>

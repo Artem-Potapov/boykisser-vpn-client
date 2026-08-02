@@ -301,3 +301,14 @@ internal fun shouldReleaseGiveUpOnDisable(
     enabled: Boolean,
     giveUpOutcome: FailoverGiveUpOutcome?,
 ): Boolean = !enabled && giveUpOutcome != null
+
+/**
+ * Whether an incoming start request may claim the single `pendingProfileId` slot.
+ *
+ * That slot is shared by the manual Connect lambda and by connect-fastest's winner delivery, and
+ * a permission dialog can park a manual choice in it for minutes. An automatic winner arriving
+ * meanwhile must not silently replace a server the user picked by hand — no refusal occurs on
+ * that path, so nothing downstream would ever notice the substitution.
+ */
+internal fun shouldOverwritePendingConnect(pending: Long, incoming: Long): Boolean =
+    pending == -1L || pending == incoming

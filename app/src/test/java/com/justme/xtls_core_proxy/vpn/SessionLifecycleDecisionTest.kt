@@ -532,4 +532,24 @@ class SessionLifecycleDecisionTest {
     fun disablingWithNoGiveUpShowingIsANoOp() {
         assertFalse(shouldReleaseGiveUpOnDisable(false, null))
     }
+
+    // --- A parked manual connect must outrank a later automatic winner ---
+
+    @Test
+    fun aParkedManualConnectIsNotOverwrittenByALaterAutomaticWinner() {
+        // pendingProfileId is one slot serving the manual Connect lambda and connect-fastest's
+        // winner delivery. A manual tap on 7 sitting behind a permission dialog must survive a
+        // winner arriving minutes later, or the app connects to a server the user never chose.
+        assertFalse(shouldOverwritePendingConnect(pending = 7L, incoming = 42L))
+    }
+
+    @Test
+    fun anEmptySlotAlwaysAcceptsTheIncomingConnect() {
+        assertTrue(shouldOverwritePendingConnect(pending = -1L, incoming = 42L))
+    }
+
+    @Test
+    fun reTappingTheSameProfileIsNotAConflict() {
+        assertTrue(shouldOverwritePendingConnect(pending = 7L, incoming = 7L))
+    }
 }

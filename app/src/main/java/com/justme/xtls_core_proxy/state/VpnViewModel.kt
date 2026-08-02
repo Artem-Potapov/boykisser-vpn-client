@@ -211,6 +211,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         LogRepository.emitError(R.string.failover_connect_fastest_state_changed_error)
     }
 
+    /** A connect-fastest winner arrived while a manual connect was parked behind a system dialog. */
+    fun reportFastestWinnerDropped() {
+        LogRepository.emitError(R.string.failover_connect_fastest_superseded_error)
+    }
+
     private val defaultUserAgent = "XTLSCoreProxy/${BuildConfig.VERSION_NAME}"
 
     init {

@@ -109,6 +109,7 @@ import com.justme.xtls_core_proxy.subs.SubscriptionFormatting
 import com.justme.xtls_core_proxy.subs.SubscriptionsActivity
 import com.justme.xtls_core_proxy.ui.theme.BoykisserMagenta
 import com.justme.xtls_core_proxy.ui.theme.XTLS_CORE_PROXYTheme
+import com.justme.xtls_core_proxy.vpn.shouldOverwritePendingConnect
 import java.time.LocalDate
 
 class MainActivity : LocalizedComponentActivity() {
@@ -196,11 +197,19 @@ class MainActivity : LocalizedComponentActivity() {
                 MainScreen(
                     viewModel = viewModel,
                     onConnect = { profileId ->
-                        pendingProfileId = profileId
-                        if (needsNotificationPermission()) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        // This lambda is the single choke point for BOTH a manual per-server tap
+                        // and connect-to-fastest's winner delivery (MainScreen's
+                        // LaunchedEffect(fastestWinnerId) calls this same callback). A manual choice
+                        // already parked behind a system dialog outranks an automatic winner.
+                        if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
+                            pendingProfileId = profileId
+                            if (needsNotificationPermission()) {
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                requestVpnPermissionAndConnect()
+                            }
                         } else {
-                            requestVpnPermissionAndConnect()
+                            viewModel.reportFastestWinnerDropped()
                         }
                     },
                     onDisconnect = { viewModel.disconnect(this) },
