@@ -1330,7 +1330,8 @@ class XrayVpnService : VpnService() {
                 failoverRearmJob?.cancel()
                 failoverRearmJob = null
 
-                if (shouldReleaseGiveUpOnDisable(settings.enabled, giveUpOutcome)) {
+                val releasedOutcome = giveUpOutcome
+                if (shouldReleaseGiveUpOnDisable(settings.enabled, releasedOutcome)) {
                     // The user switched the feature off, and the re-arm we just cancelled was the
                     // only automatic way out of a contained give-up. Drop the episode state so
                     // nothing stale survives, and stop the alert claiming a repair is pending.
@@ -1349,8 +1350,18 @@ class XrayVpnService : VpnService() {
                     unprotectedRetryConsumed = false
                     rotationAttempts = emptyList()
                     VpnNotifications.cancelFailoverBlackholed(this)
-                    if (LogRepository.connectionState.value == VpnConnectionState.BLACKHOLED) {
-                        LogRepository.emitError(R.string.vpn_failover_disabled_while_blackholed)
+                    // Two outcomes share the BLACKHOLED state but not the truth: the blackhole
+                    // really is holding traffic, while a live tunnel is still proxying and merely
+                    // unhealthy. Selecting on the state would tell the second group their
+                    // connection is paused when it is not. UNPROTECTED already reported itself
+                    // through vpn_failover_unprotected_error and sits in ERROR, not BLACKHOLED, so
+                    // it stays silent here — matching the previous state-gated behaviour exactly.
+                    when (releasedOutcome) {
+                        FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE ->
+                            LogRepository.emitError(R.string.vpn_failover_disabled_while_blackholed)
+                        FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL ->
+                            LogRepository.emitError(R.string.vpn_failover_disabled_while_degraded)
+                        FailoverGiveUpOutcome.UNPROTECTED, null -> Unit
                     }
                 }
             }

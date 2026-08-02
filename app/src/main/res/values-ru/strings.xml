@@ -19,6 +19,7 @@
     <string name="vpn_status_switching">Переключаемся на другой сервер…</string>
     <string name="vpn_failover_unprotected_error">Не удалось сохранить защиту соединения. Выключите и снова включите VPN или выберите другой сервер.</string>
     <string name="vpn_failover_disabled_while_blackholed">Автопереключение выключено, поэтому мы больше не ищем рабочий сервер. Соединение всё ещё приостановлено — нажмите «Переподключить», чтобы возобновить его.</string>
+    <string name="vpn_failover_disabled_while_degraded">Автопереключение выключено, поэтому мы больше не ищем рабочий сервер. Защита работает, но страницы могут не открываться — нажмите «Переподключить», чтобы попробовать другой сервер.</string>
     <string name="vpn_failover_stopped_error">Не удалось связаться ни с одним сервером, поэтому VPN отключён. Выберите сервер и попробуйте снова.</string>
     <string name="vpn_notification_action_stop">Выключить</string>
     <string name="vpn_status_connected">Подключено</string>

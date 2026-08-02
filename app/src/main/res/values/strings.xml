@@ -17,6 +17,7 @@
     <string name="vpn_status_switching">Switching to another server…</string>
     <string name="vpn_failover_unprotected_error">We couldn\'t keep your connection protected. Please turn the VPN off and on again, or choose another server.</string>
     <string name="vpn_failover_disabled_while_blackholed">Auto-failover is off, so we stopped looking for a working server. Your connection is still paused — tap Reconnect to start it again.</string>
+    <string name="vpn_failover_disabled_while_degraded">Auto-failover is off, so we stopped looking for a working server. You are still protected, but pages may not load — tap Reconnect to try another server.</string>
     <string name="vpn_failover_stopped_error">We couldn\'t reach any server, so the VPN has been switched off. Choose a server and try again.</string>
     <string name="vpn_notification_action_stop">Turn off</string>
     <string name="vpn_status_connected">Connected</string>
