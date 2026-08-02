@@ -429,9 +429,10 @@ class SessionLifecycleDecisionTest {
 
     @Test
     fun startWhileUnprotected_restartsInsteadOfNoOpping() {
-        // canConnect(ERROR) enables the per-profile Connect buttons, but ACTION_START hits
-        // startVpn's "VPN already running" early return. The copy tells the user to turn the VPN
-        // off and on again or choose another server, so the control has to do exactly that.
+        // connectAction(ERROR) == CONNECT enables the per-profile Connect buttons, but
+        // ACTION_START hits startVpn's "VPN already running" early return. The copy tells the user
+        // to turn the VPN off and on again or choose another server, so the control has to do
+        // exactly that.
         assertTrue(
             shouldRestartForRecovery(
                 running = true,

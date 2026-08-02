@@ -254,6 +254,7 @@
     <string name="main_cd_expand">Развернуть</string>
     <string name="main_cd_refresh_subscription">Обновить подписку</string>
     <string name="main_button_connect">Подключить</string>
+    <string name="main_button_reconnect">Переподключить</string>
     <string name="main_button_connecting">Подключение…</string>
     <string name="main_action_edit">Изменить</string>
     <string name="main_action_delete">Удалить</string>

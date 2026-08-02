@@ -96,10 +96,11 @@ import com.justme.xtls_core_proxy.settings.SettingsHubActivity
 import com.justme.xtls_core_proxy.sideload.SideloadWarningDialog
 import com.justme.xtls_core_proxy.sideload.SideloadWarningRepository
 import com.justme.xtls_core_proxy.state.AutoPingLatch
+import com.justme.xtls_core_proxy.state.ConnectAction
 import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
-import com.justme.xtls_core_proxy.state.canConnect
+import com.justme.xtls_core_proxy.state.connectAction
 import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
 import com.justme.xtls_core_proxy.subs.PromoGate
@@ -518,7 +519,7 @@ private fun MainScreen(
     val fastestWinnerId by viewModel.fastestWinnerId.collectAsState()
     LaunchedEffect(fastestWinnerId) {
         val winnerId = fastestWinnerId ?: return@LaunchedEffect
-        if (canConnect(state)) {
+        if (connectAction(state) != ConnectAction.UNAVAILABLE) {
             onConnect(winnerId)
             viewModel.consumeFastestWinner()
         } else {
@@ -581,11 +582,12 @@ private fun MainScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 // BLACKHOLED must offer Disconnect for the same reason the QS tile must stay
-                // ACTIVE: the tunnel is up and holding traffic, and canConnect() disables the
-                // per-profile Connect buttons, so without this the user has no in-app way out.
-                // ERROR is here too: a failover give-up that could not contain the traffic leaves
-                // the service RUNNING in ERROR while telling the user to turn the VPN off, and this
-                // was the only surface that could do it.
+                // ACTIVE: the tunnel is up and holding traffic, so "turn the VPN off" — the other
+                // half of what the give-up alert tells the user — needs a surface. (Its first half,
+                // "choose another server", is the per-profile RECONNECT affordance; see
+                // state.connectAction.) ERROR is here too: a failover give-up that could not
+                // contain the traffic leaves the service RUNNING in ERROR while telling the user to
+                // turn the VPN off, and this was the only surface that could do it.
                 //
                 // It therefore also renders for a genuinely DYING session, where the service has
                 // already stopSelf()'d. That tap does NOT hit a no-op: disconnect() dispatches
@@ -702,7 +704,7 @@ private fun MainScreen(
                                     isActive = isActive(profile, activeId, state),
                                     isConnecting = isActive(profile, activeId, state) &&
                                         state == VpnConnectionState.CONNECTING,
-                                    canConnect = canConnect(state),
+                                    action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
                                 )
@@ -733,7 +735,7 @@ private fun MainScreen(
                                     isActive = isActive(profile, activeId, state),
                                     isConnecting = isActive(profile, activeId, state) &&
                                         state == VpnConnectionState.CONNECTING,
-                                    canConnect = canConnect(state),
+                                    action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
                                 )
@@ -755,7 +757,7 @@ private fun MainScreen(
         ProfileActionsDialog(
             profile = profile,
             isConnectedProfile = isActive(profile, activeId, state),
-            canConnect = canConnect(state),
+            action = connectAction(state),
             shareLink = shareLink,
             onConnect = {
                 menuProfile = null
@@ -952,7 +954,7 @@ private fun ProfileRow(
     pingState: PingState,
     isActive: Boolean,
     isConnecting: Boolean,
-    canConnect: Boolean,
+    action: ConnectAction,
     onConnect: () -> Unit,
     onLongPress: () -> Unit
 ) {
@@ -1003,13 +1005,16 @@ private fun ProfileRow(
 
             Button(
                 onClick = onConnect,
-                enabled = canConnect,
+                enabled = action != ConnectAction.UNAVAILABLE,
                 modifier = Modifier.padding(start = 8.dp)
             ) {
                 Text(
                     stringResource(
-                        if (isConnecting) R.string.main_button_connecting
-                        else R.string.main_button_connect
+                        when {
+                            isConnecting -> R.string.main_button_connecting
+                            action == ConnectAction.RECONNECT -> R.string.main_button_reconnect
+                            else -> R.string.main_button_connect
+                        }
                     )
                 )
             }
@@ -1058,9 +1063,10 @@ private fun vpnConnectionStateLabel(state: VpnConnectionState): String {
 }
 
 // BLACKHOLED is grouped with the live states below, not with ERROR: the service is still running
-// and still owns a TUN, so the active profile must keep showing as active and the per-profile
-// Connect button must stay disabled — dispatching ACTION_START would only no-op with "VPN already
-// running". Same treatment PAUSED already gets, for the same reason.
+// and still owns a TUN, so the active profile must keep showing as active — and, being "active",
+// its long-press menu offers Disconnect rather than a connect row. Same treatment PAUSED already
+// gets, for the same reason. This is deliberately NOT the connect-affordance rule: that one is
+// state.connectAction, which offers RECONNECT from a give-up rather than disabling everything.
 private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
     return profile.id == activeId &&
         (state == VpnConnectionState.CONNECTED ||

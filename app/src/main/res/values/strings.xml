@@ -253,6 +253,7 @@
     <string name="main_cd_expand">Expand</string>
     <string name="main_cd_refresh_subscription">Refresh subscription</string>
     <string name="main_button_connect">Connect</string>
+    <string name="main_button_reconnect">Reconnect</string>
     <string name="main_button_connecting">Connecting…</string>
     <string name="main_action_edit">Edit</string>
     <string name="main_action_delete">Delete</string>

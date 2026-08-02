@@ -32,13 +32,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.db.Profile
+import com.justme.xtls_core_proxy.state.ConnectAction
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileActionsDialog(
+internal fun ProfileActionsDialog(
     profile: Profile,
     isConnectedProfile: Boolean,
-    canConnect: Boolean,
+    action: ConnectAction,
     shareLink: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
@@ -78,8 +79,11 @@ fun ProfileActionsDialog(
                 } else {
                     ProfileActionRow(
                         icon = rememberVectorPainter(Icons.Filled.PlayArrow),
-                        label = stringResource(R.string.main_button_connect),
-                        enabled = canConnect,
+                        label = stringResource(
+                            if (action == ConnectAction.RECONNECT) R.string.main_button_reconnect
+                            else R.string.main_button_connect
+                        ),
+                        enabled = action != ConnectAction.UNAVAILABLE,
                         onClick = onConnect
                     )
                 }
@@ -87,15 +91,17 @@ fun ProfileActionsDialog(
                     icon = painterResource(R.drawable.ic_bolt),
                     label = stringResource(R.string.failover_connect_fastest),
                     // Mirrors the Connect row above: disabled (not hidden) for the same reason —
-                    // CONNECTED/CONNECTING/PAUSED/BLACKHOLED would make an immediate connect() call a
-                    // silent "VPN already running" no-op (see XrayVpnService.startVpn). This is a
+                    // CONNECTED/CONNECTING/PAUSED would make an immediate connect() call a silent
+                    // "VPN already running" no-op (see XrayVpnService.startVpn). BLACKHOLED is
+                    // deliberately NOT in that set: a give-up left the tunnel holding traffic and
+                    // "choose another server" is exactly the remedy its alert offers. This is a
                     // TAP-TIME gate only — the probe that follows can run for minutes, during which
                     // the connection state can change again. The real guarantee against a stale
                     // winner is FastestConnectRunner's delivery-time re-check of the identical
-                    // canConnect rule, immediately before it ever surfaces a winner; this gate is
+                    // ConnectAction rule, immediately before it ever surfaces a winner; this gate is
                     // just the cheap, obvious no-op prevention for the common case of tapping the
                     // row while a session is already live.
-                    enabled = canConnect,
+                    enabled = action != ConnectAction.UNAVAILABLE,
                     onClick = onConnectFastest
                 )
                 ProfileActionRow(

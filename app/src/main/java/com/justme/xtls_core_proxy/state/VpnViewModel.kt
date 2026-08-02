@@ -65,20 +65,39 @@ fun autoPingServers(profiles: List<Profile>, subscriptions: List<Subscription>):
     profiles.sortedWith(compareBy({ it.subscriptionId != null }, { it.subscriptionId }, { it.id }))
 
 /**
- * Whether a Connect action may be dispatched right now. False for `CONNECTED`/`CONNECTING`/
- * `PAUSED`/`BLACKHOLED` — every state where `XrayVpnService.startVpn` would hit its "VPN already
- * running" early return and silently no-op (see that function's `shouldRestartForRecovery` guard).
+ * What the connect affordances should offer for a given connection state.
  *
- * Moved here (was a private `MainActivity` function) so [FastestConnectRunner] can re-check it at
- * delivery time, not only at the menu tap that started the probe — see that class's KDoc
- * ("Delivery-time re-gate") for why a point-in-time-only check let a winner misreport which server
- * traffic was actually on.
+ * Replaces the former boolean `canConnect`. Three values rather than two because a give-up state
+ * is neither "connectable" nor "nothing to do": the tunnel is still there, the engine simply
+ * stopped trying, and the honest affordance is **Reconnect**.
+ *
+ * This is the single home for the rule. It previously existed as five hand-written enumerations
+ * (`canConnect`, `isActive`, `decideTileClick`, `XrayVpnTileService.handleClick`, and the
+ * Disconnect gate), and one of those copies drifted and shipped a dead QS-tile control.
+ *
+ * It lives here (not in `MainActivity`) so [FastestConnectRunner] can re-check it at delivery time,
+ * not only at the menu tap that started the probe — see that class's KDoc ("Delivery-time re-gate")
+ * for why a point-in-time-only check let a winner misreport which server traffic was actually on.
  */
-internal fun canConnect(state: VpnConnectionState): Boolean =
-    state != VpnConnectionState.CONNECTED &&
-        state != VpnConnectionState.CONNECTING &&
-        state != VpnConnectionState.PAUSED &&
-        state != VpnConnectionState.BLACKHOLED
+internal enum class ConnectAction {
+    /** No session: offer a normal Connect. */
+    CONNECT,
+
+    /** A give-up left a tunnel in place; offer Reconnect rather than a disabled Connect. */
+    RECONNECT,
+
+    /** A live session owns the tunnel; offer nothing. */
+    UNAVAILABLE,
+}
+
+internal fun connectAction(state: VpnConnectionState): ConnectAction = when (state) {
+    VpnConnectionState.DISCONNECTED,
+    VpnConnectionState.ERROR -> ConnectAction.CONNECT
+    VpnConnectionState.BLACKHOLED -> ConnectAction.RECONNECT
+    VpnConnectionState.CONNECTED,
+    VpnConnectionState.CONNECTING,
+    VpnConnectionState.PAUSED -> ConnectAction.UNAVAILABLE
+}
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -157,7 +176,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         resolvePool = { profile -> FailoverPoolResolver.resolve(dao, profile) },
         loadPreferences = { PingPreferences.load(getApplication()) },
         probe = { profile, prefs -> probeProfile(profile, prefs.targetUrl, prefs.timeoutMs) },
-        canConnect = { canConnect(connectionState.value) },
+        canConnect = { connectAction(connectionState.value) != ConnectAction.UNAVAILABLE },
         onOutcome = { outcome ->
             LogRepository.emitError(
                 when (outcome) {
@@ -187,7 +206,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
      * [FastestConnectRunner]'s own `canConnect` re-check only guards the moment this is PRODUCED —
      * it bounds the probe's window, but not the gap after. This value can then sit unconsumed
      * indefinitely (the Compose frame clock pauses below `STARTED` while the app is backgrounded),
-     * so `MainScreen` re-checks `canConnect` a SECOND time at CONSUMPTION, right before calling
+     * so `MainScreen` re-checks [connectAction] a SECOND time at CONSUMPTION, right before calling
      * `onConnect`, and calls [discardFastestWinner] instead when that fails (Task 10 review round 2,
      * Important). Two checks around this unbounded gap are correct, not redundant.
      */
