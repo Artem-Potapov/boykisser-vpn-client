@@ -211,9 +211,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         LogRepository.emitError(R.string.failover_connect_fastest_state_changed_error)
     }
 
-    /** A connect-fastest winner arrived while a manual connect was parked behind a system dialog. */
-    fun reportFastestWinnerDropped() {
-        LogRepository.emitError(R.string.failover_connect_fastest_superseded_error)
+    /**
+     * A later connect request contested the single `pendingProfileId` slot while an earlier one was
+     * still parked behind a system dialog, and lost. Covers any of the three sources that can write
+     * that slot — connect-to-fastest's winner delivery, the QS-tile hand-off, or a second manual
+     * tap — since whichever request parked first raised the dialog that is still on screen, and
+     * answering it must complete that request.
+     */
+    fun reportConnectRequestSuperseded() {
+        LogRepository.emitError(R.string.connect_request_superseded)
     }
 
     private val defaultUserAgent = "XTLSCoreProxy/${BuildConfig.VERSION_NAME}"

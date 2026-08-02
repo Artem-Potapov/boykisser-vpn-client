@@ -199,8 +199,9 @@ class MainActivity : LocalizedComponentActivity() {
                     onConnect = { profileId ->
                         // This lambda is the single choke point for BOTH a manual per-server tap
                         // and connect-to-fastest's winner delivery (MainScreen's
-                        // LaunchedEffect(fastestWinnerId) calls this same callback). A manual choice
-                        // already parked behind a system dialog outranks an automatic winner.
+                        // LaunchedEffect(fastestWinnerId) calls this same callback). Whichever
+                        // request parked first raised the system dialog that is still on screen;
+                        // answering it must complete THAT request, not a later contender.
                         if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
                             pendingProfileId = profileId
                             if (needsNotificationPermission()) {
@@ -209,7 +210,7 @@ class MainActivity : LocalizedComponentActivity() {
                                 requestVpnPermissionAndConnect()
                             }
                         } else {
-                            viewModel.reportFastestWinnerDropped()
+                            viewModel.reportConnectRequestSuperseded()
                         }
                     },
                     onDisconnect = { viewModel.disconnect(this) },
@@ -355,11 +356,18 @@ class MainActivity : LocalizedComponentActivity() {
         triggerIntent.removeExtra(EXTRA_TILE_PROFILE_ID)
         if (profileId == -1L) return  // malformed external launch; ignore
 
-        pendingProfileId = profileId
-        if (needsNotificationPermission()) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
+            pendingProfileId = profileId
+            if (needsNotificationPermission()) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                requestVpnPermissionAndConnect()
+            }
         } else {
-            requestVpnPermissionAndConnect()
+            // The parked choice raised the system dialog that is still on screen; answering it must
+            // complete THAT request. The tile's extras are already stripped above, so this hand-off
+            // is consumed either way — say so rather than dropping it silently.
+            viewModel.reportConnectRequestSuperseded()
         }
     }
 
