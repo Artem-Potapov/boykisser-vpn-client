@@ -1028,10 +1028,7 @@ class XrayVpnService : VpnService() {
 
         giveUpOutcome = outcome
         // State first, then the notifications — same ordering discipline as killTunnel.
-        LogRepository.setConnectionState(
-            if (outcome == FailoverGiveUpOutcome.UNPROTECTED) VpnConnectionState.ERROR
-            else VpnConnectionState.BLACKHOLED
-        )
+        LogRepository.setConnectionState(connectionStateForGiveUp(outcome))
         when (outcome) {
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> {
                 LogRepository.append(

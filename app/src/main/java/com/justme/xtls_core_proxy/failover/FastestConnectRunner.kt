@@ -126,7 +126,13 @@ internal class FastestConnectRunner(
             try {
                 val pool = resolvePool(profile)
                 ids = pool.mapTo(HashSet()) { it.id }
-                if (pool.isEmpty()) return@launch
+                if (pool.isEmpty()) {
+                    // Reachable when the backing subscription is deleted mid-run. Every other
+                    // no-winner exit reports; this one must too, or the progress row simply
+                    // vanishes with no explanation.
+                    onOutcome(FastestConnectOutcome.NO_RESPONSE)
+                    return@launch
+                }
                 // Best-effort snapshot, read before runGroup's own cross-run de-dup would apply —
                 // see FastestConnectOutcome.BUSY's doc for why this distinction matters.
                 val alreadyInFlight = pool.any { pingStates.value[it.id] is PingState.Testing }

@@ -273,4 +273,27 @@ class FastestConnectRunnerTest {
             outcomes
         )
     }
+
+    @Test
+    fun anEmptyResolvedPoolReportsRatherThanVanishing() = runTest {
+        // Reachable when the backing subscription is deleted mid-run. The class promises in its own
+        // KDoc that every no-winner exit reports via onOutcome; this one silently dropped the run,
+        // leaving the progress row to disappear with no explanation.
+        val outcomes = mutableListOf<FastestConnectOutcome>()
+        val runner = FastestConnectRunner(
+            scope = this,
+            pingCoordinator = PingCoordinator(nativeCeiling = 5),
+            pingStates = MutableStateFlow(emptyMap()),
+            resolvePool = { emptyList() },
+            loadPreferences = { PingPreferences.DEFAULT },
+            probe = { _, _ -> PingState.Unavailable },
+            canConnect = { true },
+            onOutcome = { outcomes += it },
+        )
+
+        runner.start(profile(1L))
+        advanceUntilIdle()
+
+        assertEquals(listOf(FastestConnectOutcome.NO_RESPONSE), outcomes)
+    }
 }

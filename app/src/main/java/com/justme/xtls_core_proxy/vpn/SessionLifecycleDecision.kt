@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverSettings
+import com.justme.xtls_core_proxy.log.VpnConnectionState
 
 /**
  * Returns whether an asynchronous lifecycle callback still owns the currently running session.
@@ -221,6 +222,21 @@ internal fun classifyGiveUpOutcome(
     blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
     else -> FailoverGiveUpOutcome.UNPROTECTED
 }
+
+/**
+ * The user-facing connection state a give-up outcome produces.
+ *
+ * Extracted from the service so the branch cannot be inverted silently: this is the ONLY runtime
+ * producer of [VpnConnectionState.BLACKHOLED], and BLACKHOLED is a live, stoppable state whereas
+ * ERROR is not. Its three pure siblings ([classifyGiveUpOutcome], [shouldStopServiceOnGiveUp],
+ * [shouldRestartForRecovery]) are all tested; this rule was not.
+ */
+internal fun connectionStateForGiveUp(outcome: FailoverGiveUpOutcome): VpnConnectionState =
+    when (outcome) {
+        FailoverGiveUpOutcome.UNPROTECTED -> VpnConnectionState.ERROR
+        FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+        FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> VpnConnectionState.BLACKHOLED
+    }
 
 /**
  * "Disconnect now, stop if the re-arm fails": whether a give-up should switch the service off

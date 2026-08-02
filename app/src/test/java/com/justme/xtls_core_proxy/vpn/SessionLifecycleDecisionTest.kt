@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
+import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -344,6 +345,22 @@ class SessionLifecycleDecisionTest {
         assertEquals(
             FailoverGiveUpOutcome.UNPROTECTED,
             classifyGiveUpOutcome(hadTunnel = false, blackholeEstablished = false)
+        )
+    }
+
+    @Test
+    fun onlyTheUncontainedGiveUpMapsToError() {
+        // BLACKHOLED is a live, stoppable state; ERROR is not. Getting this backwards would tell a
+        // user with contained traffic they are in an error state, and a user on the clear network
+        // that their connection is merely paused.
+        assertEquals(VpnConnectionState.ERROR, connectionStateForGiveUp(FailoverGiveUpOutcome.UNPROTECTED))
+        assertEquals(
+            VpnConnectionState.BLACKHOLED,
+            connectionStateForGiveUp(FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE)
+        )
+        assertEquals(
+            VpnConnectionState.BLACKHOLED,
+            connectionStateForGiveUp(FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL)
         )
     }
 
