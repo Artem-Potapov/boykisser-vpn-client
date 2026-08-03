@@ -925,9 +925,21 @@ class XrayVpnService : VpnService() {
                     }
                     .onFailure { error ->
                         synchronized(lock) {
-                            episodeFailedIds = episodeFailedIds + next.id
                             // Return to CONNECTED so the next attempt can reserve the transition.
                             if (ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
+                                // INSIDE the ownership check, like every other mutation here. This
+                                // set is per-session episode state, and getById / resolve /
+                                // bringUpTunnel all ran off-lock above — so a stop+restart in that
+                                // window would otherwise let this old-epoch failure blacklist a
+                                // server in the NEW session's episode, skipping a server that is
+                                // perfectly healthy for it. Keeping it inside also keeps the retry
+                                // correct in the case that matters: this is the branch that hands
+                                // control to the recursive rotateTunnel below, and that attempt
+                                // needs next.id excluded or it would pick the same dead server
+                                // again. A rotation that no longer owns the transition dispatches
+                                // no such retry — canReserveRotation refuses it — so it has
+                                // nothing to record for.
+                                episodeFailedIds = episodeFailedIds + next.id
                                 sessionTunnelState = SessionTunnelState.CONNECTED
                                 // bringUpTunnel can fail AFTER establish() (e.g. startXray threw),
                                 // leaving a real fd with an indeterminate Xray behind it. Drop it,

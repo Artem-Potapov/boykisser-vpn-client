@@ -175,7 +175,11 @@ Key properties:
   whole tunnel down. It also keeps the field in step with `ActiveProfileRepository`, which only
   advances on success.
 - **`episodeFailedIds` is episode-scoped**, cleared on a successful rotation and on every give-up, so
-  a server that failed an hour ago is not skipped forever.
+  a server that failed an hour ago is not skipped forever. The failure arm writes it **inside** the
+  ownership re-check, like every other mutation there: `getById`/`resolve`/`bringUpTunnel` all ran
+  off-lock, so a stop+restart in that window would otherwise let an old-epoch failure blacklist a
+  server in the **new** session's episode. It is also only the owning branch that dispatches the
+  recursive retry, and that retry is the one thing that needs the id excluded.
 - **The thrash cap is a sliding window.** `FailoverDecision.admitRotation` prunes attempts older than
   `rotationWindowMs` before counting, so a burst long ago cannot permanently lock failover out.
 - **Candidate order is list order, not latency order** (`FailoverDecision.nextCandidate`). Deliberate
