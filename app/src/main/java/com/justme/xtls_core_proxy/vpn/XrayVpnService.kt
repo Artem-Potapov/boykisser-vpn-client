@@ -130,9 +130,20 @@ class XrayVpnService : VpnService() {
     // exposed notification if the user swipes it away while paused.
     @Volatile private var lastTriggerLabel: String = ""
 
-    // A kill-switch event that landed while a revive was in flight (state REVIVING) is deferred
-    // here instead of being dropped, then replayed once the revive commits CONNECTED. Mutated only
-    // under `lock`. Cleared on replay and on full-stop teardown so it never leaks across sessions.
+    // A kill-switch event that landed while a transition was in flight (REVIVING or ROTATING) is
+    // deferred here instead of being dropped, then replayed once that transition commits CONNECTED.
+    // Mutated only under `lock`.
+    //
+    // This marker — NOT the tunnel state — is what "a kill is queued for replay" means, and it is
+    // deliberately still armed while the session is CONNECTED and a replay is on its way. The
+    // commit that dispatches a replay leaves it set; replayDeferredKill discharges it when it runs
+    // (consumeDeferredKillLocked), and a leave-foreground callback can withdraw it up to that point
+    // (withdrawDeferredKillLocked). Both run on the one serialized tunnelOpScope, so their FIFO
+    // order decides which wins — see replayDeferredKill for why that is the only ordering that
+    // actually closes the "paused for an app that already left" hole.
+    //
+    // Also cleared by the give-up funnel, by the kill-switch disable branch, and on full-stop
+    // teardown so it never leaks across sessions.
     private var pendingKillLabel: String? = null
 
     private var killSwitchMonitor: UsageStatsForegroundAppMonitor? = null
@@ -625,10 +636,31 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun killTunnel(sessionEpoch: Long, triggerPackageLabel: String) {
+    /**
+     * Tears the tunnel down because a kill-listed app came to the foreground.
+     *
+     * @param triggerPackageLabel the app whose foregrounding triggered this kill, or `null` for the
+     *   REPLAY of a previously deferred one. [replayDeferredKill] is the only caller that passes
+     *   null, and its KDoc carries the reason a replay resolves its label here instead of carrying
+     *   one.
+     */
+    private fun killTunnel(sessionEpoch: Long, triggerPackageLabel: String?) {
         tunnelOpScope.launch {
             try {
                 synchronized(lock) {
+                    // A replay carries no label of its own: it reads and discharges the deferred
+                    // marker HERE, at execution time. A leave-foreground callback queued ahead of
+                    // it has therefore already been able to withdraw the marker, in which case
+                    // there is nothing left to replay and the tunnel must stay up.
+                    val label = triggerPackageLabel
+                        ?: consumeDeferredKillLocked(sessionEpoch)
+                        ?: run {
+                            LogRepository.append(
+                                "Kill-switch: no deferred kill left to replay — it was withdrawn " +
+                                    "when the app left the foreground, or the session moved on"
+                            )
+                            return@launch
+                        }
                     if (!ownsTunnelTransitionLocked(sessionEpoch, SessionTunnelState.CONNECTED)) {
                         // A kill can only tear down a CONNECTED tunnel. If the same session is
                         // mid-transition — a kill-switch revive OR a failover rotation, both of
@@ -645,9 +677,9 @@ class XrayVpnService : VpnService() {
                                 tunnelState = sessionTunnelState,
                             )
                         ) {
-                            pendingKillLabel = triggerPackageLabel
+                            pendingKillLabel = label
                             LogRepository.append(
-                                "Kill-switch: deferring kill for $triggerPackageLabel " +
+                                "Kill-switch: deferring kill for $label " +
                                     "until the in-flight transition completes"
                             )
                         }
@@ -656,15 +688,18 @@ class XrayVpnService : VpnService() {
                     // The kill-switch subsystem may have been disabled after this event was queued on
                     // tunnelOpScope (applyKillSwitchPreferences stops + nulls the monitor under the lock).
                     // Do not tear down a tunnel for a feature that is no longer active — drop the stale
-                    // queued kill. (The defer/replay path can't reach here with a null monitor: the
-                    // disable branch clears pendingKillLabel, so no replay is dispatched.)
+                    // queued kill. (A replay can't reach here at all: the disable branch clears
+                    // pendingKillLabel under this same lock, so a replay that was already dispatched
+                    // finds the marker empty and returns above. That now holds even when the disable
+                    // lands AFTER the commit dispatched it, which is only true because the commit
+                    // leaves the marker armed instead of capturing the label.)
                     if (killSwitchMonitor == null) {
                         LogRepository.append(
-                            "Kill-switch: ignoring queued kill for $triggerPackageLabel (feature disabled)"
+                            "Kill-switch: ignoring queued kill for $label (feature disabled)"
                         )
                         return@launch
                     }
-                    LogRepository.append("Kill-switch: tearing down tunnel for $triggerPackageLabel")
+                    LogRepository.append("Kill-switch: tearing down tunnel for $label")
                     tearDownTunnelLocked()
                     // A rotation episode that failed a candidate returns to CONNECTED with the
                     // bridge still open and then dispatches its retry as a SEPARATE coroutine, so a
@@ -686,11 +721,11 @@ class XrayVpnService : VpnService() {
                     // POST_NOTIFICATIONS is denied, but writing state ahead keeps the machine
                     // correct even if the exposed-notification build ever throws.
                     LogRepository.setConnectionState(VpnConnectionState.PAUSED)
-                    lastTriggerLabel = triggerPackageLabel
+                    lastTriggerLabel = label
                     // Quiet, persistent FGS notification (id 1101, low channel) drops to a
                     // paused status line; the loud heads-up exposed alert is a SEPARATE
                     // notification on the high channel (id 1103) so it can actually alert.
-                    updateNotification(localizedString(R.string.vpn_status_paused, triggerPackageLabel))
+                    updateNotification(localizedString(R.string.vpn_status_paused, label))
                     // 1106 says a kill was DEFERRED and the listed app is still tunnelled. The kill
                     // has now landed and the tunnel is gone, so that notice is false — and it lives
                     // on this same high-importance channel, so leaving it up would pair "VPN is OFF
@@ -735,7 +770,7 @@ class XrayVpnService : VpnService() {
                     VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                     VpnNotifications.postExposed(
                         this@XrayVpnService,
-                        triggerPackageLabel,
+                        label,
                         notificationDismissIntent()
                     )
                 }
@@ -743,6 +778,69 @@ class XrayVpnService : VpnService() {
                 failKillSwitch(sessionEpoch, "killTunnel failed: ${error.message}")
             }
         }
+    }
+
+    /**
+     * Replays the kill [shouldDeferKillDuringTransition] parked, now that the transition it was
+     * waiting on has committed CONNECTED.
+     *
+     * The label is resolved from `pendingKillLabel` INSIDE the replay coroutine rather than captured
+     * by the commit that dispatches it, and that is load-bearing rather than stylistic.
+     * `tunnelOpScope` is `Dispatchers.IO.limitedParallelism(1)` and `bringUpTunnel` is not a
+     * `suspend` function, so it holds that single slot for its whole blocking span. A
+     * leave-foreground callback arriving during a bring-up is therefore queued AHEAD of this replay
+     * but does not execute until the transition has already committed. If the commit had captured
+     * the label, that leave would find the marker empty, withdraw nothing, and this replay would go
+     * on to pause the tunnel for an app that has already gone — the exact hole being closed.
+     *
+     * Reading the marker here lets FIFO order settle every case: a leave queued BEFORE this replay
+     * withdraws the marker and the replay finds nothing to do; a leave queued AFTER it runs against
+     * a tunnel this replay has already paused, which is [reviveTunnel]'s ordinary PAUSED input.
+     */
+    private fun replayDeferredKill(sessionEpoch: Long) =
+        killTunnel(sessionEpoch, triggerPackageLabel = null)
+
+    /**
+     * Reads and DISCHARGES the deferred-kill marker on behalf of a replay — or null when there is
+     * nothing left to replay, because a leave-foreground callback withdrew it
+     * ([withdrawDeferredKillLocked]) while the replay sat in `tunnelOpScope`'s queue.
+     *
+     * Session-guarded for the same reason [deferredKillToWithdraw] is: a replay dispatched by a
+     * session that has since been superseded must not discharge a marker the live session armed.
+     *
+     * Caller must hold `lock`.
+     */
+    private fun consumeDeferredKillLocked(sessionEpoch: Long): String? {
+        if (!isCurrentSessionLocked(sessionEpoch)) return null
+        return pendingKillLabel.also { pendingKillLabel = null }
+    }
+
+    /**
+     * Withdraws a kill parked by [shouldDeferKillDuringTransition] because the app it was deferred
+     * for has left the foreground while the transition was still in flight.
+     *
+     * **Deliberately posts nothing, and specifically NOT notification 1106.** That notice
+     * ([announceDroppedDeferredKillLocked]) looks like the obvious precedent and is not: it fires
+     * when a give-up drops a deferred kill while the listed app is STILL tunneled, so the user asked
+     * for the VPN to be off for that app, it is not, and they have to be told. Here the app has
+     * already left — nothing the user asked for went unhonoured, there is no app riding the tunnel
+     * to warn about, and posting it would alert them to a failure that did not occur. Log, do not
+     * alert.
+     *
+     * Caller must hold `lock`.
+     */
+    private fun withdrawDeferredKillLocked(sessionEpoch: Long) {
+        val label = deferredKillToWithdraw(
+            pendingKillLabel = pendingKillLabel,
+            running = running,
+            activeSessionEpoch = activeSessionEpoch,
+            callbackSessionEpoch = sessionEpoch,
+        ) ?: return
+        pendingKillLabel = null
+        LogRepository.append(
+            "Kill-switch: $label left the foreground before the in-flight transition committed; " +
+                "withdrawing the kill deferred for it"
+        )
     }
 
     private fun failKillSwitch(sessionEpoch: Long, logMessage: String) {
@@ -767,6 +865,14 @@ class XrayVpnService : VpnService() {
             // still owns the REVIVING transition for sessionEpoch).
             try {
                 val session = synchronized(lock) {
+                    // The leave-foreground edge that brings us here is ALSO the signal that any kill
+                    // deferred for that app is no longer wanted. Withdrawn before the revive
+                    // decision below and INDEPENDENTLY of it, because the two questions have
+                    // different answers: a revive reserves only from PAUSED, while the deferral that
+                    // strands the session is outstanding in every other state. (The other caller,
+                    // applyKillSwitchPreferences' disable branch, has already cleared the marker
+                    // itself, so this is a no-op there.)
+                    withdrawDeferredKillLocked(sessionEpoch)
                     if (!canReserveRevive(
                             running = running,
                             activeSessionEpoch = activeSessionEpoch,
@@ -800,7 +906,7 @@ class XrayVpnService : VpnService() {
                     expectedState = SessionTunnelState.REVIVING,
                 )
                     .onSuccess {
-                        val replayKillLabel = synchronized(lock) {
+                        val hasDeferredKill = synchronized(lock) {
                             if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.REVIVING)) {
                                 return@onSuccess
                             }
@@ -817,9 +923,11 @@ class XrayVpnService : VpnService() {
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             // A kill-switch event deferred during this revive must now be replayed
                             // so the tunnel does not stay CONNECTED with the kill-listed app in the
-                            // foreground. Clear the pending marker under the same lock, then re-run
-                            // the normal kill path (pause + exposed heads-up) for the current epoch.
-                            pendingKillLabel.also { pendingKillLabel = null }
+                            // foreground. The marker is deliberately left ARMED and only observed
+                            // here: replayDeferredKill discharges it when it actually runs, so a
+                            // leave-foreground callback queued ahead of that replay still has
+                            // something to withdraw. See replayDeferredKill.
+                            pendingKillLabel != null
                         }
                         // Restart failover for the restored tunnel — nothing else does, so without
                         // this the feature would stay dead for the rest of the session after the
@@ -830,8 +938,8 @@ class XrayVpnService : VpnService() {
                         applyFailoverPreferences(FailoverPreferences.state.value, session.epoch)
                         // Ordered before the replay so a replayed kill correctly stops the monitor
                         // again through killTunnel's pause path.
-                        if (replayKillLabel != null) {
-                            killTunnel(session.epoch, replayKillLabel)
+                        if (hasDeferredKill) {
+                            replayDeferredKill(session.epoch)
                         }
                     }
                     .onFailure { error ->
@@ -975,7 +1083,7 @@ class XrayVpnService : VpnService() {
                     expectedState = SessionTunnelState.ROTATING,
                 )
                     .onSuccess {
-                        val replayKillLabel = synchronized(lock) {
+                        val hasDeferredKill = synchronized(lock) {
                             if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
                                 return@onSuccess
                             }
@@ -1041,7 +1149,12 @@ class XrayVpnService : VpnService() {
                             afterRotationCommitted("refreshing the ongoing notification") {
                                 updateNotification(localizedString(R.string.vpn_status_connected))
                             }
-                            pendingKillLabel.also { pendingKillLabel = null }
+                            // OBSERVED, not consumed. The marker stays armed until the replay
+                            // coroutine actually runs, so a leave-foreground callback queued ahead
+                            // of it can still withdraw the kill — which is the whole reason a
+                            // rotation no longer parks the tunnel in PAUSED for an app that opened
+                            // and closed while the switch was in flight. See replayDeferredKill.
+                            pendingKillLabel != null
                         }
                         // ---- POST-COMMIT, off the lock ----
                         // Same rule as inside the block: none of this may reach the outer
@@ -1070,9 +1183,9 @@ class XrayVpnService : VpnService() {
                         afterRotationCommitted("restarting the health monitor") {
                             applyFailoverPreferences(failoverSettings, session.epoch)
                         }
-                        if (replayKillLabel != null) {
+                        if (hasDeferredKill) {
                             afterRotationCommitted("replaying the deferred kill") {
-                                killTunnel(session.epoch, replayKillLabel)
+                                replayDeferredKill(session.epoch)
                             }
                         }
                     }
