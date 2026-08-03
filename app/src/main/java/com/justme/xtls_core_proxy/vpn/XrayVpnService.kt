@@ -948,11 +948,16 @@ class XrayVpnService : VpnService() {
                             // takes a lock of its own. CancellationException still propagates — out
                             // of the synchronized block, out of .onSuccess, to the CE arm below.
                             //
-                            // Swallowing these is the lesser evil, not a free win: a dropped
-                            // setConnectionState leaves the UI on CONNECTING over a live tunnel
-                            // until the next state change or a repostOngoingNotification. That is
-                            // recoverable and cosmetic; letting it escape tears down a healthy
-                            // session.
+                            // Swallowing these is the lesser evil, not a free win, and the cost is
+                            // NOT self-healing: a dropped setConnectionState leaves the UI reading
+                            // CONNECTING over a live tunnel until something else writes the state —
+                            // a kill-switch pause, a later rotation, a give-up or a stop.
+                            // repostOngoingNotification does not fix it; it re-renders whatever
+                            // LogRepository already says. clearGiveUpStateOnRecovery does not
+                            // either, since giveUpOutcome is null by then. So the failure is
+                            // understating a working connection, indefinitely, which is a lie in
+                            // the SAFE direction — against letting the throw escape and tear down a
+                            // healthy session's monitor while writing BLACKHOLED over it.
                             afterRotationCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
