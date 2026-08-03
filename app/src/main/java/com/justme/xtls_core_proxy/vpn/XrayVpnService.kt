@@ -1475,6 +1475,16 @@ class XrayVpnService : VpnService() {
                 // charged to attempts made before the user intervened. This is outside the release
                 // branch below on purpose: it must also run for UNPROTECTED (which no longer
                 // releases) and for a disable with no give-up showing at all.
+                //
+                // CHOSEN, not overlooked: because it is unconditional, **toggling auto-failover off
+                // and back on hands the next episode a fresh thrash budget**, even when there was no
+                // give-up to release. That is consistent with the other three reset sites
+                // (clearGiveUpStateOnRecovery, the re-arm timer firing, session teardown) — each
+                // fires on an event after which the recorded attempts no longer describe what the
+                // next rotation faces, and an explicit disable is such an event. It does mean a user
+                // who toggles the switch repeatedly can rotate more often than maxRotations allows
+                // in one window; that takes deliberate repeated action in the settings screen, and
+                // each toggle is an explicit "try again", so it is accepted rather than prevented.
                 rotationAttempts = emptyList()
 
                 val releasedOutcome = giveUpOutcome
