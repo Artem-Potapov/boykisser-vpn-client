@@ -197,7 +197,7 @@ accepted**; unlike VPN connection tuning, ping settings have no session-capture 
 [auto-failover](auto-failover.md)'s tunnel health probe read `PingPreferences.load(...).targetUrl` in
 `applyFailoverPreferences` — and that coupling has been **removed**. The health probe now uses the
 fixed `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, because `ConfigBuilder` carves that exact host through
-the proxy under `BLOCKED_ONLY` (a static routing rule cannot cover an editable target) and because
+the proxy in every routing mode (a static routing rule cannot cover an editable target) and because
 `isValidTarget`'s deliberately minimal prefix check let a non-204 URL fail every health probe forever,
 driving a rotation storm over healthy servers. Editing the target here now affects the Ping Test only.
 

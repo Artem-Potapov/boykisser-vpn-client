@@ -87,24 +87,72 @@ class ConfigBuilderRoutingTest {
         assertTrue(carveOutIndex < items.lastIndex)
     }
 
-    // The carve-out is scoped to BLOCKED_ONLY because it is the ONLY mode that emits a direct
-    // catch-all. PROXY_ALL emits no mode rules at all, and EXCEPT_COUNTRY emits only
-    // country-scoped direct rules; in both, an unmatched destination falls through to the first
-    // outbound, which is the proxy. Emitting the rule there anyway would be dead weight in
-    // PROXY_ALL and would override the user's country-direct policy in EXCEPT_COUNTRY.
-    @Test fun the_health_probe_carve_out_is_scoped_to_blocked_only() {
-        for (mode in listOf(RoutingMode.PROXY_ALL, RoutingMode.EXCEPT_COUNTRY)) {
+    // The carve-out is emitted in EVERY mode, not just BLOCKED_ONLY. The old scoping rested on the
+    // claim that the other modes' only direct rule is the geoip:private LAN bypass, which cannot
+    // match a public host. That was false twice over: EXCEPT_COUNTRY emits three country-scoped
+    // DIRECT rules (directTags — geoip:ru can match an anycast Cloudflare address), and every mode
+    // preserves the imported config's own rules. Either can route the probe direct, which returns
+    // 204 with the proxy dead — the same watchdog-can-never-fire failure BLOCKED_ONLY's catch-all
+    // caused. The rule only ever moves traffic TOWARD the proxy, so it is safe everywhere.
+    @Test fun the_health_probe_carve_out_is_emitted_in_every_mode() {
+        for (mode in RoutingMode.entries) {
             val out = ConfigBuilder.buildRuntimeConfig(
                 vless,
                 tuning = TuningSettings(
                     routing = RoutingSettings(mode, RoutingCountry.RU, bypassLan = true, blockAds = true)
                 )
             )
-            assertFalse(
-                "$mode has no direct catch-all, so it needs no carve-out; rules=${ruleItems(out)}",
-                ruleItems(out).any { it.contains(ConfigBuilder.HEALTH_PROBE_HOST) }
+            val items = ruleItems(out)
+            val carveOutIndex = items.indexOfFirst {
+                JSONObject(it).optJSONArray("domain")?.toString()
+                    ?.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") == true
+            }
+            assertTrue("$mode must carve the health-probe host to the proxy; rules=$items", carveOutIndex >= 0)
+            assertEquals(
+                "$mode: the carve-out must move traffic TOWARD the proxy, never away from it",
+                "proxy",
+                JSONObject(items[carveOutIndex]).getString("outboundTag")
+            )
+            // Ahead of every rule that could route it elsewhere — the LAN bypass, ads -> block, and
+            // (EXCEPT_COUNTRY) the country direct rules. Only the port-53 -> dns-out rule and the
+            // BLOCKED_ONLY DoH guards may precede it, and neither can claim the probe.
+            val firstDivertIndex = items.indexOfFirst {
+                JSONObject(it).optString("outboundTag") !in setOf("dns-out", "proxy")
+            }
+            assertTrue(
+                "$mode: carve-out must precede every non-proxy rule; rules=$items",
+                firstDivertIndex < 0 || carveOutIndex < firstDivertIndex
             )
         }
+    }
+
+    // R2 — the degrade path. BLOCKED_ONLY + a country with no blocked dataset becomes PROXY_ALL at
+    // effectiveRoutingMode, so it must emit the PROXY_ALL rule set: no DoH guard, no blocked-list
+    // proxy rules, no direct catch-all — and the carve-out, which every mode now gets. Pinning it
+    // here keeps the emission keyed to the EFFECTIVE mode rather than the raw setting.
+    @Test fun degraded_blocked_only_emits_the_proxy_all_rule_set() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless,
+            tuning = TuningSettings(
+                routing = RoutingSettings(RoutingMode.BLOCKED_ONLY, RoutingCountry.IR, bypassLan = true, blockAds = false)
+            )
+        )
+        val items = ruleItems(out)
+        val proxyRules = items.filter { JSONObject(it).optString("outboundTag") == "proxy" }
+        assertEquals(
+            "the degraded mode must emit exactly one proxy rule — the carve-out, and no DoH guard; rules=$items",
+            1,
+            proxyRules.size
+        )
+        assertTrue(
+            "that one proxy rule must be the health-probe carve-out; rules=$items",
+            proxyRules.single().contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}")
+        )
+        val last = JSONObject(items.last())
+        assertFalse(
+            "the degraded mode must not emit the direct catch-all; rules=$items",
+            last.optString("network") == "tcp,udp" && last.optString("outboundTag") == "direct"
+        )
     }
 
     // The domain rule can only match if the tun inbound sniffs the HTTP Host header. BLOCKED_ONLY

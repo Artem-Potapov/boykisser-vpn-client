@@ -58,13 +58,12 @@ never touched the proxy.
 
 Two halves close it, and they are one change:
 
-- **`ConfigBuilder` carves the probe host through the proxy** under `BLOCKED_ONLY` —
-  `healthProbeCarveOutRule(proxyTag)`, a `domain: full:cp.cloudflare.com → proxy` rule emitted in the
-  same position as its `dohGuardRules` sibling: right after the forced port-53 rule, **ahead of the LAN
-  and ad-block rules** (a later `geosite:category-ads-all → block` match would turn the probe into a
-  permanent failure). It is a `domain` rule, so it needs sniffing — which `BLOCKED_ONLY` already forces
-  through `routingNeedsDomainRules`. Like every rule this chokepoint emits, it only ever moves traffic
-  **toward** the proxy.
+- **`ConfigBuilder` carves the probe host through the proxy** — `healthProbeCarveOutRule(proxyTag)`, a
+  `domain: full:cp.cloudflare.com → proxy` rule emitted in the same position as its `dohGuardRules`
+  sibling: right after the forced port-53 rule, **ahead of the LAN and ad-block rules** (a later
+  `geosite:category-ads-all → block` match would turn the probe into a permanent failure) and ahead of
+  the imported config's preserved rules. Like every rule this chokepoint emits, it only ever moves
+  traffic **toward** the proxy.
 - **The target is a fixed constant**, `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, no longer
   `PingPreferences.targetUrl`. This is *forced by* the carve-out, not an extra: a static routing rule
   and a user-editable target cannot both be right. It also closes a second hazard — the Ping Test
@@ -72,12 +71,31 @@ Two halves close it, and they are one change:
   every health probe fail forever, i.e. a rotation storm and a give-up over healthy servers. The Ping
   Test feature keeps its own editable target and its own default; this is a **separate** constant.
 
-**Only `BLOCKED_ONLY` needs the rule.** `PROXY_ALL` emits no mode rules at all and `EXCEPT_COUNTRY`
-emits only country-scoped direct rules — in both, a destination matching nothing falls through to the
-first outbound, which is the proxy, and their one direct rule (`geoip:private` LAN bypass) cannot match
-a public host. `BLOCKED_ONLY` is the only mode that emits a direct catch-all. Emitting the carve-out
-everywhere would be dead weight in `PROXY_ALL` and would override the user's country-direct policy in
-`EXCEPT_COUNTRY` for no safety gain.
+**Every mode gets the rule** — an earlier revision scoped it to `BLOCKED_ONLY` on the claim that the
+other modes' only direct rule is the `geoip:private` LAN bypass, which cannot match a public host. That
+claim was **false**, so the scoping went with it. Three things can route the probe direct, and only the
+first is `BLOCKED_ONLY`-specific:
+
+- `BLOCKED_ONLY`'s direct catch-all;
+- `EXCEPT_COUNTRY`'s country **direct** rules (`directTags` — `geosite:category-ru`, `geoip:ru`,
+  `ext:geosite_RU.dat:ru-available-only-inside`). `geoip:ru` is the live one: geo datasets do attribute
+  anycast prefixes to individual countries, and `cp.cloudflare.com` is anycast;
+- a direct rule inside the pasted config, which `applyRouting` preserves in **all three** modes.
+
+Under `EXCEPT_COUNTRY` the carve-out therefore **deliberately overrides the user's country-direct policy
+for this one hostname**. That is a real exception to a user-visible setting, and it is the right call:
+the probe is the app's own diagnostic traffic, and a probe that bypasses the proxy answers the wrong
+question. It is one `full:` domain match, not a policy change.
+
+**Residual, stated rather than papered over.** The carve-out is a `domain` rule, and with a tun inbound
+the destination is an IP — nothing supplies a domain to match against unless the inbound sniffs one.
+`routingNeedsDomainRules` forces sniffing for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking, and the
+XRAY screen can force it too. In the one remaining combination — `PROXY_ALL`, ads off, user sniffing off
+— the rule is emitted but **inert**, so a preserved imported direct rule can still claim the probe
+there. Emitting it unconditionally does not fix that case; what it buys is that the rule is already in
+place the moment sniffing turns on, with no second condition to keep in sync. The only thing that would
+close the residual outright is forcing sniffing whenever routing applies, which would override the
+user's own XRAY preference for every configuration — deliberately not done.
 
 `ConfigSanitizer` deliberately does **not** get a new finding for it. It reports user-selected policy
 plus the enforcements a pasted config could otherwise have overridden; the carve-out is an always-on
@@ -626,7 +644,7 @@ no Save button, each control persists on change, and an invalid field holds its 
 
 The probe **target URL** is not a failover setting and is **not user-editable at all**: it is the fixed
 `ConfigBuilder.HEALTH_PROBE_TARGET_URL`. It used to read `PingPreferences.targetUrl`, and that sharing
-was wrong twice over — a static `BLOCKED_ONLY` routing carve-out cannot cover an editable target, and
+was wrong twice over — a static routing carve-out cannot cover an editable target, and
 the Ping Test target is validated only as an `http://` prefix, so any non-204 URL made every probe fail
 forever. See ["Reaching the tun is not enough"](#reaching-the-tun-is-not-enough--the-routing-table-has-to-cooperate)
 above. The Ping Test feature keeps its own editable target; the two are now independent.

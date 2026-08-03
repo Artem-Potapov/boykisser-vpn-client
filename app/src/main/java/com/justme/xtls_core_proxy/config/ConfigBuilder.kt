@@ -159,9 +159,9 @@ object ConfigBuilder {
      * FIXED, and deliberately NOT the user-editable Ping Test target. Two reasons, both hard:
      *
      * 1. **It is half of a routing rule.** `applyRouting` carves this exact host through the proxy
-     *    under `BLOCKED_ONLY` (see the `healthProbeCarveOutRules` call site). A static rule and a
-     *    user-editable target cannot both be right — edit the target and the carve-out stops
-     *    covering it, which silently restores the bypass this constant exists to close.
+     *    in every mode (see [healthProbeCarveOutRule]). A static rule and a user-editable target
+     *    cannot both be right — edit the target and the carve-out stops covering it, which silently
+     *    restores the bypass this constant exists to close.
      * 2. **The Ping Test target is validated only as a URL prefix**, not as a 204 endpoint. A user
      *    who points it at any normal page makes `Http204HealthProbe` return false forever, which
      *    the watchdog reads as a dead tunnel — a rotation storm and a give-up over healthy servers.
@@ -508,7 +508,7 @@ object ConfigBuilder {
     /**
      * Global routing overlay. null → no-op (probes). Owns the geoip:private LAN rule (strips the baked
      * one, re-injects per toggle). Injected order, spliced after the forced port-53 rule:
-     * DoH-guard(mode3) · health-probe carve-out(mode3) · LAN · ads · mode rules · config's own rules ·
+     * DoH-guard(mode3) · health-probe carve-out(all modes) · LAN · ads · mode rules · config's own rules ·
      * catch-all direct(mode3, last).
      * applyCoreSettings later inserts the IPv6 ::/0-block at index 1. Ensures direct/block outbounds and
      * a proxy tag exist before referencing them.
@@ -544,7 +544,7 @@ object ConfigBuilder {
         val out = JSONArray()
         if (port53 != null) out.put(port53)
         if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
-        if (effectiveMode == RoutingMode.BLOCKED_ONLY) out.put(healthProbeCarveOutRule(proxyTag))
+        out.put(healthProbeCarveOutRule(proxyTag))
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
         when (effectiveMode) {
@@ -634,24 +634,44 @@ object ConfigBuilder {
      * Health-probe carve-out: route [HEALTH_PROBE_HOST] to the proxy so auto-failover's watchdog
      * measures the **proxy**, not merely the tunnel.
      *
-     * `BLOCKED_ONLY` ONLY, and emitted in the same position as its [dohGuardRules] sibling — right
-     * after the forced port-53 rule, ahead of the LAN and ad-block rules. Without it the final
-     * `network: tcp,udp -> direct` catch-all hands the probe's GET to `freedom` on a `protect()`'d
-     * socket, where it returns 204 with the proxy completely dead: the watchdog can never rotate,
-     * and its healthy branch would *clear* a legitimate `CONTAINED_BY_LIVE_TUNNEL` give-up on the
-     * strength of a request that never touched the proxy.
+     * Emitted in **every** mode, in the same position as its [dohGuardRules] sibling — right after
+     * the forced port-53 rule, ahead of the LAN, ad-block and country rules and ahead of the
+     * imported config's own preserved rules.
      *
-     * **Why only this mode.** `BLOCKED_ONLY` is the one mode that emits a direct catch-all.
-     * `PROXY_ALL` emits no mode rules at all, and `EXCEPT_COUNTRY` emits only country-scoped direct
-     * rules — in both, a destination that matches nothing falls through to the first outbound,
-     * which is the proxy. The only direct rule they can carry is the LAN bypass (`geoip:private`),
-     * which cannot match a public host. Emitting this rule there would therefore be dead weight in
-     * `PROXY_ALL`, and in `EXCEPT_COUNTRY` it would *override* the user's country-direct policy for
-     * no safety gain.
+     * **What can route the probe away from the proxy.** Three things, and only the first is
+     * `BLOCKED_ONLY`-specific:
+     *  - `BLOCKED_ONLY`'s final `network: tcp,udp -> direct` catch-all, which hands the GET to
+     *    `freedom` on a `protect()`'d socket;
+     *  - `EXCEPT_COUNTRY`'s country **direct** rules ([directTags]) — `geoip:ru` in particular can
+     *    match a Cloudflare anycast address, since geo datasets do attribute anycast prefixes to
+     *    individual countries;
+     *  - a direct rule in the pasted config itself, which `applyRouting` preserves in **all** three
+     *    modes.
+     *
+     * Any of them returns 204 with the proxy completely dead: the watchdog can never rotate, and
+     * its healthy branch would *clear* a legitimate `CONTAINED_BY_LIVE_TUNNEL` give-up on the
+     * strength of a request that never touched the proxy. (An earlier revision scoped this rule to
+     * `BLOCKED_ONLY` on the claim that the other modes' only direct rule is the LAN bypass. That
+     * was wrong — see the two other bullets — so the scoping went with it.)
+     *
+     * **It overrides the user's country-direct policy for this one hostname**, deliberately. Under
+     * `EXCEPT_COUNTRY` the user asked for in-country destinations to go direct; the probe is the
+     * app's own diagnostic traffic and is meaningless unless it traverses the proxy, so this rule
+     * wins. That is a real exception to a user-visible setting, not a side effect.
      *
      * **Direction.** Like every rule this chokepoint emits, it may only move traffic TOWARD the
-     * proxy. It is a `domain` rule, so it needs sniffing — which `BLOCKED_ONLY` already forces via
-     * `routingNeedsDomainRules`.
+     * proxy — which is why emitting it everywhere costs no safety.
+     *
+     * **Residual: it is a `domain` rule, so it only matches while sniffing is on.** With a tun
+     * inbound the destination is an IP, and nothing supplies a domain to match unless the inbound
+     * sniffs one. Sniffing is forced for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking
+     * (`routingNeedsDomainRules`), and the user can turn it on from the XRAY screen. In the one
+     * remaining case — `PROXY_ALL`, ads off, user sniffing off — the rule is **inert**: it is
+     * emitted but cannot match, so a preserved imported direct rule can still claim the probe
+     * there. Emitting it unconditionally does not fix that case; it makes the rule already present
+     * the moment sniffing turns on, with no second condition to keep in sync. Closing the residual
+     * outright would mean forcing sniffing whenever routing applies, which overrides the user's own
+     * XRAY preference for every configuration — not done here.
      */
     private fun healthProbeCarveOutRule(proxyTag: String): JSONObject =
         fieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag)

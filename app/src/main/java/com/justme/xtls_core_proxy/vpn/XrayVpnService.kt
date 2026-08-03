@@ -1493,7 +1493,7 @@ class XrayVpnService : VpnService() {
             failoverMonitorSettings = settings
             failoverMonitor = TunnelHealthMonitor(
                 // FIXED target, deliberately NOT PingPreferences.targetUrl. It is half of a routing
-                // rule: applyRouting carves this exact host through the proxy under BLOCKED_ONLY,
+                // rule: applyRouting carves this exact host through the proxy in every routing mode,
                 // and a static rule cannot cover a user-editable target. Reading the Ping Test
                 // setting here also inherited its validation gap — that target is only checked for
                 // an http:// prefix, so any non-204 URL would fail every probe forever and drive a

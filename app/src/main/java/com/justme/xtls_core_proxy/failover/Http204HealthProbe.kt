@@ -13,12 +13,14 @@ import java.net.URL
  * internet and therefore tests the exact path user traffic takes.
  *
  * **That claim only holds because the routing table is made to honour it.** Reaching the tun is not
- * enough — Xray still decides which outbound carries the request, and `BLOCKED_ONLY` ends its rule
- * list with a `network: tcp,udp -> direct` catch-all that would hand the GET to `freedom` on a
- * `protect()`'d socket, returning 204 with the proxy completely dead. `ConfigBuilder` therefore
- * carves `ConfigBuilder.HEALTH_PROBE_HOST` through the proxy in that mode, and the target is that
- * fixed constant rather than the user-editable Ping Test URL, because a static rule and an editable
- * target cannot both be right. Any replacement probe must keep both halves.
+ * enough — Xray still decides which outbound carries the request, and several rules would hand the
+ * GET to `freedom` on a `protect()`'d socket, returning 204 with the proxy completely dead:
+ * `BLOCKED_ONLY`'s `network: tcp,udp -> direct` catch-all, `EXCEPT_COUNTRY`'s country direct rules,
+ * and any direct rule the imported config carries. `ConfigBuilder` therefore carves
+ * `ConfigBuilder.HEALTH_PROBE_HOST` through the proxy in **every** mode (see
+ * `ConfigBuilder.healthProbeCarveOutRule`, which also records the sniffing residual), and the target
+ * is that fixed constant rather than the user-editable Ping Test URL, because a static rule and an
+ * editable target cannot both be right. Any replacement probe must keep both halves.
  *
  * Deliberately NOT XrayBridge.measureLatency: that builds a throwaway instance whose sockets are
  * protect()'d OUT of the tun, so it answers "can this config reach that server", not "is the live
