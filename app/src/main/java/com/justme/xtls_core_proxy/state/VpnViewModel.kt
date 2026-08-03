@@ -126,11 +126,27 @@ internal fun connectLabelRes(action: ConnectAction, isConnecting: Boolean): Int 
 }
 
 /**
- * Whether the connect affordance accepts a tap. Lives beside [connectLabelRes] and takes the
- * IDENTICAL pair of inputs on purpose: the two halves of one rule were previously restated by hand
- * at each call site, so a control could render "Connecting…" and still be tappable.
+ * Whether the connect affordance accepts a tap. Lives beside [connectLabelRes] and takes the same
+ * *shape* of inputs so the two halves of one rule cannot be restated by hand at each call site —
+ * the defect that let a control render "Connecting…" and still be tappable.
  *
- * `isConnecting` disables as well as relabels because it now covers a case the state alone cannot
+ * **The two are deliberately NOT given identical arguments, and must not be "restored" to it.**
+ * Every call site passes the NARROW flag to [connectLabelRes] and the WIDENED one to this function:
+ *
+ * ```
+ * label   = connectLabelRes(action, isConnecting)
+ * enabled = connectEnabled(action, isConnecting || requestInFlight)
+ * ```
+ *
+ * because the two halves scope to different rows. Only the reconnect TARGET should read
+ * "Connecting…" (`isConnecting` = "this profile is the one being reconnected"), while EVERY control
+ * must be disabled (`requestInFlight` = "some reconnect is running"), since a contending tap would
+ * be refused anyway — a single flag made thirty unrelated servers claim to be connecting. The
+ * invariant "never enabled while it reads Connecting…" is therefore enforced by the `||` at each
+ * call site, not by argument identity: the widened set is a superset of the narrow one, so anything
+ * relabelled is also disabled. Collapsing the two arguments back together reintroduces the defect.
+ *
+ * `isConnecting` disables as well as relabels because it covers a case the state alone cannot
  * express: during a Reconnect the connection state stays `BLACKHOLED` until the teardown lands, so
  * [connectAction] still says RECONNECT while the request is already in flight. It is behaviour-
  * preserving for the pre-existing case — `connectAction(CONNECTING)` is already
@@ -542,8 +558,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     /**
-     * The profile a [reconnect] is sequencing, or null when none is. The UI feeds this into
-     * [connectLabelRes]/[connectEnabled]'s `isConnecting` parameter: the connection state stays
+     * The profile a [reconnect] is sequencing, or null when none is. The UI feeds this into the
+     * `isConnecting` parameter of [connectLabelRes] and [connectEnabled] — but **not as the same
+     * argument**: the label gets `reconnectingId == thisProfile.id` and the enablement gets that
+     * `||` "any reconnect is in flight". See [connectEnabled]'s KDoc for why the asymmetry is the
+     * rule rather than a slip. The connection state stays
      * `BLACKHOLED` for the whole teardown — which can run for seconds when a live Xray core has to
      * be closed — so without this the affordance would keep rendering an enabled "Reconnect" that
      * looks dead, and re-tapping it is the natural response.

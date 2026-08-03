@@ -239,6 +239,25 @@ From 5a, turn auto-failover **off** at the settings screen before the timer fire
 `Failover: retry timer stood down (feature disabled or session ended)`, or nothing fires at all. **No
 automatic rotation and no automatic VPN shutdown may happen after the user disabled the feature.**
 
+### 5e — Disable failover while `BLACKHOLED` leaves a *usable* state
+
+From Test 2 or Test 3's give-up (state `BLACKHOLED`), turn auto-failover **off** at the settings
+screen. Disabling cancels the re-arm timer, which was the only automatic way out — so the release of
+the episode state is what stops this stranding the user.
+
+**PASS, all four:**
+1. The **1105 give-up alert is cancelled** (it no longer claims a repair is pending).
+2. The connection state **stays `BLACKHOLED`** and the **TUN stays up**. This is deliberate: tearing
+   it down would drop the user onto the clear network as a side effect of a settings change, and
+   switching to `ERROR` would offer a plain Connect that `startVpn` refuses with "VPN already
+   running" — a dead button one state over.
+3. The main button therefore still reads **"Reconnect"** and is **tappable** — tap it and a working
+   server comes up (Test 19's criteria).
+4. **Disconnect** also still works.
+
+**FAIL:** the alert stays up; or the controls go dead so neither Reconnect nor Disconnect is
+available; or the TUN is torn down and traffic goes to the clear network on a settings change.
+
 ---
 
 ## Test 6 — The notification Stop action, app closed, from `UNPROTECTED` ★
@@ -483,10 +502,12 @@ the screen or overlap the progress row on a small display.
 on the refused-start path.
 
 **You cannot reach this by tapping Connect while connected.** Every such control is gated by the same
-`canConnect` rule (`VpnViewModel.canConnect`), which is false in `CONNECTED`: the per-server row is
-disabled, the long-press dialog's **Connect** and **Connect to fastest** rows are disabled by the
-*same* value (`ProfileActionsDialog`), and the QS tile returns **Stop** while `CONNECTED`. A tester
-who tries that route finds every control dead and records a meaningless PASS.
+rule — `state/connectAction(state)`, which returns `UNAVAILABLE` in `CONNECTED` (it replaced the old
+boolean `canConnect`): the per-server row is disabled, the long-press dialog's **Connect** and
+**Connect to fastest** rows are disabled by the *same* value (`ProfileActionsDialog`), and the QS tile
+returns **Stop** while `CONNECTED`. A tester who tries that route finds every control dead and records
+a meaningless PASS. (Note this is specifically `CONNECTED`. In `BLACKHOLED` the same rule returns
+`RECONNECT` and the controls **are** live — that is Test 19, not this one.)
 
 The reachable window is the one T10b actually guards: a start request for **B** is *authorised while
 the VPN is off*, then sits behind a system dialog while **A** comes up underneath it. `MainActivity`'s
@@ -603,8 +624,123 @@ failure counter is reset, not merely paused).
 3. **Kill-switch pause while `BLACKHOLED`** — known contradictory pair: 1105 ("paused to keep you
    protected") can sit next to 1103 ("VPN is OFF — you're exposed"). Confirm whether you see it and
    note it; it is a ledgered known limitation, not a new defect.
+3b. **The 1106 "kill-switch not applied" notice is retracted.** Provoke it first: with the kill-switch
+   armed, open a controlled app *during a rotation* so the kill is deferred, then let the rotation
+   give up (Test 3) — the notice appears on the high-importance channel. Now check **both** exits:
+   **(a)** stop the VPN → 1106 disappears (it claims in the present tense that the app is still going
+   through the VPN, and `setAutoCancel` alone would only clear it on a tap); **(b)** with 1106
+   showing, bring the controlled app to the foreground so the kill-switch fires → 1106 must be gone
+   **before** the 1103 "VPN is OFF — you're exposed" alert appears. **FAIL:** the two heads-up alerts
+   are visible together, even briefly — they contradict each other on the same channel.
 4. **Uninstall/reinstall or clear data** → auto-failover is **off** again (default), and the settings
    screen shows interval 15000 / timeout 5000 / threshold 2 / max switches 3.
+
+---
+
+## Test 19 — Reconnect from a contained give-up, repeatedly ★★
+
+**Why:** `BLACKHOLED` used to disable every connect control; it now renders **"Reconnect"** and routes
+through `ReconnectFlow`'s stop → settle → start → verify sequence, which is entirely off-device logic
+until a real Xray core has to be closed. Both contained outcomes share this one path, so both must be
+exercised. **Repeatedly**, because the in-flight guard is released in a `finally` — if it ever wedged
+shut, Reconnect would work exactly once per ViewModel and look intermittent rather than broken.
+
+**Before you start:** confirm the control really is enabled in this state — an earlier revision of
+this matrix told the tester to use a control that was greyed out, and the test passed vacuously. In
+`BLACKHOLED` the main button must read **"Reconnect"** and be tappable, and the long-press dialog's
+**Connect** row must read "Reconnect" and be tappable too. If either is greyed out, that is a FAIL of
+this test, not a reason to skip it.
+
+**19a — `CONTAINED_BY_LIVE_TUNNEL` (a live core is closed).** Reach Test 3's state (give-up with the
+tunnel still up: no candidate or thrash cap). The main button reads **Reconnect**.
+1. Tap **Reconnect**, having first restored at least one working server.
+2. Watch the button: it must read **"Connecting…"** and be **non-tappable** during the window.
+
+**PASS:** the session tears down and a new one comes up on the chosen server — state reaches
+`CONNECTED`, `dumpsys connectivity` shows a VPN, and traffic exits via the new server's IP. The 1105
+give-up alert clears. Log shows a stop followed by a start, **not** "VPN already running".
+**FAIL:** "VPN already running" in the log with no new session; or the VPN ends up **off** and stays
+off; or the button stays enabled while reading "Connecting…".
+
+**19b — `CONTAINED_BY_BLACKHOLE` (no core to close).** Reach Test 2's state (all servers dead,
+blackhole established). Restore one server, then tap **Reconnect**. Same PASS criteria.
+
+**19c — Repeat 19a three times in a row** (give up → Reconnect → give up → Reconnect → …).
+**PASS:** the third Reconnect behaves exactly like the first. **FAIL:** the button is dead, or the tap
+does nothing, on the second or third attempt — that is the guard wedging shut.
+
+---
+
+## Test 20 — A second Reconnect tap during the window ★
+
+**Why:** the teardown can run for **seconds** while the state is still `BLACKHOLED`, so the affordance
+keeps rendering and a re-tap is the natural user response. The rule is **first request wins**: a
+second request is refused *and reported*, never queued — a second stop landing after the first flow's
+start would kill the very session the user asked for.
+
+**Steps:**
+1. Reach 19a's state with a working server available.
+2. Tap **Reconnect**, then **immediately tap the same control again** (and, if you can, a *different*
+   server's Connect row in the long-press dialog).
+
+**PASS:** every control is disabled the moment the first tap lands, so the second tap cannot be
+delivered at all. If your device is fast enough to land one anyway, it must be **refused with the
+"request superseded" message** — and the session that comes up is the one from the **first** tap.
+**FAIL:** the second tap tears down the session the first one started (VPN ends up off); or a
+*different* server ends up connected than the one first tapped; or a second tap is silently swallowed
+with no message.
+
+**Also check the label scoping:** while a Reconnect for server **A** is in flight, only **A**'s control
+may read "Connecting…". Every *other* server's row must be disabled but must **not** claim to be
+connecting. (A single flag here previously made thirty unrelated servers all claim to be connecting.)
+
+---
+
+## Test 21 — A tile / notification Stop overrides a Reconnect in flight ⚠ KNOWN LIMITATION
+
+**Why:** this is a **ledgered limitation, not a defect to file** — the point of the test is to confirm
+the blast radius is what the docs claim, and to keep it visible to whoever next edits the tile or the
+notification Stop path. `ReconnectFlow` watches `LogRepository.connectionState`, which is
+**source-blind**: it cannot tell its own stop from anyone else's. The in-app Disconnect is handled (it
+calls `cancelReconnect()`); the QS tile and the ongoing notification's Stop action are **not** — both
+dispatch `ACTION_STOP` straight to the service.
+
+**Steps:**
+1. Reach 19a's state with a working server available.
+2. Tap **Reconnect**, then **background the app** (Home — do *not* swipe it from Recents).
+3. Within the next few seconds, pull down the shade and tap **Stop** on the ongoing notification (and
+   separately, on another run, tap the **QS tile**).
+
+**EXPECTED (the known limitation):** the VPN **comes back up** rather than staying off — the flow read
+your `DISCONNECTED` as its own teardown completing and dispatched its start. Window is up to ~10 s
+(`STOP_TIMEOUT_MS` 8 s + `START_VERIFY_MS` 2 s).
+**Record which surface you used and how long it took.** Then stop the VPN again — the second Stop must
+work normally, since no reconnect is in flight by then.
+
+**Contrast — the in-app Disconnect MUST win.** Repeat from step 2 but stay in the app and tap
+**Disconnect**. **PASS:** the VPN goes off and **stays** off. **FAIL:** it comes back up — that would
+mean `cancelReconnect()` is no longer wired to the in-app Disconnect, which *is* a real defect.
+
+---
+
+## Test 22 — A Reconnect in flight does not survive the Activity being finished
+
+**Why:** `ReconnectFlow.run` is launched on `viewModelScope`. Rotation and backgrounding keep the
+ViewModel alive; a genuine **finish** does not. The accepted behaviour is fail-safe — it fails to "VPN
+off", never to a silently unprotected tunnel — but a tester should know it is expected.
+
+**Steps:**
+1. Reach 19a's state with a working server available.
+2. Tap **Reconnect**, then **immediately swipe the app away from Recents** (or press Back out of it).
+
+**EXPECTED:** the VPN ends up **off** and stays off, with no VPN key in the status bar and no VPN in
+`dumpsys connectivity`. It must **not** end up in a state that looks connected while carrying no
+traffic.
+**FAIL:** a tunnel is left up that does not carry traffic, or the app reports `CONNECTED` with no VPN.
+
+**Then confirm the two non-cases:** repeat with a **screen rotation** instead of a finish, and again
+with **Home** (background) instead. In both, the reconnect must **complete normally** — those keep the
+ViewModel alive and are not affected.
 
 ---
 
@@ -632,3 +768,7 @@ Record the outcome here as you go, so a partial run is still useful to the next 
 | 16 Connect from UNPROTECTED | | |
 | 17 Offline guard | | |
 | 18 Teardown hygiene | | |
+| 19a/b/c Reconnect from a contained give-up ★★ | | 19c is the repeat-three-times guard |
+| 20 Second Reconnect tap during the window ★ | | first request must win |
+| 21 Tile/notification Stop overrides a Reconnect ⚠ | | known limitation — record surface + timing |
+| 22 Reconnect does not survive an Activity finish | | rotate/background must still complete |

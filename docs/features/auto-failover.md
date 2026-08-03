@@ -187,6 +187,21 @@ outcomes already report themselves on their own surfaces. Both contained outcome
 live or blackhole — and a blackhole TUN is still a VPN interface to the app that was trying to detect
 one, so the notice is true there.
 
+**1106 asserts something in the present tense, so it must be retracted when it stops being true.**
+The notice says a listed app *is still going through the VPN*. `setAutoCancel(true)` only clears it if
+the user taps it, so `VpnNotifications.cancelKillSwitchNotApplied` is called from **two** places:
+
+- **`killTunnel`**, immediately **before** it posts 1103. The deferred kill has now landed and the
+  tunnel is gone, so 1106 is false — and both notices live on the **same high-importance channel**, so
+  leaving it up would pair "VPN is OFF for every app" with "that app is still going through the VPN"
+  as two simultaneous heads-up alerts. Retract-before-post is the ordering: the two contradictory
+  alerts must never coexist, not even briefly.
+- **`stopVpn`**, alongside `cancelExposed` and `cancelFailoverBlackholed` — after a stop the claim is
+  simply false, and `stopForeground` removes none of these (each has its own id).
+
+The same retraction is recorded in [`kill-on-foreground.md`](kill-on-foreground.md), which owns the
+1103/1106 channel story.
+
 ## Give-up: three outcomes, one funnel, fail-closed
 
 `giveUpRotationLocked` is the **single funnel every give-up passes through**. The thrash-cap and
@@ -258,14 +273,17 @@ technical wording.
 boolean equality chains the compiler cannot flag. Adding `BLACKHOLED` to the renders while missing the
 chains left the QS tile rendering `STATE_ACTIVE` while `decideTileClick` still returned `Start` —
 strictly worse than before, because the control now *looked* live and was not. The sites that must all
-agree today:
+be **decided together** — note they do not all give the same answer, and are not supposed to: "is this
+session live?" and "what connect affordance does it offer?" are two different questions, and
+`BLACKHOLED` is the state where they diverge:
 
 | Site | Rule |
 |---|---|
 | `tile/TileClickDecision.decideTileClick` | `BLACKHOLED` → `Stop` |
 | `tile/XrayVpnTileService.handleClick` | the same Stop gate, duplicated for the no-IO fast path |
 | `tile/XrayVpnTileService` render | `BLACKHOLED` → `STATE_ACTIVE`, like `PAUSED` |
-| `state/VpnViewModel.canConnect` | `BLACKHOLED` is **not** connectable |
+| `state/connectAction` | `BLACKHOLED` → `RECONNECT` (**not** `UNAVAILABLE`) — see [Reconnect](#reconnect-the-affordance-a-give-up-actually-offers) |
+| `MainActivity.isActive` | `BLACKHOLED` is **active** — the row stays highlighted and its menu offers Disconnect, not a connect row |
 | `MainActivity` Disconnect gate | `BLACKHOLED` **and** `ERROR` both show Disconnect |
 | `XrayVpnService.repostOngoingNotification` | `BLACKHOLED` restores 1101 only (1105 is `setAutoCancel` — re-posting it would fight a deliberate dismissal); `ERROR` restores 1101 **only when** `giveUpOutcome == UNPROTECTED` |
 
@@ -273,6 +291,80 @@ Three deliberate **non**-changes: `MainActivity.isConnecting`, `VpnViewModel`'s
 `filter { CONNECTING }` error gate (widening it would erase the very error the user needs), and
 `XrayVpnService`'s `wasPaused` check (`BLACKHOLED` is not the kill-switch's paused state, and
 `reviveTunnel` would no-op at `canReserveRevive` anyway).
+
+## Reconnect: the affordance a give-up actually offers
+
+A give-up used to leave every connect control **disabled**, on the reasoning that the service was
+still running so a connect would no-op. That is true of a plain connect and false as a conclusion: it
+left the user staring at a dead button in the one state where they most need a live one, with the
+alert telling them to pick another server. The connect gate is therefore no longer a boolean.
+
+### `ConnectAction` — three values, not two
+
+`state/VpnViewModel.kt` holds three small top-level functions (`internal`, JVM-tested by
+`state/ConnectActionTest`). They **replace the former boolean `canConnect`, which no longer exists**:
+
+| Function | Contract |
+|---|---|
+| `connectAction(state)` | `DISCONNECTED`/`ERROR` → `CONNECT`; `BLACKHOLED` → `RECONNECT`; `CONNECTED`/`CONNECTING`/`PAUSED` → `UNAVAILABLE`. An exhaustive `when`, so a new `VpnConnectionState` is a compile error here. |
+| `connectLabelRes(action, isConnecting)` | The label. `isConnecting` wins outright ("Connecting…"); otherwise `RECONNECT` → `main_button_reconnect`, everything else → `main_button_connect`. |
+| `connectEnabled(action, isConnecting)` | `action != UNAVAILABLE && !isConnecting`. |
+
+`ERROR` maps to `CONNECT` rather than `RECONNECT` on purpose: `ERROR` is where `UNPROTECTED` lands,
+and "reconnect" would overstate what is left when the core could not establish at all. `UNPROTECTED`
+keeps its own recovery path (`shouldRestartForRecovery`, below) — it never reaches `ReconnectFlow`.
+
+> **The label and enablement halves are deliberately fed DIFFERENT arguments.** Every call site is
+> `connectLabelRes(action, isConnecting)` beside `connectEnabled(action, isConnecting || requestInFlight)`.
+> Only the reconnect *target* should read "Connecting…", while *every* control must be disabled (a
+> contending tap would be refused anyway) — a single flag made thirty unrelated servers claim to be
+> connecting. The invariant "never enabled while it reads Connecting…" holds because the widened set
+> is a superset of the narrow one. **Do not "restore" identical arguments**; that is the defect, not
+> the fix. `connectEnabled`'s KDoc says the same thing at the code.
+
+### `ReconnectFlow` — stop, settle, start, verify
+
+`state/ReconnectFlow.kt` is framework-free (the `FastestConnectRunner` shape) and is **the canonical
+home for why Reconnect is sequenced this way**; `VpnViewModel.reconnect` and `MainActivity`'s connect
+choke point both point at it rather than restating it. `ReconnectFlowTest` drives every rule.
+
+The sequence: dispatch `stop()` → await `DISCONNECTED` for up to `STOP_TIMEOUT_MS` (**8 000 ms**) →
+`start(profileId)` → confirm the state leaves `DISCONNECTED` within `START_VERIFY_MS` (**2 000 ms**),
+re-dispatching the start **exactly once** if it did not.
+
+Three things about that shape are load-bearing:
+
+- **Why not `shouldRestartForRecovery`.** Widening it to cover the contained outcomes is the obvious
+  fix and the one that must NOT happen. `CONTAINED_BY_LIVE_TUNNEL` has a **running Xray core**, and
+  that path calls `stopVpn` on the **main thread**, where `stopXray()` would become a real
+  `instance.Close()` — precisely the RISK-1 hazard below, which is cleared *only* because
+  `UNPROTECTED` implies an already-stopped core. `ACTION_STOP` already marshals onto the service's
+  `tunnelOpScope`, so stop → settle → start keeps every blocking call off the main thread and needs
+  no change to `stopVpn` at all. **Both** contained outcomes share this one path; the blackhole case
+  deliberately gets no separate "faster" route, because two restart paths would be one rule in two
+  homes — the shape behind most of this feature's defects.
+- **The start is verified, not assumed.** `stopVpn` publishes `DISCONNECTED` about a dozen lines
+  before `stopSelf()`. A start dispatched inside that window reaches AMS, `onStartCommand` runs, and
+  the pending `stopSelf()` then tears down the *new* session along with the old one. The single
+  bounded re-dispatch lands on a fresh instance. It is bounded at one because a start that fails for
+  a real reason (no profile, permission revoked) fails identically twice; a redundant second start is
+  harmless (`startVpn` refuses it, and `activeProfileIdToRestoreOnRefusedStart` writes nothing for
+  equal ids).
+- **First request wins.** `reconnectingProfileId` is armed *synchronously*, before the coroutine is
+  launched, so a second tap is refused and **reported** (`reportConnectRequestSuperseded`) rather
+  than queued — matching the rule this branch settled for the parked-connect slot. This matters
+  because the teardown window can last seconds while the state is still `BLACKHOLED`, so the
+  affordance keeps rendering and a re-tap is the natural user response; a second `stop()` landing
+  after the first flow's start would kill the session the user just asked for. A `generation` counter
+  stops a cancelled job's cleanup clearing a slot its successor already owns.
+
+`reconnectingProfileId` publishes the **target id**, not a flag, for the label/enablement split
+described above. `VpnViewModel.cancelReconnect` is wired to the in-app Disconnect *only* and is
+deliberately NOT called from `disconnect()` — that method is the flow's own first step, so cancelling
+there would make every reconnect cancel itself and silently degrade Reconnect into Disconnect.
+
+**Two limits are recorded rather than closed** — the QS tile / notification Stop override, and
+`viewModelScope` lifetime. Both are in [Known limitations](#known-limitations-and-accepted-trade-offs).
 
 ## "Disconnect now, stop if the re-arm fails"
 
@@ -461,10 +553,12 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 - **The winner is re-gated TWICE — production side and consumption side — and both are needed.** The
   run can last minutes (`timeout × ceil(n / concurrency)`), and the winner can then sit **unconsumed
   indefinitely** because the Compose frame clock pauses below `STARTED`.
-  - *Production-side* (`FastestConnectRunner`): `canConnect` is a **closure**, evaluated immediately
-    before `_winnerId` is set, so it cannot be a stale captured value by construction. This bounds the
-    probe's own window.
-  - *Consumption-side* (`MainActivity`'s `LaunchedEffect(fastestWinnerId)`): re-checks `canConnect(state)`
+  - *Production-side* (`FastestConnectRunner`): its `canConnect` **constructor closure** — wired by
+    `VpnViewModel` to `connectAction(...) != UNAVAILABLE`, so `BLACKHOLED` still delivers — is
+    evaluated immediately before `_winnerId` is set, so it cannot be a stale captured value by
+    construction. This bounds the probe's own window.
+  - *Consumption-side* (`MainActivity`'s `LaunchedEffect(fastestWinnerId)`): re-checks
+    `connectAction(state) != ConnectAction.UNAVAILABLE`
     against the live collected state right before `onConnect(winnerId)`; on failure it calls
     `discardFastestWinner()` (consume **and** report `STATE_CHANGED` — never silent). Both branches
     consume, so a winner can never re-fire.
@@ -489,6 +583,25 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
   `MainActivity`'s permission-checked flow (notification permission, then `VpnService.prepare()`
   consent). Surfacing the winner as ViewModel state and letting Compose consume it through the same
   `onConnect` keeps that invariant and survives an Activity recreation mid-probe.
+- **The shared entry point refuses to overwrite a parked choice.** `MainActivity`'s `onConnect`
+  lambda is the single choke point for a manual per-server tap **and** for connect-to-fastest's
+  winner delivery, and it is also where the `RECONNECT` branch lives (one mechanism, one home). A
+  system permission dialog can park a request in the single `pendingProfileId` slot for minutes, and
+  that dialog is a modal *continuation* of the request that raised it — so
+  `vpn/SessionLifecycleDecision.shouldOverwritePendingConnect(pending, incoming)` admits an incoming
+  request only when the slot is empty (`-1L`) or already names the same profile. **Whichever request
+  parked first wins**, and the loser is reported via `reportConnectRequestSuperseded()` rather than
+  dropped silently.
+  - **The QS-tile hand-off is guarded by the same call.** `maybeAutoConnectFromTile` writes the same
+    slot, so it goes through `shouldOverwritePendingConnect` too — one uniform rule across all
+    **three** writers rather than a per-source hierarchy, because no refusal occurs on an overwrite,
+    so nothing downstream would ever notice the substitution and the user could neither observe nor
+    predict an asymmetry. The tile's extras are stripped before the check, so the hand-off is
+    consumed either way; a refusal is reported, not swallowed.
+  - **The `RECONNECT` branch releases the slot** (`pendingProfileId = -1L`) before dispatching. It
+    needs no permission prompt — a session is already running, so consent was granted — so it owns
+    the request outright; a `POST_NOTIFICATIONS` dialog opened earlier and answered later would
+    otherwise connect a second, different profile out from under the reconnect.
 
 ## Components
 
@@ -505,9 +618,11 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 | [`failover/FailoverSettingsPersistDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverSettingsPersistDecision.kt) | Pure `resolveFailoverSettings(...)` — the autosave rule extracted out of the Activity so it is JVM-testable (the codebase's `TileClickDecision`/`StartCommandDecision` shape). |
 | [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free Connect-to-fastest orchestration: generation-counter job replacement, delivery-time re-gate, `FastestConnectOutcome` (NO_RESPONSE / BUSY / STATE_CHANGED), cancellation cleanup. |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Pure `pickFastest(states, candidates)` and `clearStaleTesting(states, ids)`. |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`, `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`. |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`, `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
+| [`state/ConnectAction`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) (in `VpnViewModel.kt`) | The connect gate: `ConnectAction` + `connectAction`/`connectLabelRes`/`connectEnabled`. Replaces the former boolean `canConnect`. |
+| [`state/ReconnectFlow.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ReconnectFlow.kt) | Framework-free stop→settle→start→verify sequencing for Reconnect: `STOP_TIMEOUT_MS`, `START_VERIFY_MS`, the first-wins in-flight guard (`reconnectingProfileId`), `generation` cleanup, `cancel()`. Canonical home for **why** Reconnect is not a `shouldRestartForRecovery` widening. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, `establishBlackholeTunnelLocked`, `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |
-| [`vpn/VpnNotifications.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) | Channels 4 and 5 and ids 1104/1105; `postFailover`, the three `postFailover*` give-up variants (shared id + `postGiveUp` builder), `cancelFailoverBlackholed`. Also id 1106 / `postKillSwitchNotApplied` — a new id on the kill-switch's **existing** exposure channel. |
+| [`vpn/VpnNotifications.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) | Channels 4 and 5 and ids 1104/1105; `postFailover`, the three `postFailover*` give-up variants (shared id + `postGiveUp` builder), `cancelFailoverBlackholed`. Also id 1106 / `postKillSwitchNotApplied` — a new id on the kill-switch's **existing** exposure channel — **and its `cancelKillSwitchNotApplied` counterpart** (see below). |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `VpnConnectionState.BLACKHOLED`. |
 | `res/values/strings.xml`, `res/values-ru/strings.xml` | All failover strings, both locales (release lint fails on a missing one). |
 | `AndroidManifest.xml` | `ACCESS_NETWORK_STATE` (required — `cm.allNetworks` throws `SecurityException` without it) and the `FailoverSettingsActivity` entry (`exported="false"`, like every sibling settings screen). |
@@ -533,9 +648,6 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
 - **`TunnelHealthMonitor` has no constructor validation.** `failureThreshold <= 0` fires on the first
   failure (`>=` comparison); `intervalMs <= 0` hot-spins the loop. Both are unreachable through
   `FailoverPreferences.coerce`, which is the only production source.
-- **Disabling auto-failover while a give-up is showing** stops the monitor, so
-  `clearGiveUpStateOnRecovery` can never fire — `BLACKHOLED` and the blackhole TUN persist until a
-  manual disconnect. Fail-closed and Disconnect works, so non-blocking.
 - **The kill-switch can pause a blackholed session**, leaving 1105 ("paused to keep you protected")
   showing next to the kill-switch's 1103 ("VPN is OFF — you're exposed"). A contradictory pair;
   `giveUpOutcome` is not cleared by `killTunnel`.
@@ -553,8 +665,8 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
 - **`UNPROTECTED` can briefly coexist with a live tunnel and a running core** — `bringUpTunnel` releases
   `lock` after `establish()` + `startXray()`, and the rotation's `.onSuccess` only clears
   `giveUpOutcome` after re-acquiring it. A start intent queued on the main thread could win the lock in
-  between. Unreachable from the UI (during a rotation the state is `CONNECTING`, so `canConnect` is
-  false and the tile returns `Stop`); it needs a duplicated/queued intent. The outcome is still correct
+  between. Unreachable from the UI (during a rotation the state is `CONNECTING`, so `connectAction`
+  returns `UNAVAILABLE` and the tile returns `Stop`); it needs a duplicated/queued intent. The outcome is still correct
   — epoch discipline no-ops the rotation's `.onSuccess`.
 - **The `UNPROTECTED` recovery restart flickers through `DISCONNECTED`.** `startVpn` reaches it via
   `stopVpn(stopService = false)`, which publishes `DISCONNECTED` before the fall-through path
@@ -576,6 +688,29 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   "try again", so a wrong label misexplains without misleading into a wrong action.
 - **`PingCoordinator`'s cross-run dedup can hand `pickFastest` a stale `Success`** from an earlier run,
   producing a winner chosen from non-fresh data with no message. See [`ping-test.md`](ping-test.md).
+- **`clearStaleTesting` can reset a row belonging to an overlapping concurrent run.** Its `ids`
+  argument is the whole **resolved pool**, including ids `PingCoordinator.runGroup` deduped and never
+  admitted — so cancelling a connect-fastest run can briefly flip a `Testing` row owned by a
+  concurrent group ping back to `Idle`. **Self-healing and accepted:** the other run writes its own
+  terminal state when it finishes. Narrowing it would mean tracking which ids this run actually
+  admitted, i.e. modifying `PingCoordinator`, which was out of scope.
+- **A Stop from the QS tile or the ongoing notification overrides a Reconnect in flight** — up to
+  ~10 s (`STOP_TIMEOUT_MS` + `START_VERIFY_MS`), and reachable whenever `MainActivity` is merely
+  **backgrounded**, since the ViewModel and its `ReconnectFlow` are still alive. `ReconnectFlow`
+  watches `LogRepository.connectionState`, which is **source-blind**: it cannot tell its own stop from
+  anyone else's, so it reads the user's `DISCONNECTED` as its own teardown completing and starts the
+  VPN back up. The in-app Disconnect **is** handled — it calls `VpnViewModel.cancelReconnect()` — but
+  the tile (`XrayVpnTileService`) and the 1101 Stop action both dispatch `ACTION_STOP` straight to the
+  service and never reach that call. Closing it properly needs the service to publish a *stop was
+  requested* signal the flow can distinguish from its own, which means changing human-review-gated
+  `vpn/`; it was recorded rather than half-done. **If you are working in the tile or the notification
+  Stop path, this is your marker: your stop can invert a reconnect.** QA covers it as Test 21.
+- **A reconnect in flight dies if the Activity is *finished*.** `ReconnectFlow.run` is launched on
+  `viewModelScope`, so the `finally` clears the guard and nothing restarts the VPN — the user is left
+  disconnected. Rotation and backgrounding are **not** affected (the ViewModel survives both); only a
+  genuine finish (back-out, swipe from recents, process death) is. Fail-safe and honest — it fails to
+  "VPN off", never to a silently unprotected tunnel — and moving the sequence to the service would
+  mean building the same stop-source signal the limitation above needs. QA covers it as Test 22.
 > **Note on `failover_hint`.** An earlier draft of this string read "the tunnel is kept up so your
 > traffic is never exposed" — true for both *contained* outcomes but **false for `UNPROTECTED`**,
 > where `establish()` itself failed. It was rewritten (commit `4091571`) to promise a pause rather
@@ -611,16 +746,27 @@ is itself the argument for doing it.
 |---|---|
 | `failover/FailoverPreferencesTest` (8) | Defaults; every bound clamps on load **and** save; the `timeout < interval` pair rule; `load`/`save` I/O against mocked `SharedPreferences` (the `KillSwitchRepositoryTest` precedent), with `save` pinning the **coerced** value per key via `eq()`, not a bare `any()`. |
 | `failover/Http204HealthProbeTest` (5) | 204 → healthy; non-204/throwing opener → false, never a throw; `CancellationException` **propagates** rather than being swallowed. |
-| `failover/TunnelHealthMonitorTest` (15) | Threshold counting; the offline guard skips the tick **and** resets the counter; a throwing availability check is treated as offline; terminal-after-fire across both pause/resume orderings; a throwing listener does not kill the loop; tick continuation. |
+| `failover/TunnelHealthMonitorTest` (16) | Threshold counting; the offline guard skips the tick **and** resets the counter; a throwing availability check is treated as offline; terminal-after-fire across both pause/resume orderings; a throwing listener does not kill the loop; tick continuation. |
 | `failover/FailoverDecisionTest` (7) | `nextCandidate` skips the current id and episode failures; `admitRotation` admits under the cap, denies at it, and slides the window. |
 | `failover/FailoverPoolResolverDispatchTest` (4) | Manual profile → `getManualList`, subscription profile → `getBySubscriptionId`; a fake DAO records calls and throws `UnsupportedOperationException` on any unexpected method, so a wrong dispatch fails loudly. |
 | `failover/FailoverSettingsPersistDecisionTest` (12) | Per-control autosave: an invalid field never vetoes the tuple; the timeout ceiling is derived from the **effective** interval; the exact headroom boundary (9 000 at interval 10 000) is accepted and the coerce-gap value (9 500) is rejected. |
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
-| `failover/FastestConnectRunnerTest` (7) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
-| `vpn/SessionLifecycleDecisionTest` (42) | Every pure service rule above, including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the transition-defer guard. |
+| `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
+| `vpn/SessionLifecycleDecisionTest` (49) | Every pure service rule above, including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the transition-defer guard, `shouldReleaseGiveUpOnDisable`, and `shouldOverwritePendingConnect`. |
 | `vpn/SessionLifecycleRotationTest` (8) | Rotation reservation, the give-up predicates, and `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left). |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
-| `tile/TileClickDecisionTest` | `BLACKHOLED` → `Stop`, with and without a profile. |
+| `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
+| `state/ReconnectFlowTest` (9) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process). |
+| `tile/TileClickDecisionTest` (16) | `BLACKHOLED` → `Stop`, with and without a profile; `everyLiveStateDecidesStop` pins the whole live set in one place; `everyStateIsClassifiedExplicitly` enumerates **the full enum**, so widening `VpnConnectionState` fails a test rather than silently falling through to `Start`. That last one is the grep sweep, automated — `XrayVpnTileService.handleClick`'s hand-written duplicate of this gate is still uncovered (see below). |
+| `MainActivityStateTest` (4) | `isActive` — every live state keeps the active row highlighted (incl. `BLACKHOLED`), dead states highlight nothing, another/`null` profile is never highlighted, and the same full-enum classification guard. `isActive` is `internal` (not `private`) purely so this test can reach it; it was **not** moved. |
+
+> **The one gate still without a test is `XrayVpnTileService.handleClick`.** It re-states
+> `decideTileClick`'s Stop chain by hand for its no-IO fast path, and it is an Android `TileService`
+> method, so no JVM test can call it. `TileClickDecisionTest`'s full-enum guard fails loudly for the
+> *pure* copy, which is the closest available proxy — but it cannot see the duplicate. **A new
+> `VpnConnectionState` must be added to `handleClick` by hand, and only a reader will catch it.**
+> Extracting the shared gate would close this, and is a behavioural change deliberately not made in a
+> test-and-docs pass.
 
 **Instrumented tests** (`:app:connectedDebugAndroidTest`, local only — not in CI):
 

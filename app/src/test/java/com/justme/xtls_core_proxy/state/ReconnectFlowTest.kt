@@ -245,7 +245,10 @@ class ReconnectFlowTest {
 
     @Test
     fun theInFlightGuardReleasesSoALaterReconnectIsAdmitted() = runTest {
-        // Without this, Reconnect would work exactly once per process.
+        // Without this, Reconnect would work exactly once per ReconnectFlow instance — i.e. once
+        // per ViewModel, since VpnViewModel owns exactly one. NOT once per process: a new
+        // ViewModel (a fresh Activity after the old one was finished) builds a fresh flow with a
+        // released guard, which is what made the wedge look intermittent rather than permanent.
         val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
         val calls = mutableListOf<String>()
         val flow = flowFor(state, calls, testScheduler)

@@ -35,7 +35,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
 │       │   │   ├── config/         ConfigBuilder (mandatory normalization + fragmentation→mux→DNS→routing→core overlays), ConfigSanitizer (read-only inverse diagnostic), overlay models/preferences, LogSettings, profile codecs/share links, JsonFormatter → docs/features/
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
-│       │   │   ├── failover/       Auto-failover → docs/features/auto-failover.md: FailoverPreferences (+ the timeout<interval coerce), HealthProbe/Http204HealthProbe (204 through the LIVE tun), NetworkAvailability (offline guard), TunnelHealthMonitor (terminal-after-fire poll loop), FailoverDecision (nextCandidate + sliding thrash cap), FailoverPoolResolver (SPEC 2 SEAM, shared with connect-to-fastest), FailoverSettingsActivity + FailoverSettingsPersistDecision, FastestConnectRunner/FastestPick
+│       │   │   ├── failover/       Auto-failover → docs/features/auto-failover.md: FailoverPreferences (+ the timeout<interval coerce), HealthProbe/Http204HealthProbe (204 through the LIVE tun), NetworkAvailability (offline guard), TunnelHealthMonitor (terminal-after-fire poll loop), FailoverDecision (nextCandidate + sliding thrash cap), FailoverPoolResolver (SPEC 2 SEAM, shared with connect-to-fastest), FailoverSettingsActivity + FailoverSettingsPersistDecision, FastestConnectRunner/FastestPick (the delivery-time re-gate takes an injected canConnect closure, wired to state/connectAction — BLACKHOLED still delivers). The Reconnect affordance a give-up offers lives in state/ (ConnectAction + ReconnectFlow), not here
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
@@ -45,7 +45,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/ (the Tunnel → Auto-failover row opens failover/FailoverSettingsActivity); DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
-│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel, PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
+│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel (+ the connect gate: ConnectAction/connectAction/connectLabelRes/connectEnabled — three-valued, replaced the old boolean canConnect), ReconnectFlow (stop→settle→start→verify for RECONNECT; first-request-wins in-flight guard), PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; SubscriptionRefreshCoordinator loads device-identity settings and augments fetch errors with HWID/UA guidance; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
@@ -61,7 +61,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
 │   │   ├── app-appearance.md        Theme modes (System/Light/Dark/True Dark) + Material You; live repo recompose; Theme.kt inline-SDK-guard gotcha
 │   │   ├── auto-connect-boot.md     Stateless explainer + deep-link to OS Always-on VPN (no boot receiver, no local state)
-│   │   ├── auto-failover.md        Tunnel health watchdog, rotation engine, three-outcome fail-closed give-up (blackhole TUN), BLACKHOLED state, "disconnect now, stop if re-arm fails", connect-to-fastest
+│   │   ├── auto-failover.md        Tunnel health watchdog, rotation engine, three-outcome fail-closed give-up (blackhole TUN), BLACKHOLED state, Reconnect (ConnectAction + ReconnectFlow), "disconnect now, stop if re-arm fails", connect-to-fastest
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
 │   │   ├── config-sanitization.md  Read-only inverse diagnostic over the effective runtime pipeline
@@ -432,9 +432,15 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   only outcome that admits exposure (`UNPROTECTED`) says so honestly on every surface, gets exactly one
   automatic recovery rotation, and then **stops the service** rather than running while protecting
   nothing. `VpnConnectionState.BLACKHOLED` is a live, stoppable state — every surface that treats a
-  running session as stoppable must include it (tile Stop gate ×2, tile render, `canConnect`, the
-  in-app Disconnect gate). Widening that enum needs a **grep sweep**, not a green build: it is read by
-  plain boolean chains the compiler cannot flag. See `docs/features/auto-failover.md`.
+  running session as stoppable must include it (tile Stop gate ×2, tile render, `MainActivity.isActive`,
+  the in-app Disconnect gate). The **connect** gate is a separate question with a different answer and
+  is no longer a boolean: `state/connectAction` maps `BLACKHOLED` to **`RECONNECT`** (not "not
+  connectable"), which `state/ReconnectFlow` serves as a sequenced stop-then-start — a plain connect
+  would hit "VPN already running". Widening that enum needs a **grep sweep**, not a green build: it is
+  read by plain boolean chains the compiler cannot flag. Two JVM whole-enum guards now automate most of
+  that sweep (`TileClickDecisionTest` and `MainActivityStateTest`), but `XrayVpnTileService.handleClick`
+  hand-duplicates the tile Stop gate and **no test can reach it** — update it by hand.
+  See `docs/features/auto-failover.md`.
 - Xray-core writes a **raw, unredacted** error log to the app-private `filesDir/logs/xray-core.log`
   during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory
   `LogRepository` buffer — never that file. Do not add a code path that reads or shares the file
@@ -522,12 +528,18 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   - `vpn/SessionLifecycleDecision.kt` — every service-side rule is a pure function there
     (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`,
-    `classifyGiveUpOutcome`, `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`,
-    `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`). Add rules there, not as new
+    `classifyGiveUpOutcome`, `connectionStateForGiveUp`, `shouldStopServiceOnGiveUp`,
+    `shouldFireFailoverRetry`, `shouldRestartForRecovery`,
+    `activeProfileIdToRestoreOnRefusedStart`, `shouldReleaseGiveUpOnDisable`,
+    `shouldOverwritePendingConnect`). Add rules there, not as new
     inline `when` branches in the service. **`stopVpn` must never gain anything that awaits** — the
     UNPROTECTED recovery restart calls it on the main thread and cannot dispatch-and-await without
-    deadlocking. The *sequencing* around these rules is still untested off-device; the recorded
-    follow-up is a `vpn/FailoverEngine` behind a narrow `TunnelHost` seam.
+    deadlocking. **Never widen `shouldRestartForRecovery` beyond `UNPROTECTED`**: the contained
+    outcomes hold a *running Xray core*, so the same path would turn a main-thread no-op into a real
+    `instance.Close()`. That is why `RECONNECT` is sequenced by `state/ReconnectFlow` (which stops via
+    `ACTION_STOP`, already marshalled onto `tunnelOpScope`) instead. The *sequencing* around these
+    rules is still untested off-device; the recorded follow-up is a `vpn/FailoverEngine` behind a
+    narrow `TunnelHost` seam.
 - Profile config extension points:
   per-protocol codecs `config/ProfileConfigCodec.kt` (VLESS URI/JSON, `ConfigKind` detection),
   `config/Hysteria2ConfigCodec.kt` (Hysteria2 model, URI parse, Xray JSON build/extract/merge — `toXrayJson` applies `ConfigBuilder.makeSecureDns` itself; `toShareLink` — inverse of `parseUri`, emits `hy2://` links), and

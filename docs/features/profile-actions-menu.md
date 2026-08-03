@@ -21,7 +21,9 @@ if (menuProfile != null) {
     ProfileActionsDialog(
         profile = profile,
         isConnectedProfile = isActive(profile, activeId, state),
-        canConnect = canConnect(state),
+        action = connectAction(state),
+        isConnecting = reconnectingId == profile.id,
+        requestInFlight = reconnectInFlight,
         shareLink = shareLink,
         ...
         onDismiss = { menuProfile = null }
@@ -48,8 +50,8 @@ non-destructive rows from Delete.
 | Order | Label | Icon | Condition | Enabled |
 |---|---|---|---|---|
 | 1 | Disconnect | `ic_power_off` (drawable) | `isConnectedProfile == true` | always |
-| 1 | Connect | `Icons.Filled.PlayArrow` | `isConnectedProfile == false` | `canConnect` only |
-| 2 | Connect to fastest | `ic_bolt` (drawable) | always shown | `canConnect` only |
+| 1 | Connect **/ Reconnect** | `Icons.Filled.PlayArrow` | `isConnectedProfile == false` | `connectEnabled(action, isConnecting \|\| requestInFlight)` |
+| 2 | Connect to fastest | `ic_bolt` (drawable) | always shown | same expression as row 1 |
 | 3 | Ping test | `ic_speedometer` (drawable, reused from ping-test group header) | always shown | always |
 | 4 | Edit | `Icons.Filled.Edit` | always shown | always |
 | 5 | Copy link | `ic_link` (drawable) | `shareLink != null` only | always |
@@ -57,11 +59,27 @@ non-destructive rows from Delete.
 | — | *(divider)* | | | |
 | 7 | Delete | `Icons.Filled.Delete` | always shown | always |
 
-Connect/Disconnect occupies the same row slot — exactly one variant is shown, never both. The Connect
-row is greyed out (alpha 0.38) and non-clickable when `canConnect` is false — i.e. when
-`VpnConnectionState` is `CONNECTED`, `CONNECTING`, `PAUSED`, or `BLACKHOLED` (another profile may be
-active, a connection is in progress, the tunnel is paused, or the tunnel is deliberately blackholed by
-auto-failover).
+Connect/Disconnect occupies the same row slot — exactly one variant is shown, never both.
+
+**The connect gate is a three-valued `ConnectAction`, not the former boolean `canConnect` (which no
+longer exists).** `state/connectAction(state)` maps `CONNECTED`/`CONNECTING`/`PAUSED` → `UNAVAILABLE`,
+`DISCONNECTED`/`ERROR` → `CONNECT`, and **`BLACKHOLED` → `RECONNECT`**. So the row is greyed out
+(alpha 0.38) and non-clickable when another profile is active, a connection is in progress, or the
+tunnel is kill-switch-paused — **but in `BLACKHOLED` it is live and reads "Reconnect"**, because an
+auto-failover give-up leaves the service running and "pick another server" is exactly the remedy its
+alert offers. A plain Connect there would hit `startVpn`'s "VPN already running" and do nothing, which
+is why `RECONNECT` routes through `state/ReconnectFlow`'s stop-then-start instead. See
+[`auto-failover.md`](auto-failover.md#reconnect-the-affordance-a-give-up-actually-offers).
+
+Both the Connect and the Connect-to-fastest row use **`connectEnabled(action, isConnecting ||
+requestInFlight)`** for enablement while the label uses **`connectLabelRes(action, isConnecting)`** —
+the narrow flag for the label, the widened one for enablement. `isConnecting` is "*this* profile is
+the one being reconnected" (it scopes the "Connecting…" label to one row); `requestInFlight` is "*some*
+reconnect is running" (it disables every control, since a contending tap would be refused anyway). A
+reconnect holds the connection state at `BLACKHOLED` for its whole teardown, so `action` still reads
+`RECONNECT` throughout — without the second flag the row would stay enabled and a re-tap would
+dispatch a stop into the teardown of the session the first tap asked for. **The two arguments are
+asymmetric on purpose; do not collapse them.**
 
 Every action callback in `MainScreen` sets `menuProfile = null` after running, so the dialog always
 dismisses once an action is chosen (including Copy link / Copy config).
@@ -121,22 +139,25 @@ misleading — the server may be fine, this run just never got a fresh read on i
 once when it is *produced*, and again when it is *consumed* — two independent checkpoints around
 one unbounded gap, not a redundant pair.
 
-- **Production-side (`FastestConnectRunner`):** a run spanning minutes means the connection state
-  can leave the connectable set (`CONNECTED`/`CONNECTING`/`PAUSED`/`BLACKHOLED`) while it is in
-  flight — another Connect action, the QS tile, or auto-failover can all cause this.
-  `FastestConnectRunner` re-checks `state/VpnViewModel.canConnect` (a shared top-level function, not
-  duplicated) against the fresh connection state immediately before ever setting the winner; if it
-  now fails, the winner is discarded and `failover_connect_fastest_state_changed_error` is reported.
+- **Production-side (`FastestConnectRunner`):** a run spanning minutes means the connection state can
+  enter one of the states that **refuse** a connect (`CONNECTED`/`CONNECTING`/`PAUSED` — the three
+  `connectAction` maps to `UNAVAILABLE`) while it is in flight; another Connect action, the QS tile,
+  or auto-failover can all cause this. Note `BLACKHOLED` is **not** one of them and still delivers.
+  `FastestConnectRunner` re-checks its injected `canConnect` closure — wired by `VpnViewModel` to the
+  shared `connectAction` rule, not duplicated — against the fresh connection state immediately before
+  ever setting the winner; if it now fails, the winner is discarded and
+  `failover_connect_fastest_state_changed_error` is reported.
 - **Consumption-side (`MainActivity`):** the production-side check only bounds the probe's own
   window. The winner can then sit unconsumed for an UNBOUNDED time if the app is backgrounded before
   `MainScreen`'s `LaunchedEffect(fastestWinnerId)` runs — the Compose frame clock pauses below
   `STARTED`, so nothing consumes it until the user returns, however much later that is (they may
   connect elsewhere via the QS tile or always-on VPN in the meantime). `MainScreen` re-checks
-  `canConnect(state)` again, right before calling `onConnect(winnerId)`; on failure it calls
+  `connectAction(state) != ConnectAction.UNAVAILABLE` again, right before calling
+  `onConnect(winnerId)`; on failure it calls
   `VpnViewModel.discardFastestWinner()` (consumes + reports the same `STATE_CHANGED` message)
   instead.
 
-**The row's own `enabled = canConnect` (checked once, at tap time) is a cheap, obvious
+**The row's own `enabled` (checked once, at tap time) is a cheap, obvious
 no-op-prevention gate only — it does NOT by itself guarantee correctness of a winner minutes, or
 longer, later.** Without BOTH re-checks, a stale winner firing into a no-longer-connectable state
 would have `connect()` silently keep the OLD tunnel up (`XrayVpnService.startVpn`'s "VPN already
@@ -236,9 +257,10 @@ notification action.
 | [`config/ProfileConfigCodec.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/ProfileConfigCodec.kt) | VLESS URI reconstruction (`toVlessUri`) |
 | [`config/Hysteria2ConfigCodec.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/config/Hysteria2ConfigCodec.kt) | Hysteria2 link reconstruction (`toShareLink`) |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Connect-to-fastest pure logic — `pickFastest` (lowest-latency successful candidate) and `clearStaleTesting` (post-cancel `pingStates` cleanup) |
-| [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free orchestrator — job replacement/cancellation, the delivery-time `canConnect` re-gate, busy-vs-no-response messaging (`FastestConnectOutcome`) |
+| [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free orchestrator — job replacement/cancellation, the delivery-time re-gate on its injected `canConnect` closure, busy-vs-no-response messaging (`FastestConnectOutcome`) |
 | [`failover/FailoverPoolResolver.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverPoolResolver.kt) | Single source of truth for "the pool a profile belongs to" — shared with auto-failover, `resolve(dao, profile)` |
-| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `canConnect` (shared connectability check, also used by `MainActivity`), owns the one `FastestConnectRunner` instance, `connectFastest`/`cancelConnectFastest`/`connectFastestActive`/`fastestWinnerId`/`consumeFastestWinner` delegate to it |
+| [`state/VpnViewModel.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) | `ConnectAction` + `connectAction`/`connectLabelRes`/`connectEnabled` (the shared connect gate, also used by `MainActivity`; **replaces the former boolean `canConnect`**), owns the one `FastestConnectRunner` instance, `connectFastest`/`cancelConnectFastest`/`connectFastestActive`/`fastestWinnerId`/`consumeFastestWinner` delegate to it, plus `reconnect`/`cancelReconnect`/`reconnectingProfileId` over the one `ReconnectFlow` |
+| [`state/ReconnectFlow.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ReconnectFlow.kt) | The stop→settle→start→verify sequence behind the **Reconnect** variant of row 1 |
 
 ## Testing
 
@@ -250,7 +272,10 @@ JVM unit tests (`:app:testDebugUnitTest`):
 | [`Hysteria2ConfigCodecTest`](../../app/src/test/java/com/justme/xtls_core_proxy/Hysteria2ConfigCodecTest.kt) | `toShareLink` round-trips: common fields (sni, alpn, insecure, salamander), port-hopping + salamander, finalmask blob carried verbatim |
 | [`FastestPickTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestPickTest.kt) | `pickFastest`: lowest latency wins, ignores `Unavailable`/`Testing`, null when nothing succeeded, ignores results for ids outside the candidate list |
 | [`ClearStaleTestingTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/ClearStaleTestingTest.kt) | `clearStaleTesting`: resets in-pool `Testing` ids to `Idle`, leaves resolved ids untouched, never touches `Testing` ids outside the pool |
-| [`FastestConnectRunnerTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestConnectRunnerTest.kt) (7) | `FastestConnectRunner` sequencing, driven with `kotlinx-coroutines-test` against a real (not faked) `PingCoordinator`: a superseding run's `active` flag survives the superseded run's own cancellation-driven cleanup; the same holds for a supersede with an **identical** pool (two long-presses in one subscription — the realistic case — with no false `BUSY`); `cancel()` resets in-pool `Testing` ids to `Idle`; a winner found after `canConnect` turns false is discarded and reported `STATE_CHANGED`, never delivered; a winner found while still connectable is delivered; no winner with nothing pre-existing in flight reports `NO_RESPONSE`; no winner with a pool id already `Testing` beforehand reports `BUSY` instead |
+| [`ConnectActionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/state/ConnectActionTest.kt) (7) | The connect gate behind rows 1 and 2: the full state→action map, `BLACKHOLED` → `RECONNECT`, the per-action label, and that an affordance reading "Connecting…" is never also tappable |
+| [`FastestConnectRunnerTest`](../../app/src/test/java/com/justme/xtls_core_proxy/failover/FastestConnectRunnerTest.kt) (8) | `FastestConnectRunner` sequencing, driven with `kotlinx-coroutines-test` against a real (not faked) `PingCoordinator`: a superseding run's `active` flag survives the superseded run's own cancellation-driven cleanup; the same holds for a supersede with an **identical** pool (two long-presses in one subscription — the realistic case — with no false `BUSY`); `cancel()` resets in-pool `Testing` ids to `Idle`; a winner found after `canConnect` turns false is discarded and reported `STATE_CHANGED`, never delivered; a winner found while still connectable is delivered; no winner with nothing pre-existing in flight reports `NO_RESPONSE`; no winner with a pool id already `Testing` beforehand reports `BUSY` instead |
 
 `ProfileActionsDialog` itself has no dedicated unit test — it is a pure Compose rendering component
-with no business logic of its own.
+with no business logic of its own. The two decisions it *renders* are covered above
+(`ConnectActionTest` for the enablement/label rule, `MainActivityStateTest` for the
+`isConnectedProfile` rule that chooses between the Disconnect and Connect variants of row 1).

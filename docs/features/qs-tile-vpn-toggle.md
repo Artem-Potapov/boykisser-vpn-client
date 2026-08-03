@@ -200,6 +200,18 @@ plain boolean chain in *two* places — `decideTileClick` **and** `handleClick`'
 `sendStopIntent`'s comment. Adding the state to the render while missing the chains once left the tile
 rendering active and behaving dead, which is strictly worse than looking dead.
 
+**The tile offers Stop only in `BLACKHOLED` — the in-app "Reconnect" has no tile equivalent.** The
+in-app connect affordance is now three-valued (`state/ConnectAction`) and renders **"Reconnect"** in
+`BLACKHOLED`, routing through `state/ReconnectFlow`'s stop-then-start; see
+[auto-failover.md](auto-failover.md#reconnect-the-affordance-a-give-up-actually-offers). A QS tile has
+one binary action, so it cannot offer both Stop and Reconnect — Stop is the correct choice, since it
+is the exit that always works and needs no server pick. **Consequence, and it is a real one:** a tile
+Stop dispatched *while a Reconnect is in flight* overrides that reconnect for up to ~10 s, because
+`ReconnectFlow` watches a source-blind state signal and reads the resulting `DISCONNECTED` as its own
+teardown completing. `VpnViewModel.cancelReconnect()` covers the **in-app** Disconnect only; the tile
+never reaches it. **If you touch `sendStopIntent` or the Stop gate, this is your marker.** Ledgered in
+auto-failover.md's Known limitations and QA'd as Test 21.
+
 **`ERROR` remains `STATE_INACTIVE`, and that is an accepted compromise.** `ERROR` now conflates two
 situations: "session dying, VPN off" (where `Start` *is* the right tile action) and auto-failover's
 `UNPROTECTED` give-up (service running but unprotected, where `Stop` would be). A tile has one action,
@@ -228,7 +240,9 @@ is a ledgered, accepted residual — do not "fix" the tile mapping without revis
 - VM's `activeProfileId` reflects repository writes from a simulated tile path (the test calls `ActiveProfileRepository.setActiveProfileId` directly rather than going through `VpnViewModel.connect`). Uses `vm.activeProfileId.first { predicate }` to wait for the emission — a plain `.value` read would not force the `stateIn` upstream live, since `WhileSubscribed` requires a collector.
 - VM's `error` reflects `LogRepository.emitError` emissions, localized against the application context, and clears on the next CONNECTING-state transition.
 
-**Tile click decision** is covered by [`TileClickDecisionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/tile/TileClickDecisionTest.kt), a fast JVM unit test against the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` function in [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt). The function lives outside `XrayVpnTileService` so the click pipeline can be exercised without the QS framework, a Context, or system services. Coverage: every `VpnConnectionState` value × profile-present-vs-absent × VPN-consent-needed-vs-not × notification-permission-missing-vs-not. `XrayVpnTileService.handleClick` translates `decideTileClick`'s `Stop` / `NoProfileToast` / `Start(id)` / `HandoffToMainActivity(id)` result into the appropriate intent dispatch, so the test indirectly covers the dispatch decision too.
+**Tile click decision** is covered by [`TileClickDecisionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/tile/TileClickDecisionTest.kt), a fast JVM unit test against the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` function in [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt). The function lives outside `XrayVpnTileService` so the click pipeline can be exercised without the QS framework, a Context, or system services. Coverage: every `VpnConnectionState` value × profile-present-vs-absent × VPN-consent-needed-vs-not × notification-permission-missing-vs-not, plus two whole-enum guards — `everyLiveStateDecidesStop` (the live set pinned in one place) and `everyStateIsClassifiedExplicitly` (iterates `VpnConnectionState.entries`, so **widening the enum fails a test** instead of silently falling through to `Start`).
+
+**What that test does *not* cover: `handleClick`'s own duplicate.** `handleClick` does **not** simply translate `decideTileClick`'s result — it re-states the Stop gate **by hand** for its no-IO fast path and returns early, reaching `decideTileClick` only on the start path. So the JVM test exercises the pure copy and *cannot see the duplicate*, which is precisely the copy that drifted and shipped a live-looking dead tile. `handleClick` is a `TileService` method, so no plain-JVM test can call it. **A new `VpnConnectionState` must be added to `handleClick` by hand; only a reader will catch it.** Extracting the shared gate would close this properly.
 
 **Long-press intent-filter resolution** is covered by [`XrayVpnTileLongPressTest`](../../app/src/androidTest/java/com/justme/xtls_core_proxy/tile/XrayVpnTileLongPressTest.kt), an instrumented test that queries `PackageManager` for `android.service.quicksettings.action.QS_TILE_PREFERENCES` and asserts that exactly one activity in this package resolves it — `MainActivity`. Catches manifest regressions that would silently send long-press back to the system Settings page.
 
