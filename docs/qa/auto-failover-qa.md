@@ -1,7 +1,11 @@
 # QA — Auto-Failover (manual on-device)
 
-**Build under test:** branch `feat/auto-failover-core`, HEAD `ea60354` (versionName `2.3.0R`,
+**Build under test:** branch `feat/auto-failover-core`, HEAD `6c2ac1a` (versionName `2.3.0R`,
 versionCode 4). Reinstall with `./gradlew :app:installDebug`.
+
+> **Test 23 requires this build or later.** The rotation bridge landed in `43e26d8`; on any earlier
+> HEAD the gap it covers is still open, so a tester on a stale build would capture cleartext during a
+> switch and report a leak that is already fixed. Confirm the installed commit before running it.
 
 **What auto-failover does (the behaviour you're verifying):** while connected, the app probes the
 **live tunnel** with an HTTP 204 request through the tun. After `failureThreshold` consecutive

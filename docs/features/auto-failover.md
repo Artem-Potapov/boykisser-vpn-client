@@ -280,8 +280,13 @@ The outcome is `CONTAINED_BY_BLACKHOLE`, and it is reached **honestly, not by co
 adopted bridge is byte-for-byte the blackhole the give-up would have built. It stays honest only
 because `giveUpRotationLocked` reads `hadTunnel` **before** the containment step — adoption writes
 `tunInterface`, so reading it after would classify the same give-up `CONTAINED_BY_LIVE_TUNNEL`.
-`SessionLifecycleDecisionTest.adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel` pins that
-composition.
+`SessionLifecycleDecisionTest.adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel` pins the
+*pure* composition — that `containmentForGiveUp(false, true, CONNECTED)` fed to
+`classifyGiveUpOutcome` yields `CONTAINED_BY_BLACKHOLE`. **It does not pin the read ordering**, which
+is the actual hazard: it hard-codes `hasTunnel = false`, so swapping the two lines in
+`giveUpRotationLocked` leaves the suite green. That ordering is not testable from the JVM — the
+`hadTunnel` read lives in a method of a service that cannot be instantiated there. QA Test 23b is the
+check, and its FAIL criterion names exactly this inversion.
 
 ### Every exit releases or adopts the bridge
 
@@ -301,6 +306,21 @@ unread fd. The full set of exits from the gap:
 
 `stopVpn` gains only one `ParcelFileDescriptor.close()` — nothing that awaits, so the RISK-1 rule
 (the `UNPROTECTED` recovery restart calls `stopVpn` on the main thread) still holds.
+
+Two things the table above depends on that are **not visible from it**:
+
+- **`onDestroy` must keep calling `stopVpn()` after `tunnelOpScope.cancel()`.** Cancelling the scope
+  means a rotation sitting in the gap never resumes, so it can never run its own release —
+  `stopVpn` is then the only thing left that can, and it is what makes the "coroutine never resumes"
+  case a covered exit rather than a leak. `tunnelOpScope.cancel()` has exactly one call site
+  (`onDestroy`), so this is a single ordering to preserve, not a pattern. It is load-bearing for the
+  bridge and reads as unrelated cleanup.
+- **Disabling auto-failover mid-episode deliberately leaves the bridge up.** The disable branch does
+  not release it, and `canReserveRotation` has no `enabled` term, so the already-dispatched retry runs
+  to completion and terminates in one of the handled exits above (release on success, re-open on
+  failure, adopt on give-up). This is correct — releasing on a settings change would drop the user
+  onto the clear network as a side effect of turning a feature off — but it means a tester who
+  disables failover mid-switch will see the bridge outlive the setting. That is expected, not a leak.
 
 ### One builder body, two users
 
@@ -942,7 +962,8 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   enumeration in this document plus a code read. QA Test 23 is the device check.
 - **Bridge establishment is best-effort.** If `establish()` returns null or throws while opening the
   bridge, the rotation proceeds through the *uncovered* gap — the pre-bridge behaviour — rather than
-  failing. It is logged (`Failover: rotation bridge TUN could not be established`) and nothing else
+  failing. It is logged — `Failover: rotation bridge establish() returned null` for the null return,
+  `Failover: rotation bridge TUN could not be established` for a throw — and nothing else
   reports it, because a rotation that refused to proceed would be strictly worse.
 - **`stopVpn`'s `!shouldStop && tunInterface == null` early return skips `failoverRearmJob?.cancel()`**,
   so an up-to-an-hour timer can idle past it. Harmless: the job re-checks `isCurrentSessionLocked`.
@@ -1018,7 +1039,7 @@ is itself the argument for doing it.
 | `failover/FailoverSettingsPersistDecisionTest` (12) | Per-control autosave: an invalid field never vetoes the tuple; the timeout ceiling is derived from the **effective** interval; the exact headroom boundary (9 000 at interval 10 000) is accepted and the coerce-gap value (9 500) is rejected. |
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
-| `vpn/SessionLifecycleDecisionTest` (48) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), `shouldOverwritePendingConnect`, and `containmentForGiveUp` — the live tunnel wins over a held bridge, the bridge wins over building a second TUN, the state arm, and `adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`, which composes containment with `classifyGiveUpOutcome` exactly as `giveUpRotationLocked` does. |
+| `vpn/SessionLifecycleDecisionTest` (47) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), `shouldOverwritePendingConnect`, and `containmentForGiveUp` — the live tunnel wins over a held bridge, the bridge wins over building a second TUN, the state arm, and `adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`, which composes containment with `classifyGiveUpOutcome` the way `giveUpRotationLocked` does — but with `hasTunnel` hard-coded, so it pins the composition and **not** the service's read ordering (see the give-up section). |
 | `vpn/SessionLifecycleRotationTest` (12) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
