@@ -35,7 +35,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── bridge/         XrayBridge — reflection facade over xray.aar
 │       │   │   ├── config/         ConfigBuilder (mandatory normalization + fragmentation→mux→DNS→routing→core overlays), ConfigSanitizer (read-only inverse diagnostic), overlay models/preferences, LogSettings, profile codecs/share links, JsonFormatter → docs/features/
 │       │   │   ├── db/             Room: AppDatabase, Profile/Subscription DAOs
-│       │   │   ├── failover/       Auto-failover → docs/features/auto-failover.md: FailoverPreferences (+ the timeout<interval coerce), HealthProbe/Http204HealthProbe (204 through the LIVE tun), NetworkAvailability (offline guard), TunnelHealthMonitor (terminal-after-fire poll loop), FailoverDecision (nextCandidate + sliding thrash cap), FailoverPoolResolver (SPEC 2 SEAM, shared with connect-to-fastest), FailoverSettingsActivity + FailoverSettingsPersistDecision, FastestConnectRunner/FastestPick (the delivery-time re-gate takes an injected canConnect closure, wired to state/connectAction — BLACKHOLED still delivers). The Reconnect affordance a give-up offers lives in state/ (ConnectAction + ReconnectFlow), not here
+│       │   │   ├── failover/       Auto-failover → docs/features/auto-failover.md: FailoverPreferences (+ the timeout<interval coerce), HealthProbe/Http204HealthProbe (204 through the LIVE tun, to the fixed ConfigBuilder.HEALTH_PROBE_TARGET_URL that applyRouting carves through the proxy — NOT the editable Ping Test target), NetworkAvailability (offline guard), TunnelHealthMonitor (terminal-after-fire poll loop), FailoverDecision (nextCandidate + sliding thrash cap), FailoverPoolResolver (SPEC 2 SEAM, shared with connect-to-fastest), FailoverSettingsActivity + FailoverSettingsPersistDecision, FastestConnectRunner/FastestPick (the delivery-time re-gate takes an injected canConnect closure, wired to state/connectAction — BLACKHOLED still delivers). The Reconnect affordance a give-up offers lives in state/ (ConnectAction + ReconnectFlow), not here
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
@@ -427,6 +427,17 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   app traffic leaks around the tun. See `docs/features/failclosed-startup.md`. **Whole-app tunneling is
   also what makes auto-failover's health probe valid** — reverting it would silently turn the watchdog
   into a clear-network measurement that never fires.
+- **The health probe's validity has a second, independent dependency: routing.** Reaching the tun is
+  not enough — the probe must also be *routed to the proxy* once inside it, or it measures the clear
+  network from one layer down. `ConfigBuilder.applyRouting` therefore emits a `domain:
+  full:<HEALTH_PROBE_HOST> → proxy` carve-out in **every** mode (structural twin of the `BLOCKED_ONLY`
+  DoH guard, and placed beside it, ahead of the LAN/ads rules). Three separate things would otherwise
+  claim the probe: `BLOCKED_ONLY`'s direct catch-all, `EXCEPT_COUNTRY`'s country direct rules
+  (`geoip:ru` can match a Cloudflare anycast address), and a direct rule in the pasted config, which
+  is preserved in all modes. This is why the probe target is the fixed `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
+  and **not** the user-editable Ping Test target: a static routing rule cannot track an editable value.
+  Known residual, deliberately not closed: it is a `domain` rule, so it is inert under `PROXY_ALL` with
+  ads off and the user's XRAY sniffing toggle off. See `docs/features/routing-rules.md`.
 - Auto-failover never releases traffic to the clear network on purpose: exhausting the pool
   re-establishes a **blackhole TUN** (unread fd, DNS aimed into it, same split-tunnel capture), and the
   only outcome that admits exposure (`UNPROTECTED`) says so honestly on every surface, gets exactly one
@@ -524,7 +535,9 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     candidate selection belongs here, behind a process-scoped ping repository (deferred).
   - `failover/HealthProbe.kt` — the probe seam. Any implementation must probe the **live tunnel**, not a
     throwaway core instance, must not throw (except `CancellationException`, which MUST propagate), and
-    must stay valid under whole-app tunneling.
+    must stay valid under whole-app tunneling. A new probe target is **not** a free choice: it must be a
+    fixed constant with a matching `ConfigBuilder` carve-out, because a probe routed direct returns
+    success with the proxy dead. Change the two together or not at all.
   - `vpn/SessionLifecycleDecision.kt` — every service-side rule is a pure function there
     (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`,
