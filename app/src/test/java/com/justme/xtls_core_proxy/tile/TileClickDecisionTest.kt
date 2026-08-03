@@ -2,6 +2,7 @@ package com.justme.xtls_core_proxy.tile
 
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -61,6 +62,60 @@ class TileClickDecisionTest {
         assertEquals(TileClickDecision.Stop,
             decideTileClick(VpnConnectionState.BLACKHOLED, profileId = null,
                 needsVpnConsent = true, needsNotifPermission = true))
+    }
+
+    @Test
+    fun everyLiveStateDecidesStop() {
+        // XrayVpnTileService.handleClick duplicates this exact gate by hand for its no-IO fast
+        // path. That duplicate drifted once already and shipped a tile that rendered as an active
+        // Stop control and did nothing. Any state added here must be added there too.
+        for (state in listOf(
+            VpnConnectionState.CONNECTING,
+            VpnConnectionState.CONNECTED,
+            VpnConnectionState.PAUSED,
+            VpnConnectionState.BLACKHOLED,
+        )) {
+            assertEquals(
+                "$state must decide Stop",
+                TileClickDecision.Stop,
+                decideTileClick(state, profileId = 7L, needsVpnConsent = false,
+                    needsNotifPermission = false),
+            )
+        }
+    }
+
+    @Test
+    fun everyStateIsClassifiedExplicitly() {
+        // The Stop gate is a boolean chain over the enum, not an exhaustive `when`, so adding a
+        // VpnConnectionState constant compiles cleanly and silently falls through to the Start
+        // branch. For a new LIVE state that reproduces the exact shipped defect this test exists
+        // for: ACTION_START reaches startVpn's "VPN already running" early return, so the tile
+        // renders STATE_ACTIVE and does nothing. Enumerating the full enum makes widening it a test
+        // failure rather than a grep nobody runs — and the same sweep must reach
+        // XrayVpnTileService.handleClick, MainActivity.isActive and state/connectAction.
+        val stops = setOf(
+            VpnConnectionState.CONNECTING,
+            VpnConnectionState.CONNECTED,
+            VpnConnectionState.PAUSED,
+            VpnConnectionState.BLACKHOLED,
+        )
+        val startable = setOf(
+            VpnConnectionState.DISCONNECTED,
+            VpnConnectionState.ERROR,
+        )
+        assertTrue(
+            "A VpnConnectionState was added without deciding whether the QS tile stops in it.",
+            (stops + startable).containsAll(VpnConnectionState.entries.toSet()),
+        )
+        for (state in VpnConnectionState.entries) {
+            val decision = decideTileClick(state, profileId = 7L, needsVpnConsent = false,
+                needsNotifPermission = false)
+            assertEquals(
+                "$state",
+                if (state in stops) TileClickDecision.Stop else TileClickDecision.Start(7L),
+                decision,
+            )
+        }
     }
 
     @Test

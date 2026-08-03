@@ -1111,7 +1111,7 @@ private fun vpnConnectionStateLabel(state: VpnConnectionState): String {
 // its long-press menu offers Disconnect rather than a connect row. Same treatment PAUSED already
 // gets, for the same reason. This is deliberately NOT the connect-affordance rule: that one is
 // state.connectAction, which offers RECONNECT from a give-up rather than disabling everything.
-private fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
+internal fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
     return profile.id == activeId &&
         (state == VpnConnectionState.CONNECTED ||
             state == VpnConnectionState.CONNECTING ||
