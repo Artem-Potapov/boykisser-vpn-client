@@ -160,23 +160,13 @@ internal fun failoverMonitorNeedsRebuild(
     builtFrom.failureThreshold != next.failureThreshold
 
 /**
- * Whether giving up on failover must re-establish a blackhole TUN — an fd nobody reads, so packets
- * are dropped instead of falling back to the clear network.
+ * What a give-up must do to end up owning an unread TUN — an fd nobody reads, so packets are dropped
+ * instead of falling back to the clear network.
  *
- * The all-servers-dead path tears the TUN down before bring-up fails, so give-up can otherwise end
+ * The all-servers-dead path tears the TUN down before bring-up fails, so a give-up can otherwise end
  * with no fd at all, and whether the user is exposed would depend on where bring-up died. That is
- * worse than either consistent answer, hence the re-establish.
- *
- * `CONNECTED` only. `PAUSED` is the kill-switch's deliberate no-tunnel state and its compliance
- * contract is "no tunnel must exist" — establishing one there would break it outright. Every other
- * state has a different owner mid-transition who will establish (or tear down) itself.
+ * worse than either consistent answer, hence the containment.
  */
-internal fun shouldEstablishBlackholeTunnel(
-    hasTunnel: Boolean,
-    tunnelState: SessionTunnelState,
-): Boolean = !hasTunnel && tunnelState == SessionTunnelState.CONNECTED
-
-/** What a give-up must do to hold the user's traffic before it classifies the outcome. */
 internal enum class GiveUpContainment {
     /** Nothing to do: a live tunnel already holds the traffic, or another owner drives it. */
     NONE,

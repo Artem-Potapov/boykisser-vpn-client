@@ -216,43 +216,9 @@ class SessionLifecycleDecisionTest {
         )
     }
 
-    // --- Fail-closed give-up: when may a blackhole TUN be established? ---
-
-    @Test
-    fun blackhole_isEstablished_whenAConnectedSessionLostItsTunnel() {
-        // The all-servers-dead path tears the TUN down first; ending there with no fd would hand
-        // the user's traffic back to the clear network at the worst possible moment.
-        assertTrue(
-            shouldEstablishBlackholeTunnel(
-                hasTunnel = false,
-                tunnelState = SessionTunnelState.CONNECTED,
-            )
-        )
-    }
-
-    @Test
-    fun blackhole_isNotEstablished_whenATunnelAlreadyExists() {
-        assertFalse(
-            shouldEstablishBlackholeTunnel(
-                hasTunnel = true,
-                tunnelState = SessionTunnelState.CONNECTED,
-            )
-        )
-    }
-
-    @Test
-    fun blackhole_isNotEstablished_whileTheKillSwitchHoldsTheTunnelDown() {
-        // PAUSED means "no tunnel must exist" — establishing one here would break the
-        // kill-on-foreground compliance contract outright.
-        assertFalse(
-            shouldEstablishBlackholeTunnel(
-                hasTunnel = false,
-                tunnelState = SessionTunnelState.PAUSED,
-            )
-        )
-    }
-
-    // --- What a give-up does to contain traffic before it classifies the outcome ---
+    // --- Fail-closed give-up: what does it do to contain traffic, and where does the fd come from?
+    //     (These replace the shouldEstablishBlackholeTunnel tests; containmentForGiveUp subsumed
+    //     that predicate when the rotation bridge gave containment a second source.) ---
 
     @Test
     fun giveUpWithNothingHeld_buildsAFreshBlackhole() {
@@ -520,21 +486,6 @@ class SessionLifecycleDecisionTest {
                 giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
             )
         )
-    }
-
-    @Test
-    fun blackhole_isNotEstablished_inAnyOtherState() {
-        for (state in listOf(
-            SessionTunnelState.STARTING,
-            SessionTunnelState.REVIVING,
-            SessionTunnelState.ROTATING,
-            SessionTunnelState.STOPPED,
-        )) {
-            assertFalse(
-                "another owner drives the tunnel in $state",
-                shouldEstablishBlackholeTunnel(hasTunnel = false, tunnelState = state)
-            )
-        }
     }
 
     // --- A refused start must not leave the app claiming the server it refused ---
