@@ -898,27 +898,64 @@ class XrayVpnService : VpnService() {
                             if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
                                 return@onSuccess
                             }
+                            // ---- COMMIT ----
+                            // This write is the commit: from here the rotation has succeeded, and
+                            // NOTHING that follows may reach the outer `catch (error: Throwable)`.
+                            // That calls failRotation, which funnels straight into
+                            // giveUpRotationLocked with sessionTunnelState == CONNECTED and a real
+                            // fd, i.e. classifies CONTAINED_BY_LIVE_TUNNEL and writes BLACKHOLED,
+                            // posts the give-up alert and stops the monitor OVER A HEALTHY,
+                            // JUST-RESTORED TUNNEL. A committed success must not be reclassifiable.
                             sessionTunnelState = SessionTunnelState.CONNECTED
                             episodeFailedIds = emptySet()   // episode ends on a successful rotation
-                            LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            // ---- POST-COMMIT, still under `lock` ----
+                            // The three calls below reach a subsystem and can therefore throw:
+                            // getSystemService(...).notify/cancel are binder calls, and
+                            // localizedString builds a configuration context and resolves a
+                            // resource. The bare field writes between them cannot, so only the
+                            // calls are guarded.
+                            //
+                            // They are guarded IN PLACE rather than moved out of the lock. Order
+                            // and atomicity are load-bearing for the first one: publishing
+                            // CONNECTED under the same lock as the state transition it describes is
+                            // what stops a concurrent kill-switch pause or stop — both of which
+                            // write LogRepository state while holding `lock` — from being
+                            // overwritten by a late CONNECTED from here. Moving the commit itself
+                            // after the calls would not help either: a throw would then escape with
+                            // the state still ROTATING and a live fd, which failRotation classifies
+                            // CONTAINED_BY_LIVE_TUNNEL just the same while additionally stranding
+                            // the transition.
+                            //
+                            // afterRotationCommitted is safe to call while holding `lock`: it is a
+                            // plain try/catch whose only side effect is LogRepository.append (taken
+                            // under this lock in a dozen places here), it never suspends and never
+                            // takes a lock of its own. CancellationException still propagates — out
+                            // of the synchronized block, out of .onSuccess, to the CE arm below.
+                            //
+                            // Swallowing these is the lesser evil, not a free win: a dropped
+                            // setConnectionState leaves the UI on CONNECTING over a live tunnel
+                            // until the next state change or a repostOngoingNotification. That is
+                            // recoverable and cosmetic; letting it escape tears down a healthy
+                            // session.
+                            afterRotationCommitted("publishing the connected state") {
+                                LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            }
                             // Traffic flows again, so a give-up alert left over from an earlier
                             // blackhole would now claim the internet is off while it works. This
                             // also covers a rotation kicked off by the re-arm timer.
                             giveUpOutcome = null
                             unprotectedRetryConsumed = false
-                            VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
-                            updateNotification(localizedString(R.string.vpn_status_connected))
+                            afterRotationCommitted("retracting the give-up alert") {
+                                VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
+                            }
+                            afterRotationCommitted("refreshing the ongoing notification") {
+                                updateNotification(localizedString(R.string.vpn_status_connected))
+                            }
                             pendingKillLabel.also { pendingKillLabel = null }
                         }
-                        // ---- POST-COMMIT ----
-                        // Everything above ran under `lock` and COMMITTED the rotation: CONNECTED
-                        // is published, the give-up state is cleared, the new tunnel is live. What
-                        // follows is settle-up work, and none of it may reach the outer
-                        // `catch (error: Throwable)` — that calls failRotation, which funnels
-                        // straight into giveUpRotationLocked with sessionTunnelState == CONNECTED
-                        // and a real fd, i.e. classifies CONTAINED_BY_LIVE_TUNNEL and writes
-                        // BLACKHOLED, posts the give-up alert and stops the monitor OVER A HEALTHY,
-                        // JUST-RESTORED TUNNEL. A committed success must not be reclassifiable.
+                        // ---- POST-COMMIT, off the lock ----
+                        // Same rule as inside the block: none of this may reach the outer
+                        // `catch (error: Throwable)`, for the reason recorded at the commit above.
                         //
                         // Guarded per step rather than as one block, deliberately: the last two are
                         // not cosmetic. Skipping applyFailoverPreferences leaves the watchdog dead
