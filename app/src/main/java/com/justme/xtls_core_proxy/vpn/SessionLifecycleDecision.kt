@@ -311,14 +311,25 @@ internal fun activeProfileIdToRestoreOnRefusedStart(
 /**
  * Whether switching auto-failover OFF must also release a give-up state it left behind.
  *
- * Disabling cancels [failoverRearmJob], which is the ONLY automatic recovery from a contained
+ * Disabling cancels the re-arm job, which is the ONLY automatic recovery from a **contained**
  * give-up. Leaving `giveUpOutcome` set would therefore strand the user behind a blackhole TUN as
  * a direct result of turning the feature off — the most natural reaction to it having gone wrong.
+ *
+ * [FailoverGiveUpOutcome.UNPROTECTED] is DELIBERATELY EXCLUDED, and the exclusion is the whole
+ * point of this predicate being three-valued rather than a null check. That outcome has no re-arm
+ * to be stranded behind: it owns no TUN, and its recovery is the `startVpn` restart that
+ * [shouldRestartForRecovery] unlocks — keyed off this very marker. Releasing it would leave the
+ * service RUNNING, holding no tunnel, with the user on the clear network and every Connect surface
+ * taking `startVpn`'s "VPN already running" early return; with the monitor stopped no second
+ * give-up could fire [shouldStopServiceOnGiveUp] either, so nothing would ever end that state.
+ * Only Disconnect would work, and the loudest warning would have been retracted on the way in.
  */
 internal fun shouldReleaseGiveUpOnDisable(
     enabled: Boolean,
     giveUpOutcome: FailoverGiveUpOutcome?,
-): Boolean = !enabled && giveUpOutcome != null
+): Boolean = !enabled &&
+    giveUpOutcome != null &&
+    giveUpOutcome != FailoverGiveUpOutcome.UNPROTECTED
 
 /**
  * Whether an incoming start request may claim the single `pendingProfileId` slot.

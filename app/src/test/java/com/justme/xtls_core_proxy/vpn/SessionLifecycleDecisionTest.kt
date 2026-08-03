@@ -531,13 +531,26 @@ class SessionLifecycleDecisionTest {
     // --- Disabling auto-failover must release a give-up it left behind ---
 
     @Test
-    fun disablingFailoverDuringAGiveUpMustReleaseIt() {
+    fun disablingFailoverDuringAContainedGiveUpMustReleaseIt() {
         // Turning the feature off cancels the re-arm timer, which is the only automatic recovery
         // from a contained give-up. Without releasing the state the user is stranded behind a
         // blackhole TUN by the very act of switching the feature off.
         assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE))
         assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL))
-        assertTrue(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.UNPROTECTED))
+    }
+
+    @Test
+    fun disablingFailoverDuringAnUnprotectedGiveUpMustNotReleaseIt() {
+        // DO NOT "fix" this back to assertTrue. UNPROTECTED is the one outcome whose recovery is
+        // NOT the re-arm timer — it is the startVpn restart that shouldRestartForRecovery unlocks,
+        // and that predicate keys off exactly this marker. Releasing it here leaves the service
+        // RUNNING with no TUN on the clear network while every Connect surface takes startVpn's
+        // "VPN already running" early return, and with the monitor gone no second give-up can ever
+        // fire shouldStopServiceOnGiveUp either. The user would be stranded, unprotected, with only
+        // Disconnect working — as a direct result of switching the feature off. There is no re-arm
+        // to strand them behind: the two CONTAINED outcomes hold a TUN and depend on the timer,
+        // this one holds nothing and depends on the restart.
+        assertFalse(shouldReleaseGiveUpOnDisable(false, FailoverGiveUpOutcome.UNPROTECTED))
     }
 
     @Test

@@ -394,14 +394,42 @@ preserved:
    the user to reconnect.
 
 `unprotectedRetryConsumed` is cleared exactly where `giveUpOutcome` is: a successful rotation, a
-successful revive, the recovery callback, and full teardown — i.e. the events where *a tunnel
-demonstrably worked*. **Two carry-over cases are known and ACCEPTED**, both because they err towards
-stopping a service that cannot protect anything:
+successful revive, the recovery callback, full teardown — i.e. the events where *a tunnel demonstrably
+worked* — and the **contained** half of the disable release below. **Two carry-over cases are known and
+ACCEPTED**, both because they err towards stopping a service that cannot protect anything:
 
 - a retry whose give-up classifies `CONTAINED_BY_BLACKHOLE` leaves the flag set (traffic is contained,
   so nothing clears it), so a later `UNPROTECTED` stops immediately with no retry of its own;
 - a kill-switch pause landing before the timer fires makes `rotateTunnel` bail at `canReserveRotation`,
   silently spending the retry without attempting anything.
+
+### Disabling failover releases a give-up — but never the uncontained one
+
+`shouldReleaseGiveUpOnDisable(enabled, giveUpOutcome)` is **three-valued, not a null check**, and the
+exclusion is the whole reason it exists.
+
+Disabling cancels `failoverRearmJob`, which is the only automatic way out of a **contained** give-up.
+So for `CONTAINED_BY_BLACKHOLE` / `CONTAINED_BY_LIVE_TUNNEL` the disable branch drops `giveUpOutcome`
+and `unprotectedRetryConsumed`, cancels the 1105 alert, and emits the per-outcome message
+(`vpn_failover_disabled_while_blackholed` / `..._while_degraded` — never one shared message). The TUN
+stays up and the state stays `BLACKHOLED` on purpose: tearing the TUN down would drop the user onto
+the clear network as a side effect of a settings change, and `ERROR` would offer a plain Connect that
+`startVpn` refuses with "VPN already running".
+
+`UNPROTECTED` is **excluded**. It owns no TUN and no re-arm to be stranded behind — its recovery is the
+`startVpn` restart, and `shouldRestartForRecovery` keys off this exact marker. Releasing it would leave
+the service **running with no tunnel on the clear network**, every Connect surface taking the
+"VPN already running" early return, no monitor left to produce a second give-up (so
+`shouldStopServiceOnGiveUp` could never fire), 1105 retracted, and only Disconnect working. The marker
+and its alert therefore both survive the disable, and `unprotectedRetryConsumed` is left alone with it
+— it records that the single automatic recovery was spent, which stays true.
+
+Two things happen on disable **regardless** of the outcome, both outside the release branch:
+`failoverRearmJob` is cancelled and nulled, and `rotationAttempts` is emptied. The second is not
+cosmetic: `scheduleFailoverRearmLocked` clears the sliding thrash window when its timer *fires*, so
+cancelling that timer removes the owner of the reset. Whoever disables must perform it instead, or a
+stale window could only ever **deny** the first automatic rotation of the next episode — a spurious
+give-up charged to attempts made before the user intervened.
 
 **The retry timer is gated twice.** `applyFailoverPreferences` cancels and nulls `failoverRearmJob`
 when the user disables failover — gated on `!settings.enabled` **alone**, deliberately *not* on
@@ -752,7 +780,7 @@ is itself the argument for doing it.
 | `failover/FailoverSettingsPersistDecisionTest` (12) | Per-control autosave: an invalid field never vetoes the tuple; the timeout ceiling is derived from the **effective** interval; the exact headroom boundary (9 000 at interval 10 000) is accepted and the coerce-gap value (9 500) is rejected. |
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
-| `vpn/SessionLifecycleDecisionTest` (49) | Every pure service rule above, including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the transition-defer guard, `shouldReleaseGiveUpOnDisable`, and `shouldOverwritePendingConnect`. |
+| `vpn/SessionLifecycleDecisionTest` (50) | Every pure service rule above, including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the transition-defer guard, `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), and `shouldOverwritePendingConnect`. |
 | `vpn/SessionLifecycleRotationTest` (8) | Rotation reservation, the give-up predicates, and `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left). |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |

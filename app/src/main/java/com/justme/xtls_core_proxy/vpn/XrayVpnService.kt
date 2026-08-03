@@ -1332,12 +1332,30 @@ class XrayVpnService : VpnService() {
                 // must not silently drop a legitimate pending retry. Disabling the feature must.
                 failoverRearmJob?.cancel()
                 failoverRearmJob = null
+                // Unconditional, for the same reason the cancel above is: the re-arm job is the
+                // owner of this reset (scheduleFailoverRearmLocked clears the window when its
+                // timer fires, so a re-armed episode starts with a clean budget) and we have just
+                // cancelled it. Whoever disables the feature must therefore perform the reset the
+                // cancelled job would have. Leaving a stale sliding window in place could only
+                // ever DENY the first automatic rotation of the next episode — a spurious give-up
+                // charged to attempts made before the user intervened. This is outside the release
+                // branch below on purpose: it must also run for UNPROTECTED (which no longer
+                // releases) and for a disable with no give-up showing at all.
+                rotationAttempts = emptyList()
 
                 val releasedOutcome = giveUpOutcome
                 if (shouldReleaseGiveUpOnDisable(settings.enabled, releasedOutcome)) {
                     // The user switched the feature off, and the re-arm we just cancelled was the
-                    // only automatic way out of a contained give-up. Drop the episode state so
+                    // only automatic way out of a CONTAINED give-up. Drop the episode state so
                     // nothing stale survives, and stop the alert claiming a repair is pending.
+                    //
+                    // UNPROTECTED never reaches here (see shouldReleaseGiveUpOnDisable): its
+                    // marker is what keeps shouldRestartForRecovery true, i.e. what keeps Connect
+                    // alive at all, and its 1105 alert is the user's only remaining warning that
+                    // they are on the clear network. Both must survive the disable.
+                    // unprotectedRetryConsumed is therefore left alone too — it records that the
+                    // single automatic recovery has been spent, which stays true, and it is
+                    // meaningless for the two outcomes that do reach here.
                     //
                     // The TUN is deliberately NOT torn down and the connection state deliberately
                     // STAYS BLACKHOLED. Both are load-bearing:
@@ -1351,14 +1369,12 @@ class XrayVpnService : VpnService() {
                     // Reconnect (VpnViewModel.reconnect) is the way back to a live tunnel.
                     giveUpOutcome = null
                     unprotectedRetryConsumed = false
-                    rotationAttempts = emptyList()
                     VpnNotifications.cancelFailoverBlackholed(this)
                     // Two outcomes share the BLACKHOLED state but not the truth: the blackhole
                     // really is holding traffic, while a live tunnel is still proxying and merely
                     // unhealthy. Selecting on the state would tell the second group their
-                    // connection is paused when it is not. UNPROTECTED already reported itself
-                    // through vpn_failover_unprotected_error and sits in ERROR, not BLACKHOLED, so
-                    // it stays silent here — matching the previous state-gated behaviour exactly.
+                    // connection is paused when it is not. The UNPROTECTED/null arm is unreachable
+                    // now that the predicate excludes it, and stays only for exhaustiveness.
                     when (releasedOutcome) {
                         FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE ->
                             LogRepository.emitError(R.string.vpn_failover_disabled_while_blackholed)

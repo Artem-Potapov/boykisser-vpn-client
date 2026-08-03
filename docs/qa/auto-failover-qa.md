@@ -231,13 +231,28 @@ Keep every server dead and keep `establish()` failing, so the 5b rotation also e
 `UNPROTECTED` (that would forfeit the automatic recovery and switch the VPN off without the user
 asking).
 
-### 5d — Disable failover mid-`UNPROTECTED`
+### 5d — Disable failover mid-`UNPROTECTED` leaves a *usable* state
 
 From 5a, turn auto-failover **off** at the settings screen before the timer fires.
 
-**PASS:** the pending retry is cancelled — log shows
-`Failover: retry timer stood down (feature disabled or session ended)`, or nothing fires at all. **No
-automatic rotation and no automatic VPN shutdown may happen after the user disabled the feature.**
+**PASS, all four:**
+1. The pending retry is cancelled — log shows
+   `Failover: retry timer stood down (feature disabled or session ended)`, or nothing fires at all.
+   **No automatic rotation and no automatic VPN shutdown may happen after the user disabled the
+   feature.**
+2. **The controls are still alive** — this is the check that matters and it is the mirror of 5e.3.
+   The main button still offers **Connect** and is **tappable**; tap it and a working server comes up
+   (the service restarts rather than refusing with "VPN already running"). **Disconnect** also still
+   works.
+3. The **1105 alert stays up** and the ongoing line still reads the "not protected" copy. Unlike 5e,
+   nothing here is contained, so retracting the warning would leave the user with no indication that
+   they are on the clear network.
+4. The state stays `ERROR` / not-protected. There is no TUN to preserve, so nothing about the traffic
+   path changes at the moment of the toggle.
+
+**FAIL:** Connect does nothing / logs "VPN already running" while the service keeps running with no
+TUN — the user is unprotected with only Disconnect working and the loudest warning retracted; or the
+1105 alert disappears.
 
 ### 5e — Disable failover while `BLACKHOLED` leaves a *usable* state
 
