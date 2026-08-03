@@ -85,6 +85,108 @@ class SessionLifecycleRotationTest {
         }
     }
 
+    // --- The app left while the transition was still in flight: withdraw the deferred kill ---
+
+    @Test
+    fun leftForeground_withdrawsTheKillDeferredForThatApp() {
+        // The enter edge CREATED the deferral; the leave edge is the signal that the condition it
+        // was deferred for has ended. Dropping the leave instead parks the tunnel PAUSED for an app
+        // that is no longer in the foreground, and the edge-triggered monitor never re-fires it.
+        assertEquals(
+            "Bank",
+            deferredKillToWithdraw(
+                pendingKillLabel = "Bank",
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+            )
+        )
+    }
+
+    @Test
+    fun leftForeground_withdrawsNothing_whenNoKillWasDeferred() {
+        // The overwhelmingly common leave: an ordinary kill-switch revive with no deferral armed.
+        assertNull(
+            deferredKillToWithdraw(
+                pendingKillLabel = null,
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+            )
+        )
+    }
+
+    @Test
+    fun aSupersededSessionCanNeverWithdrawALiveSessionsDeferredKill() {
+        // The one reason a leave callback must be refused. Withdrawal cancels a SAFETY event, so a
+        // late callback from a session that has already been replaced must not reach the marker the
+        // live session armed — it would silently un-arm a kill the user asked for.
+        assertNull(
+            "a stale epoch must not withdraw",
+            deferredKillToWithdraw(
+                pendingKillLabel = "Bank",
+                running = true, activeSessionEpoch = 6L, callbackSessionEpoch = 5L,
+            )
+        )
+        assertNull(
+            "a stopped session must not withdraw",
+            deferredKillToWithdraw(
+                pendingKillLabel = "Bank",
+                running = false, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+            )
+        )
+    }
+
+    @Test
+    fun everyStateThatCanDeferAKillCanAlsoWithdrawIt() {
+        // Anti-drift guard, whole-enum. shouldDeferKillDuringTransition owns the {REVIVING,
+        // ROTATING} set and this rule must never re-enumerate it — so instead of listing states,
+        // assert the IMPLICATION over every state there is: wherever a kill can be parked, the
+        // leave edge can take it back. A new deferral state added to that rule cannot open a hole
+        // here without failing this test.
+        for (state in SessionTunnelState.entries) {
+            val canDefer = shouldDeferKillDuringTransition(
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+                tunnelState = state,
+            )
+            if (!canDefer) continue
+            assertEquals(
+                "a kill deferrable in $state must be withdrawable in $state",
+                "Bank",
+                deferredKillToWithdraw(
+                    pendingKillLabel = "Bank",
+                    running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt() {
+        // DO NOT "fix" this into a mirror of shouldDeferKillDuringTransition. The asymmetry is the
+        // whole fix. `tunnelOpScope` is Dispatchers.IO.limitedParallelism(1) and bringUpTunnel does
+        // NOT suspend, so a leave arriving during a bring-up sits in the queue until the transition
+        // coroutine finishes — by which time the session is back at CONNECTED. A withdrawal gated
+        // on {REVIVING, ROTATING} would therefore miss the entire bring-up, which is exactly where
+        // a leave lands. The same applies to the CONNECTED gap a rotation episode passes through
+        // between two failed candidates, where the marker stays armed.
+        //
+        // Hence: in CONNECTED a kill arriving now would NOT be deferred, yet one already parked
+        // MUST still be withdrawable. That is what lets the withdrawal win its race against the
+        // replay, which reads the marker at execution time rather than at the commit.
+        assertFalse(
+            "precondition: CONNECTED is not a state a kill can be deferred in",
+            shouldDeferKillDuringTransition(
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+        assertEquals(
+            "a kill parked during the transition must survive as withdrawable after it commits",
+            "Bank",
+            deferredKillToWithdraw(
+                pendingKillLabel = "Bank",
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+            )
+        )
+    }
+
     @Test
     fun deferredKillNotice_namesTheApp_whenATunnelIsStillUp() {
         // A give-up discharges the deferred kill instead of replaying it, so the user must be told

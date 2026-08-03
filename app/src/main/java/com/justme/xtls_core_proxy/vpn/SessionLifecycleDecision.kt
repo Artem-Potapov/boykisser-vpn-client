@@ -94,6 +94,61 @@ internal fun shouldDeferKillDuringTransition(
         (tunnelState == SessionTunnelState.REVIVING || tunnelState == SessionTunnelState.ROTATING)
 
 /**
+ * The label of a kill parked by [shouldDeferKillDuringTransition] that a controlled-app
+ * LEFT-foreground callback must now WITHDRAW — or null when there is nothing to withdraw.
+ *
+ * The enter edge CREATES the deferral; the leave edge is the signal that the condition it was
+ * deferred for has ENDED. Dropping the leave instead is what left the tunnel parked in `PAUSED` for
+ * an app that is no longer in the foreground: `PAUSED` means no TUN at all, the foreground monitor
+ * is edge-triggered so it never re-fires that leave, and nothing else recovers it.
+ *
+ * ## The tunnel state is deliberately NOT an input, and this rule is deliberately WIDER than the
+ * one it mirrors
+ *
+ * The obvious shape is the exact mirror of [shouldDeferKillDuringTransition] — withdraw only in the
+ * same `{REVIVING, ROTATING}` window that defers. That shape would look right and barely fire.
+ * `tunnelOpScope` is `Dispatchers.IO.limitedParallelism(1)`, and `bringUpTunnel` is NOT a `suspend`
+ * function: it holds that single slot for its whole blocking span (config build, geo-asset prep,
+ * `establish()`, `startXray`). A leave arriving in that span queues behind the transition and does
+ * not execute until it has already committed `CONNECTED`. A rotation episode also returns to
+ * `CONNECTED` *between* two failed candidates with the marker still armed. So the states in which a
+ * withdrawal actually gets to run are mostly NOT the states a kill can be deferred in.
+ *
+ * The marker itself, not the tunnel state, is therefore what "a kill is queued for replay" means —
+ * and a leave edge means "no queued kill is wanted", in every state. There is no state in which the
+ * app has left and pausing the tunnel for it is still correct.
+ *
+ * Not enumerating `{REVIVING, ROTATING}` a second time is the other half of the point: that set has
+ * exactly one home, in [shouldDeferKillDuringTransition]. A duplicate enumeration is this branch's
+ * most repeated defect, and a rule with no state parameter cannot acquire one by drift.
+ *
+ * ## What the session check buys, and why it is the ONLY refusal
+ *
+ * Of the reasons `canReserveRevive` can refuse a leave callback — stale epoch, stopped service,
+ * already `CONNECTED`, mid-transition — only the first two may block a withdrawal. Withdrawal
+ * cancels a SAFETY event, so a callback belonging to a session that has already been replaced must
+ * never reach the marker a live session armed. The other two must NOT block it, per the derivation
+ * above.
+ *
+ * ## Pairs with the replay reading the marker at execution time
+ *
+ * This rule only closes the defect because the commit that dispatches a replay leaves the marker
+ * ARMED and the replay coroutine resolves it when it runs. Both the withdrawal and the replay are
+ * queued on the one serialized `tunnelOpScope`, so FIFO settles every ordering: a leave queued
+ * before the replay withdraws the marker and the replay finds nothing; a leave queued after it runs
+ * against a tunnel the replay has already paused, where it revives normally. Capture the label at
+ * the commit instead and the earlier leave has nothing left to clear.
+ */
+internal fun deferredKillToWithdraw(
+    pendingKillLabel: String?,
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+): String? = pendingKillLabel?.takeIf {
+    acceptsSessionLifecycleCallback(running, activeSessionEpoch, callbackSessionEpoch)
+}
+
+/**
  * The app label to announce when a failover give-up DISCHARGES a kill-switch event that was
  * deferred by [shouldDeferKillDuringTransition] — or null when nothing may be announced.
  *
