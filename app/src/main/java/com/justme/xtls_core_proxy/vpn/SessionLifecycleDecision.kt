@@ -176,6 +176,81 @@ internal fun shouldEstablishBlackholeTunnel(
     tunnelState: SessionTunnelState,
 ): Boolean = !hasTunnel && tunnelState == SessionTunnelState.CONNECTED
 
+/** What a give-up must do to hold the user's traffic before it classifies the outcome. */
+internal enum class GiveUpContainment {
+    /** Nothing to do: a live tunnel already holds the traffic, or another owner drives it. */
+    NONE,
+
+    /** A rotation bridge is held — take it over. It is already exactly the TUN a give-up wants. */
+    ADOPT_ROTATION_BRIDGE,
+
+    /** Nothing is held — build a fresh unread TUN. */
+    ESTABLISH_BLACKHOLE,
+}
+
+/**
+ * The single ordered decision behind a give-up's containment step. Replaced the two-valued
+ * `shouldEstablishBlackholeTunnel` when [shouldEstablishRotationBridge] gave containment a SECOND
+ * source, because the two rules must be evaluated in a fixed order and a pair of independent
+ * booleans cannot express that: check "build a blackhole" first and it fires while a bridge is held,
+ * stranding the bridge fd and leaving the process holding two VPN interfaces, with no compile-time
+ * or runtime signal. An exhaustive `when` over this enum makes that ordering unrepresentable.
+ *
+ * [hasTunnel] wins outright, as it does in [classifyGiveUpOutcome]: a live fd is already containing
+ * traffic and both other arms would overwrite the field holding it.
+ *
+ * `CONNECTED` only, for the reason the blackhole predicate always had: `PAUSED` is the kill-switch's
+ * deliberate no-tunnel state and its compliance contract is "no tunnel must exist", so ADOPTING one
+ * there breaks it exactly as surely as building one would. Every other state has a different owner
+ * mid-transition who will establish (or tear down) itself.
+ *
+ * Note what this does NOT decide: whether the containment succeeded. Both acting arms report that
+ * back to [classifyGiveUpOutcome] as `blackholeEstablished`, and an adopted bridge is honestly a
+ * blackhole — same builder, same captured apps, no protector, no Xray — so it classifies
+ * `CONTAINED_BY_BLACKHOLE`, never `CONTAINED_BY_LIVE_TUNNEL`. That distinction only survives because
+ * the caller reads `hasTunnel` BEFORE the adoption, not after.
+ */
+internal fun containmentForGiveUp(
+    hasTunnel: Boolean,
+    hasRotationBridge: Boolean,
+    tunnelState: SessionTunnelState,
+): GiveUpContainment = when {
+    hasTunnel -> GiveUpContainment.NONE
+    tunnelState != SessionTunnelState.CONNECTED -> GiveUpContainment.NONE
+    hasRotationBridge -> GiveUpContainment.ADOPT_ROTATION_BRIDGE
+    else -> GiveUpContainment.ESTABLISH_BLACKHOLE
+}
+
+/**
+ * Whether a rotation must open a **bridge TUN** across the window in which it owns no interface.
+ *
+ * A rotation tears the old TUN down under `lock` and then does `buildRuntimeConfig`, geo-asset prep
+ * and the split-tunnel read OFF-lock before it reaches `establish()`. For that whole span — seconds,
+ * on every routine rotation, and once per dead candidate while a pool is exhausted — no VPN
+ * interface exists, so every tunneled app emits cleartext on the underlying network. The bridge is
+ * the give-up blackhole re-used as a stop-gap: same builder, same captured apps, no protector and no
+ * Xray, so apps briefly lose connectivity instead of briefly leaking. That is the intended trade.
+ *
+ * [hasRotationBridge] is what makes this idempotent, and it is load-bearing rather than defensive:
+ * one rotation episode walks N dead candidates through the same reserved transition, re-entering the
+ * teardown path each time. A second establish would strand the first fd — a leaked VPN interface,
+ * held until the process dies.
+ *
+ * [hasTunnel] must be false for the same reason [containmentForGiveUp] refuses to act on a live
+ * tunnel: `establish()` replaces the process's active interface, so opening a bridge over a working
+ * tunnel would silently turn it into a blackhole.
+ *
+ * `ROTATING` only. An initial connect has no prior tunnel to bridge from, and a `reviveTunnel`
+ * starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
+ */
+internal fun shouldEstablishRotationBridge(
+    hasTunnel: Boolean,
+    hasRotationBridge: Boolean,
+    tunnelState: SessionTunnelState,
+): Boolean = !hasTunnel &&
+    !hasRotationBridge &&
+    tunnelState == SessionTunnelState.ROTATING
+
 /**
  * What a failover give-up actually left behind. Three physically different situations that must
  * never share one message to the user.

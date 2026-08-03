@@ -252,6 +252,112 @@ class SessionLifecycleDecisionTest {
         )
     }
 
+    // --- What a give-up does to contain traffic before it classifies the outcome ---
+
+    @Test
+    fun giveUpWithNothingHeld_buildsAFreshBlackhole() {
+        // The all-servers-dead path tears the TUN down first; ending there with no fd would hand
+        // the user's traffic back to the clear network at the worst possible moment.
+        assertEquals(
+            GiveUpContainment.ESTABLISH_BLACKHOLE,
+            containmentForGiveUp(
+                hasTunnel = false,
+                hasRotationBridge = false,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun giveUpHoldingALiveTunnel_establishesNothing() {
+        // A second establish() over a live interface would replace the one Xray dials through.
+        assertEquals(
+            GiveUpContainment.NONE,
+            containmentForGiveUp(
+                hasTunnel = true,
+                hasRotationBridge = false,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun giveUpDuringTheRotationGap_adoptsTheBridgeRatherThanBuildingASecondTun() {
+        // The bridge IS already the interface this give-up wants: same builder, no protector, no
+        // Xray. Building a second one would strand the bridge fd — a leaked VPN interface.
+        assertEquals(
+            GiveUpContainment.ADOPT_ROTATION_BRIDGE,
+            containmentForGiveUp(
+                hasTunnel = false,
+                hasRotationBridge = true,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun aLiveTunnelIsNeverReplacedByTheBridge() {
+        // Adoption overwrites the tunnel field, so it must never fire while a real tunnel is held:
+        // that would drop a working, still-proxying fd on the floor and call the result contained.
+        assertEquals(
+            GiveUpContainment.NONE,
+            containmentForGiveUp(
+                hasTunnel = true,
+                hasRotationBridge = true,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun giveUpWhileAnotherOwnerHoldsTheTunnel_establishesNothing_evenWithABridgeHeld() {
+        // PAUSED means "no tunnel must exist" — adopting a bridge into it would break the
+        // kill-on-foreground compliance contract just as surely as building a blackhole would.
+        for (state in listOf(
+            SessionTunnelState.STARTING,
+            SessionTunnelState.PAUSED,
+            SessionTunnelState.REVIVING,
+            SessionTunnelState.ROTATING,
+            SessionTunnelState.STOPPED,
+        )) {
+            for (bridge in listOf(false, true)) {
+                assertEquals(
+                    "another owner drives the tunnel in $state (bridge held: $bridge)",
+                    GiveUpContainment.NONE,
+                    containmentForGiveUp(
+                        hasTunnel = false,
+                        hasRotationBridge = bridge,
+                        tunnelState = state,
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
+    fun adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel() {
+        // THE hazard of the rotation bridge, composed exactly as giveUpRotationLocked composes it:
+        // `hasTunnel` is read BEFORE the containment step, so an adopted bridge reaches
+        // classifyGiveUpOutcome as `hadTunnel = false, blackholeEstablished = true`. Read it after
+        // the adoption instead and the give-up would report CONTAINED_BY_LIVE_TUNNEL — telling the
+        // user their traffic is still being proxied when no Xray is running at all.
+        val hasTunnel = false
+        val containment = containmentForGiveUp(
+            hasTunnel = hasTunnel,
+            hasRotationBridge = true,
+            tunnelState = SessionTunnelState.CONNECTED,
+        )
+        val contained = when (containment) {
+            GiveUpContainment.NONE -> false
+            GiveUpContainment.ADOPT_ROTATION_BRIDGE -> true   // adoption cannot fail: same lock
+            GiveUpContainment.ESTABLISH_BLACKHOLE -> true     // assume the establish succeeded
+        }
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(hadTunnel = hasTunnel, blackholeEstablished = contained)
+        )
+    }
+
     // --- Give-up outcome: three physically different situations, three different messages ---
 
     @Test

@@ -122,4 +122,70 @@ class SessionLifecycleRotationTest {
             )
         }
     }
+
+    // --- The rotation bridge: no clear network between teardown and the next establish() ---
+
+    @Test
+    fun rotationBridge_isEstablished_onceTheRotationHasTornTheTunnelDown() {
+        // The gap this closes: rotateTunnel tears the TUN down under `lock`, then does
+        // buildRuntimeConfig + geo-asset prep + the split read OFF-lock before it reaches
+        // establish(). Every tunneled app emits cleartext for that whole span.
+        assertTrue(
+            shouldEstablishRotationBridge(
+                hasTunnel = false,
+                hasRotationBridge = false,
+                tunnelState = SessionTunnelState.ROTATING,
+            )
+        )
+    }
+
+    @Test
+    fun rotationBridge_isNotEstablishedASecondTime() {
+        // One rotation episode walks N dead candidates through the same reserved transition. The
+        // bridge is held across all of them; establishing another would strand the first fd, i.e.
+        // leak a VPN interface for the rest of the process's life.
+        assertFalse(
+            shouldEstablishRotationBridge(
+                hasTunnel = false,
+                hasRotationBridge = true,
+                tunnelState = SessionTunnelState.ROTATING,
+            )
+        )
+    }
+
+    @Test
+    fun rotationBridge_isNeverEstablishedWhileALiveTunnelIsHeld() {
+        // establish() while a real interface is up would replace the interface Xray is dialing
+        // through with an unread one — turning a healthy tunnel into a blackhole.
+        assertFalse(
+            shouldEstablishRotationBridge(
+                hasTunnel = true,
+                hasRotationBridge = false,
+                tunnelState = SessionTunnelState.ROTATING,
+            )
+        )
+    }
+
+    @Test
+    fun rotationBridge_isEstablishedOnlyByAReservedRotation() {
+        // Scope is rotation ONLY. An initial connect has no prior tunnel to bridge from, and
+        // PAUSED is the kill-switch's deliberate no-tunnel state, whose compliance contract is
+        // literally "no tunnel must exist".
+        for (state in listOf(
+            SessionTunnelState.STARTING,
+            SessionTunnelState.CONNECTED,
+            SessionTunnelState.PAUSED,
+            SessionTunnelState.REVIVING,
+            SessionTunnelState.STOPPED,
+        )) {
+            assertFalse(
+                "$state has an owner other than a rotation; it must not open a bridge",
+                shouldEstablishRotationBridge(
+                    hasTunnel = false,
+                    hasRotationBridge = false,
+                    tunnelState = state,
+                )
+            )
+        }
+    }
 }
