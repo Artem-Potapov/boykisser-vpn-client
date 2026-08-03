@@ -910,6 +910,22 @@ class XrayVpnService : VpnService() {
                             updateNotification(localizedString(R.string.vpn_status_connected))
                             pendingKillLabel.also { pendingKillLabel = null }
                         }
+                        // ---- POST-COMMIT ----
+                        // Everything above ran under `lock` and COMMITTED the rotation: CONNECTED
+                        // is published, the give-up state is cleared, the new tunnel is live. What
+                        // follows is settle-up work, and none of it may reach the outer
+                        // `catch (error: Throwable)` — that calls failRotation, which funnels
+                        // straight into giveUpRotationLocked with sessionTunnelState == CONNECTED
+                        // and a real fd, i.e. classifies CONTAINED_BY_LIVE_TUNNEL and writes
+                        // BLACKHOLED, posts the give-up alert and stops the monitor OVER A HEALTHY,
+                        // JUST-RESTORED TUNNEL. A committed success must not be reclassifiable.
+                        //
+                        // Guarded per step rather than as one block, deliberately: the last two are
+                        // not cosmetic. Skipping applyFailoverPreferences leaves the watchdog dead
+                        // for the rest of the session, and skipping the replay silently drops a
+                        // kill-switch event the user asked for. A single shared guard would let a
+                        // throw in the first, most trivial step take both of those out.
+                        //
                         // The app's notion of "active profile" MUST follow, or the UI, the QS tile,
                         // and the next manual reconnect all still point at the dead server. It is
                         // also what a system-initiated start reads: resolveActiveAndStart (always-on
@@ -918,10 +934,20 @@ class XrayVpnService : VpnService() {
                         // NOT START_REDELIVER_INTENT, though — a redelivered intent carries the
                         // original EXTRA_PROFILE_ID and StartCommandDecision.decide routes it by
                         // that, never through the active profile.
-                        ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, next.id)
-                        VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)
-                        applyFailoverPreferences(failoverSettings, session.epoch) // restart monitor
-                        if (replayKillLabel != null) killTunnel(session.epoch, replayKillLabel)
+                        afterRotationCommitted("recording the new active profile") {
+                            ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, next.id)
+                        }
+                        afterRotationCommitted("posting the switched-server notice") {
+                            VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)
+                        }
+                        afterRotationCommitted("restarting the health monitor") {
+                            applyFailoverPreferences(failoverSettings, session.epoch)
+                        }
+                        if (replayKillLabel != null) {
+                            afterRotationCommitted("replaying the deferred kill") {
+                                killTunnel(session.epoch, replayKillLabel)
+                            }
+                        }
                     }
                     .onFailure { error ->
                         synchronized(lock) {
@@ -1205,6 +1231,30 @@ class XrayVpnService : VpnService() {
             }
             // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
             applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
+        }
+    }
+
+    /**
+     * Runs one settle-up [step] that follows a COMMITTED rotation, converting a throw into a log
+     * line instead of letting it escape.
+     *
+     * The escape is the whole point. `rotateTunnel`'s body is wrapped in `catch (Throwable) ->
+     * failRotation`, which funnels into `giveUpRotationLocked`; after the commit that runs with
+     * `sessionTunnelState == CONNECTED` and a live fd, so it classifies `CONTAINED_BY_LIVE_TUNNEL`
+     * and writes `BLACKHOLED` over the healthy tunnel the rotation just restored. A committed
+     * success must never be reclassifiable by follow-up work.
+     *
+     * `CancellationException` still propagates — structured-concurrency cancellation
+     * (`tunnelOpScope.cancel()` in `onDestroy`) is not a step failure and must not be swallowed,
+     * the same rule the surrounding handler follows.
+     */
+    private fun afterRotationCommitted(step: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (error: Throwable) {
+            LogRepository.append("Failover: $step failed after the rotation committed: ${error.message}")
         }
     }
 

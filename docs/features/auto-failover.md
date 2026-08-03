@@ -180,6 +180,15 @@ Key properties:
   off-lock, so a stop+restart in that window would otherwise let an old-epoch failure blacklist a
   server in the **new** session's episode. It is also only the owning branch that dispatches the
   recursive retry, and that retry is the one thing that needs the id excluded.
+- **A committed rotation cannot be reclassified by its own follow-up work.** `rotateTunnel`'s body is
+  wrapped in `catch (Throwable) → failRotation → giveUpRotationLocked`, and after the `.onSuccess`
+  lock block has committed, that funnel would run with `sessionTunnelState == CONNECTED` and a live
+  fd — classifying `CONTAINED_BY_LIVE_TUNNEL` and writing `BLACKHOLED` over the healthy tunnel the
+  rotation just restored. Every post-commit step therefore runs through `afterRotationCommitted`,
+  which logs a throw instead of letting it escape (and still propagates `CancellationException`).
+  Guarded **per step**, not as one block: skipping `applyFailoverPreferences` leaves the watchdog dead
+  for the rest of the session and skipping the replay silently drops a kill-switch event, so a shared
+  guard would let a throw in the trivial first step take both out.
 - **The thrash cap is a sliding window.** `FailoverDecision.admitRotation` prunes attempts older than
   `rotationWindowMs` before counting, so a burst long ago cannot permanently lock failover out.
 - **Candidate order is list order, not latency order** (`FailoverDecision.nextCandidate`). Deliberate
