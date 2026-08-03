@@ -395,6 +395,24 @@ one, which is the whole defect.
 **Note:** on the `UNPROTECTED` give-up (no tunnel at all) the 1106 notice is deliberately **absent** —
 there the app really is not behind a VPN, and that outcome reports itself.
 
+### 10a — A kill-switch pause must retract the give-up alert (1103 vs 1105)
+
+**Why:** both are high-importance heads-up alerts and they contradict each other. This is reachable
+for **all three** give-up outcomes, because a give-up leaves the session in `CONNECTED` and never
+touches the kill-switch monitor.
+
+**Steps (both features on), run once per outcome:** reach a give-up — Test 2 (`CONTAINED_BY_BLACKHOLE`),
+Test 3 (`CONTAINED_BY_LIVE_TUNNEL`), Test 5a (`UNPROTECTED`) — then foreground a kill-listed app.
+
+**PASS:**
+- The give-up alert (**1105**) is **gone** the moment the ⚠️ "VPN is OFF — you're exposed" alert
+  (**1103**) appears. Pull the shade down: exactly one of them is present.
+- State is **Paused**.
+- Leave the kill-listed app → the tunnel revives to **Connected**, and 1105 does **not** come back.
+
+**FAIL:** both alerts visible together at any point — in particular "your connection was paused to
+keep you protected" sitting beside "the VPN is OFF and you're exposed".
+
 ---
 
 ## Test 11 — Live settings edits mid-session

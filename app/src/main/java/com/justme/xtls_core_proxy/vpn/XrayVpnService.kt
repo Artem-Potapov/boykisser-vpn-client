@@ -651,6 +651,26 @@ class XrayVpnService : VpnService() {
                     // for every app" with "that app is still going through the VPN". Retract before
                     // posting so the two contradictory heads-ups never coexist.
                     VpnNotifications.cancelKillSwitchNotApplied(this@XrayVpnService)
+                    // 1105, the give-up alert, for exactly the same reason — and it IS reachable,
+                    // for all three outcomes. giveUpRotationLocked leaves sessionTunnelState
+                    // CONNECTED on every path that posts 1105 (mechanically required, so the re-arm
+                    // can reserve another rotation), which is precisely the state this kill needs to
+                    // proceed from, and nothing in the give-up path touches the kill-switch monitor.
+                    // So a blackholed or degraded session can be paused, and its "your connection
+                    // was paused to keep you protected" alert would then sit beside 1103's "the VPN
+                    // is OFF and you're exposed" on an equally loud channel.
+                    //
+                    // giveUpOutcome is deliberately NOT cleared here. Nothing reads it while PAUSED:
+                    // repostOngoingNotification takes its PAUSED branch, and shouldRestartForRecovery
+                    // is unreachable because every start surface refuses PAUSED
+                    // (connectAction(PAUSED) == UNAVAILABLE, decideTileClick(PAUSED) == Stop). It
+                    // cannot outlive the pause either — reviveTunnel's success path clears it, and
+                    // failRevive stops the session, which clears it too. Against that, clearing it
+                    // would add a SECOND disarm site for the marker shouldRestartForRecovery keys
+                    // off, which is exactly the coupling that produced the running-but-unconnectable
+                    // bug on the disable path. If a start affordance is ever added in PAUSED, clear
+                    // it here first — that is the trade-off being made, not an oversight.
+                    VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                     VpnNotifications.postExposed(
                         this@XrayVpnService,
                         triggerPackageLabel,

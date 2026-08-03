@@ -244,6 +244,29 @@ the user taps it, so `VpnNotifications.cancelKillSwitchNotApplied` is called fro
 The same retraction is recorded in [`kill-on-foreground.md`](kill-on-foreground.md), which owns the
 1103/1106 channel story.
 
+### 1103 and 1105 must never coexist
+
+`killTunnel` retracts **1105 as well**, immediately before posting 1103, and for the identical reason.
+Both are high-importance alerts and they contradict each other: 1105's contained variants say "your
+connection was paused to keep you protected" while 1103 says "the VPN is OFF and you're exposed".
+
+**This is reachable for all three give-up outcomes, not a theoretical pairing.** `killTunnel` proceeds
+only from `CONNECTED`, and `giveUpRotationLocked` leaves `sessionTunnelState == CONNECTED` on *every*
+path that posts 1105 — mechanically required, because a rotation reserves from `CONNECTED` and the
+re-arm would otherwise never be able to try again. Nothing in the give-up path touches the kill-switch
+monitor either (only `stopFailoverMonitorLocked`), so the pause can land at any time. The two paths
+that do **not** post 1105 — the "leaving it to its owner" stand-down and the give-up that stops the
+service — are also the two that do not leave `CONNECTED` running, so they are consistent.
+
+**`giveUpOutcome` is deliberately not cleared with it.** Nothing reads it while `PAUSED`:
+`repostOngoingNotification` takes its `PAUSED` branch, and `shouldRestartForRecovery` cannot be
+reached because every start surface refuses `PAUSED`. It cannot outlive the pause either —
+`reviveTunnel`'s success path clears it (and cancels 1105 again), and `failRevive` stops the session,
+which clears it in `stopVpn`. Clearing it here would add a **second** disarm site for the marker
+`shouldRestartForRecovery` keys off, which is the exact coupling that produced the
+running-but-unconnectable defect on the disable path; the residual cost is recorded under Known
+limitations instead.
+
 ## Give-up: three outcomes, one funnel, fail-closed
 
 `giveUpRotationLocked` is the **single funnel every give-up passes through**. The thrash-cap and
@@ -720,12 +743,14 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
 - **`TunnelHealthMonitor` has no constructor validation.** `failureThreshold <= 0` fires on the first
   failure (`>=` comparison); `intervalMs <= 0` hot-spins the loop. Both are unreachable through
   `FailoverPreferences.coerce`, which is the only production source.
-- **The kill-switch can pause a blackholed session**, leaving 1105 ("paused to keep you protected")
-  showing next to the kill-switch's 1103 ("VPN is OFF — you're exposed"). A contradictory pair;
-  `giveUpOutcome` is not cleared by `killTunnel`.
-- **`giveUpOutcome` survives into `PAUSED`.** No surface can dispatch a start from `PAUSED` today, but
-  **any future start affordance in `PAUSED` would bring a tunnel up under a kill-switch pause** via the
-  recovery-restart path. If you add one, clear `giveUpOutcome` in `killTunnel` first.
+- **`giveUpOutcome` survives into `PAUSED`.** No surface can dispatch a start from `PAUSED` today
+  (`connectAction(PAUSED) == UNAVAILABLE`, `decideTileClick(PAUSED) == Stop`), but **any future start
+  affordance in `PAUSED` would bring a tunnel up under a kill-switch pause** via the recovery-restart
+  path. If you add one, clear `giveUpOutcome` in `killTunnel` first. Keeping it is a deliberate
+  trade — see ["1103 and 1105 must never coexist"](#1103-and-1105-must-never-coexist) — and the one
+  visible residue is that disabling failover *during* a kill-switch pause emits the contained-give-up
+  message, whose "tap Reconnect" refers to a button `PAUSED` does not offer. Cosmetic: it does not
+  misstate the protection posture.
 - **`rotateTunnel` has no stale-callback guard**, unlike `killTunnel` (which drops a queued event whose
   feature was disabled while it sat on `tunnelOpScope`). A monitor callback already queued when the user
   disables failover still performs one rotation — a one-dispatch window, versus the up-to-an-hour timer
