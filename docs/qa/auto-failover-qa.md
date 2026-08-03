@@ -6,7 +6,9 @@ versionCode 4). Reinstall with `./gradlew :app:installDebug`.
 **What auto-failover does (the behaviour you're verifying):** while connected, the app probes the
 **live tunnel** with an HTTP 204 request through the tun. After `failureThreshold` consecutive
 failures it rotates to another server in the same pool (the same subscription, or the "My profiles"
-partition). When it runs out of servers it **gives up fail-closed** — it re-establishes a *blackhole*
+partition). **The switch itself is covered by a bridge TUN** — an unread fd held from the teardown
+until the new interface is established — so apps briefly lose connectivity instead of briefly leaking
+(Test 23). When it runs out of servers it **gives up fail-closed** — it re-establishes a *blackhole*
 TUN (an fd nobody reads) rather than releasing traffic to the clear network — and reports which of
 three physically different situations it left behind. Feature reference:
 [`docs/features/auto-failover.md`](../features/auto-failover.md).
@@ -81,6 +83,9 @@ Recorded so you don't spend hardware time on them.
 
 **FAIL:** no rotation at all (feature not armed — see Test 8); the state stays "Connected" through the
 teardown gap (the gap must be announced); the list still highlights A after a successful rotation.
+
+**Note:** this test does not prove the switch is leak-free — only that it works. **Test 23** is the one
+that proves it, and it needs a packet capture.
 
 ---
 
@@ -777,6 +782,96 @@ ViewModel alive and are not affected.
 
 ---
 
+## Test 23 — No cleartext escapes during a switch (the rotation bridge) ★★ MANDATORY BEFORE MERGE
+
+**Why:** rotation tears the TUN down and then spends **seconds** off-lock building the next config
+(`buildRuntimeConfig`, geo-asset prep, the split read) before `establish()`. Until the rotation bridge
+landed, every tunneled app emitted cleartext on the underlying network for that whole span — on every
+routine rotation, and once per dead candidate while a pool is exhausted. Nothing in the JVM suite can
+prove this: `XrayVpnService` is not instantiable there, so the pure rules are tested and the
+*sequencing* is not. **This test is the only proof that the fix works.** Feature reference:
+[`docs/features/auto-failover.md` → The rotation bridge](../features/auto-failover.md#the-rotation-bridge-no-clear-network-during-a-switch).
+
+**You need:** a second machine on the same network able to see the device's traffic (a laptop running
+a hotspot the phone is joined to, plus `tcpdump`/Wireshark), **or** `adb shell` with `tcpdump`
+available on a rooted device. Watching the app's own logs is *not* sufficient — the whole point is
+what leaves the device.
+
+### 23a — The routine switch (the main case)
+
+**Steps:**
+1. Enable auto-failover. Connect to server **A** in a pool that also has a **working** server **B**.
+2. Start capturing on the underlying interface (wlan). Filter to the device's IP and **exclude** A's
+   and B's server addresses — what remains should be nothing but the bridge's own absence of traffic.
+3. In a foreground app, start something that generates continuous, easily-identified traffic to a
+   **plain-HTTP** destination (so the destination is legible in the capture, not just an SNI), e.g. a
+   loop of `curl http://example.com` from Termux, or a page that auto-refreshes.
+4. Kill A's proxy and let the watchdog rotate to B.
+
+**PASS:**
+- Logs show, in this order and with nothing in between:
+  `Failover: rotating A -> B`, `Failover: rotation bridge TUN established with fd=…`, then later
+  `Failover: rotation bridge released (handing over to the newly established tunnel)` and
+  `TUN established with fd=…`.
+- The capture shows **no packet to the step-3 destination on the underlying network** at any point,
+  including the whole window between the two log lines. Traffic to A's and B's server addresses is
+  expected and fine — that is the proxy itself.
+- The step-3 traffic **stalls** during the switch and resumes after "Connected". A stall is the
+  intended trade; a leak is not.
+
+**FAIL — report immediately:** any packet addressed to the step-3 destination appearing on the
+underlying interface during the switch. That is the defect this test exists to catch, and it means the
+bridge was not established, was released too early, or the handover was reordered.
+
+### 23b — The exhausting-pool case (N dead candidates, one bridge)
+
+**Steps:**
+1. Same setup, but kill **every** server in the pool so the rotation walks all of them and gives up.
+
+**PASS:**
+- `Failover: rotation bridge TUN established with fd=…` appears, and the **fd number stays the same**
+  across all the candidate attempts — the bridge is held across the whole episode, not re-opened per
+  candidate. A second `rotation bridge TUN established` line with a *different* fd, without a
+  `released` line in between, is a leaked interface.
+- The capture stays clean across the entire episode, not just the first attempt.
+- The give-up ends with `Failover: give-up adopted the rotation bridge (fd=…)` — **the same fd** — and
+  **not** a separate `Failover: blackhole TUN established`. Then the normal Test 2 outcome:
+  `Failover: traffic is held in an unread tunnel…`, state **"No server connection"**, and the
+  IP-check site does **not** load.
+
+**FAIL:** the give-up logs `blackhole TUN established` with a new fd while a bridge line had no
+matching `released` (a stranded interface); **or** the give-up reports the `CONTAINED_BY_LIVE_TUNNEL`
+copy ("None of your servers responded… your connection is paused") on the *no-tunnel* path — that is
+the adopted bridge inheriting the live tunnel's meaning, the specific hazard this design guards
+against. Distinguish by the ongoing line: `vpn_status_no_response` is `CONTAINED_BY_LIVE_TUNNEL`,
+`vpn_status_blackholed` is the correct one here.
+
+### 23c — A kill-switch pause landing between candidates
+
+**Why:** the one exit that would otherwise strand the bridge in `PAUSED`, where the kill-switch's
+contract is "no tunnel must exist".
+
+**Steps:**
+1. Enable both the kill-switch (listing app **X**) and auto-failover. Connect to A. Kill every server.
+2. While the rotation is walking candidates, bring **X** to the foreground.
+
+**PASS:** logs show `Failover: rotation bridge released (the kill-switch paused the session)`, state
+goes **Paused**, the exposed heads-up appears, and **X has normal internet** (the kill-switch means
+the VPN is off for it — *not* that it is blackholed). `dumpsys connectivity` shows no VPN.
+**FAIL:** X has no internet at all while PAUSED (the bridge was left up), or a VPN is still present in
+`dumpsys` after the pause.
+
+### 23d — Stop during the switch
+
+**Steps:** force a rotation as in 23a, and hit **Disconnect** (or the notification's Stop) while the
+state reads "Switching…".
+
+**PASS:** `Failover: rotation bridge released (the session is stopping)` appears, the service stops,
+and `adb shell dumpsys connectivity | grep -i vpn` shows **no** VPN afterwards.
+**FAIL:** a VPN interface survives the stop — the leaked-fd failure mode.
+
+---
+
 ## Result log
 
 Record the outcome here as you go, so a partial run is still useful to the next person.
@@ -805,3 +900,4 @@ Record the outcome here as you go, so a partial run is still useful to the next 
 | 20 Second Reconnect tap during the window ★ | | first request must win |
 | 21 Tile/notification Stop overrides a Reconnect ⚠ | | known limitation — record surface + timing |
 | 22 Reconnect does not survive an Activity finish | | rotate/background must still complete |
+| 23a/b/c/d No cleartext during a switch ★★ | | capture required; record the bridge fd across 23b |

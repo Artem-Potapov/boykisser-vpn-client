@@ -61,7 +61,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │   ├── features/                   Per-feature maintainer reference — CHECK HERE FIRST
 │   │   ├── app-appearance.md        Theme modes (System/Light/Dark/True Dark) + Material You; live repo recompose; Theme.kt inline-SDK-guard gotcha
 │   │   ├── auto-connect-boot.md     Stateless explainer + deep-link to OS Always-on VPN (no boot receiver, no local state)
-│   │   ├── auto-failover.md        Tunnel health watchdog, rotation engine, three-outcome fail-closed give-up (blackhole TUN), BLACKHOLED state, Reconnect (ConnectAction + ReconnectFlow), "disconnect now, stop if re-arm fails", connect-to-fastest
+│   │   ├── auto-failover.md        Tunnel health watchdog, rotation engine, the rotation bridge TUN, three-outcome fail-closed give-up (blackhole TUN), BLACKHOLED state, Reconnect (ConnectAction + ReconnectFlow), "disconnect now, stop if re-arm fails", connect-to-fastest
 │   │   ├── boykisser-nag-screen.md
 │   │   ├── boykisser-vpn.md
 │   │   ├── config-sanitization.md  Read-only inverse diagnostic over the effective runtime pipeline
@@ -323,6 +323,15 @@ together — change them as a pair), plus a third normalization on the same chok
   (`CONTAINED_BY_LIVE_TUNNEL` / `CONTAINED_BY_BLACKHOLE` / `UNPROTECTED`) must never share one
   user-facing message, and the uncontained one must never inherit containment copy. See
   [`docs/features/auto-failover.md`](docs/features/auto-failover.md).
+- **The same unread TUN also bridges every rotation.** A rotation tears the tunnel down under `lock`
+  and then builds the next config off-lock for seconds, so `rotateTunnel` opens a
+  **rotation bridge** over that window and `bringUpTunnel` releases it immediately before
+  `establish()` — release-then-establish, adjacent, no I/O between. It lives in its own field
+  (`rotationBridgeInterface`), **never** in `tunInterface`: that field means *the live, still-proxying
+  tunnel*, and a bridge stored there would make a give-up landing in the gap report
+  `CONTAINED_BY_LIVE_TUNNEL`. A give-up **adopts** the bridge instead of building a second TUN, and
+  every other exit from the gap must release it — a leaked bridge is a leaked VPN interface. See
+  [`docs/features/auto-failover.md`](docs/features/auto-failover.md).
 
 ## Dormant / Temporarily-Disabled Features
 These feature **entry points** are intentionally switched off in the working tree. The disabling is
@@ -438,8 +447,10 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   and **not** the user-editable Ping Test target: a static routing rule cannot track an editable value.
   Known residual, deliberately not closed: it is a `domain` rule, so it is inert under `PROXY_ALL` with
   ads off and the user's XRAY sniffing toggle off. See `docs/features/routing-rules.md`.
-- Auto-failover never releases traffic to the clear network on purpose: exhausting the pool
-  re-establishes a **blackhole TUN** (unread fd, DNS aimed into it, same split-tunnel capture), and the
+- Auto-failover never releases traffic to the clear network on purpose: **each rotation is bridged by
+  an unread TUN** (so a switch stalls apps rather than leaking them), and exhausting the pool
+  re-establishes — or adopts that bridge as — a **blackhole TUN** (unread fd, DNS aimed into it, same
+  split-tunnel capture), and the
   only outcome that admits exposure (`UNPROTECTED`) says so honestly on every surface, gets exactly one
   automatic recovery rotation, and then **stops the service** rather than running while protecting
   nothing. `VpnConnectionState.BLACKHOLED` is a live, stoppable state — every surface that treats a
@@ -540,8 +551,10 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     success with the proxy dead. Change the two together or not at all.
   - `vpn/SessionLifecycleDecision.kt` — every service-side rule is a pure function there
     (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
-    `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`,
-    `classifyGiveUpOutcome`, `connectionStateForGiveUp`, `shouldStopServiceOnGiveUp`,
+    `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishRotationBridge`,
+    `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
+    gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
+    `shouldStopServiceOnGiveUp`,
     `shouldFireFailoverRetry`, `shouldRestartForRecovery`,
     `activeProfileIdToRestoreOnRefusedStart`, `shouldReleaseGiveUpOnDisable`,
     `shouldOverwritePendingConnect`). Add rules there, not as new

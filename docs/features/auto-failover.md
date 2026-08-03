@@ -1,8 +1,9 @@
 # Auto-Failover: Tunnel Health Watchdog, Rotation Engine & Fail-Closed Give-Up
 
 Maintainer reference for auto-failover: a health watchdog that probes the **live tunnel**, an engine
-that rotates to a sibling server when it stops passing traffic, and a give-up posture that is
-fail-**closed** by construction rather than by luck. Connect-to-fastest (the manual counterpart that
+that rotates to a sibling server when it stops passing traffic — over a **bridge TUN**, so the switch
+itself never releases traffic to the clear network — and a give-up posture that is fail-**closed** by
+construction rather than by luck. Connect-to-fastest (the manual counterpart that
 reuses the same pool and the same ping machinery) is documented here for the failover-side halves and
 in [`profile-actions-menu.md`](profile-actions-menu.md) for the menu/UI half.
 
@@ -154,15 +155,19 @@ ownership before every mutation, route every escape through one fail path.
 [CONNECTED] ──canReserveRotation (CONNECTED only)──> [ROTATING]
      ▲                                                    │
      │                                    tearDownTunnelLocked()
+     │                            + OPEN THE ROTATION BRIDGE (unread TUN)
      │                              + announce CONNECTING / "Switching…"
      │                                                    │
      │                                          bringUpTunnel(next)
+     │                              (release the bridge, then establish(),
+     │                               adjacent, inside one locked block)
      │                                             │            │
      └────── success: CONNECTED, 1104 notice ──────┘            │
      │       active profile advances, monitor restarted         │
      │                                                          │
      └────── failure: episodeFailedIds += next.id,      ────────┘
              tear down the half-built fd,
+             RE-OPEN the bridge for the retry,
              currentProfileId rolled back,
              recurse into rotateTunnel (still under the thrash cap)
 
@@ -176,14 +181,12 @@ Key properties:
 - **`ROTATING` is its own `SessionTunnelState`**, deliberately not shared with `REVIVING`. Rotation
   reserves from `CONNECTED`; revive reserves from `PAUSED`. Sharing one state would let a kill-switch
   revive and a failover rotation each believe they own the same transition.
-- **The gap is ANNOUNCED.** From `tearDownTunnelLocked()` until `establish()` there is **no VPN
-  interface at all** — `bringUpTunnel` does `buildRuntimeConfig`, geo-asset prep and the split read
-  off-lock first. Leaving the UI, the ongoing notification and the QS tile saying CONNECTED through
-  that window would claim protection the user does not have, so the same locked block that tears down
-  publishes `CONNECTING` + `vpn_status_switching`. The teardown-before-bring-up ordering itself is
-  forced by `bringUpTunnel`'s `check(tunInterface == null)` and is **not** what changed — only the
-  silence was. Every exit re-announces: success → `CONNECTED`, retry → `CONNECTING` again, give-up →
-  `BLACKHOLED`/`ERROR`.
+- **The gap is BRIDGED, and also announced.** See [the next section](#the-rotation-bridge-no-clear-network-during-a-switch)
+  — it is the reason rotation is safe at all. The announcement remains: the same locked block that
+  tears down publishes `CONNECTING` + `vpn_status_switching`, because the bridge *holds* traffic but
+  does not *carry* it, so leaving the UI, the ongoing notification and the QS tile saying CONNECTED
+  would still claim a working connection the user does not have. Every exit re-announces: success →
+  `CONNECTED`, retry → `CONNECTING` again, give-up → `BLACKHOLED`/`ERROR`.
 - **A failed candidate's fd is torn down.** `bringUpTunnel` can fail *after* `establish()` (e.g.
   `startXray` threw), leaving a real fd with an indeterminate Xray behind it. The failure arm drops it
   so `tunInterface != null` keeps its single downstream meaning: *the live, still-proxying tunnel*.
@@ -219,6 +222,117 @@ Key properties:
   object's KDoc marks it the **Spec 2 seam** for user-curated pools. Connect-to-fastest resolves through
   the same object on purpose — an independently-derived second pool would diverge with no compile-time
   signal.
+
+## The rotation bridge: no clear network during a switch
+
+`rotateTunnel` tears the dead TUN down under `lock`, then `bringUpTunnel` does `buildRuntimeConfig`,
+`GeoAssetPreparer.prepare`, the `SplitTunnelRepository` read and the whole `Builder` setup **off-lock**
+before it reaches `establish()`. For that entire span the session owns **no VPN interface**, so every
+app that was tunneled emits cleartext on the underlying network. It happens on **every** routine
+rotation, and once per dead candidate while a pool is exhausted. For users evading state censorship
+that is a multi-second window of real destinations visible to DPI, repeated per switch.
+
+The teardown-before-bring-up ordering is forced by `bringUpTunnel`'s `check(tunInterface == null)` and
+did not change. What changed is that the window is now **covered by a bridge TUN**: the give-up
+blackhole builder re-used as a stop-gap — same session name, MTU, addresses, default routes, DNS
+servers and `SplitTunnelPlanner` plan, so exactly the same apps stay captured, but **no protector and
+no Xray**. Packets enter an fd nobody reads and are dropped.
+
+**The trade is deliberate and is the safe direction:** during a switch, apps briefly lose connectivity
+instead of briefly leaking.
+
+`shouldEstablishRotationBridge(hasTunnel, hasRotationBridge, tunnelState)` (pure, in
+`SessionLifecycleDecision.kt`) decides when one is opened: `ROTATING` only, no live tunnel, and none
+already held. Scope is **rotation only** — an initial connect has no prior tunnel to bridge from, and
+`reviveTunnel` starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
+
+### `tunInterface` keeps its single meaning — the bridge is its own field
+
+The bridge lives in `rotationBridgeInterface`, **never** in `tunInterface`. That is not tidiness; it
+is the whole reason this fix is not worse than the bug. `tunInterface != null` does not mean "an fd
+exists", it means **the live, still-proxying tunnel**, and three readers depend on exactly that:
+
+| Reader | What it does with `tunInterface` | What a bridge stored there would cause |
+|---|---|---|
+| `giveUpRotationLocked` (`hadTunnel`) | feeds `classifyGiveUpOutcome` | `CONTAINED_BY_LIVE_TUNNEL` — "your traffic is still being proxied", said over an unread fd with no Xray behind it |
+| `clearGiveUpStateOnRecovery` | refuses to clear a give-up while it is null, because a probe with no tunnel travels the clear network and succeeds for the wrong reason | a stale give-up cleared over no tunnel |
+| `bringUpTunnel` / the unread-TUN builder | `check(… == null)` before `establish()` | a bring-up refused by its own precondition |
+
+That first row is this branch's cardinal failure shape — one outcome inheriting another's meaning —
+reintroduced by the fix for it. Hence the separate identity.
+
+### A give-up in the gap ADOPTS the bridge
+
+The bridge already *is* the interface a give-up wants, so `giveUpRotationLocked` takes it over rather
+than building a second one — which would strand the bridge fd, i.e. leak a VPN interface for the rest
+of the process's life.
+
+`containmentForGiveUp(hasTunnel, hasRotationBridge, tunnelState)` (pure) is the single ordered
+decision: `NONE` / `ADOPT_ROTATION_BRIDGE` / `ESTABLISH_BLACKHOLE`. It **replaced** the two-valued
+`shouldEstablishBlackholeTunnel`, because containment now has two sources that must be evaluated in a
+fixed order and a pair of independent booleans cannot express that — check "build a blackhole" first
+and it fires while a bridge is held. An exhaustive `when` over the enum makes that inversion
+unrepresentable. `hasTunnel` still wins outright, and the `CONNECTED`-only rule is unchanged:
+adopting a bridge into `PAUSED` would break the kill-switch's "no tunnel must exist" contract exactly
+as surely as building one would.
+
+The outcome is `CONTAINED_BY_BLACKHOLE`, and it is reached **honestly, not by coincidence**: an
+adopted bridge is byte-for-byte the blackhole the give-up would have built. It stays honest only
+because `giveUpRotationLocked` reads `hadTunnel` **before** the containment step — adoption writes
+`tunInterface`, so reading it after would classify the same give-up `CONTAINED_BY_LIVE_TUNNEL`.
+`SessionLifecycleDecisionTest.adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel` pins that
+composition.
+
+### Every exit releases or adopts the bridge
+
+An unreleased bridge is a leaked VPN interface that goes on capturing every tunneled app into an
+unread fd. The full set of exits from the gap:
+
+| Exit | Handling |
+|---|---|
+| Bring-up succeeds | `bringUpTunnel` releases it immediately before `establish()` (the handover, below) |
+| Bring-up fails — before or after `establish()` | the failure arm tears down any half-built fd and **re-opens** the bridge (idempotent: a pre-`establish()` failure still holds the original and keeps that fd rather than churning it) before recursing, and the recursion re-reads the DB and re-resolves the pool off-lock |
+| Recursive retry / N dead candidates | one bridge is held across the whole episode; `shouldEstablishRotationBridge`'s `hasRotationBridge` term is what prevents a second |
+| Give-up (thrash cap, no candidate, rotation error) | **adopted** as the blackhole |
+| Give-up stand-down (`sessionTunnelState != CONNECTED`) | released — a backstop; `killTunnel` and `stopVpn` already cover the states that reach it |
+| Kill-switch pause between attempts | `killTunnel` releases it. Reachable: a failed candidate returns to `CONNECTED` and dispatches its retry as a *separate* coroutine, so a kill queued on the same serialized `tunnelOpScope` can land in between. `PAUSED` means "no tunnel must exist", and the bridge would also be stranded — the retry then bails at `canReserveRotation` |
+| `stopVpn` (user stop, `onDestroy`, `onRevoke`, the give-up that stops the service, the `UNPROTECTED` recovery restart) | released, **above** the `!shouldStop && tunInterface == null` early return so every path through it is covered |
+| A stale/superseded session | covered by `stopVpn`: losing ownership mid-rotation means a stop ran, and the failure arm and the give-up funnel both skip their own bridge handling when the ownership check fails |
+
+`stopVpn` gains only one `ParcelFileDescriptor.close()` — nothing that awaits, so the RISK-1 rule
+(the `UNPROTECTED` recovery restart calls `stopVpn` on the main thread) still holds.
+
+### One builder body, two users
+
+`establishUnreadTunnelLocked(label)` is the shared body; `establishBlackholeTunnelLocked()` and
+`establishRotationBridgeLocked()` are thin wrappers that differ only in which field takes the fd. Not
+copied, deliberately: a drifted second copy would capture a **different app set** than the tunnel it
+replaced, which is a silent leak of exactly the apps the user tunneled. Its `check` covers both fields
+and stays **inside** the `try` for the reason it always did — both callers are reachable from
+`rotateTunnel`'s `catch (Throwable)`, and a throw raised inside a catch block escapes that try/catch
+entirely, landing uncaught on a `SupervisorJob` with no handler.
+
+Bridge establishment is **best-effort**: on failure the session simply falls back to the uncovered gap
+this bridge exists to close, which is where the code was before it existed.
+
+### Handover ordering: release-then-establish, and the follow-up it defers
+
+The handover is **release the bridge, then `establish()` the real interface**, adjacent, inside
+`bringUpTunnel`'s existing locked block, with **no I/O between them** — everything expensive has
+already run off-lock above. The window in which no interface exists collapses from seconds to one
+binder round-trip, and `bringUpTunnel`'s `check(tunInterface == null)` precondition is untouched.
+
+**The seamless ordering is a real, derived follow-up — not a rejected idea.** Android replaces the
+process's active VPN interface when `establish()` is called again, so establishing *first* and closing
+the bridge *after* would leave no instant without an interface at all, making the handover genuinely
+gapless. The reason it is not implemented: what happens to the still-active bridge when that second
+`establish()` **fails** is exactly the part no documentation settles. If a partially-applied failure
+deactivates the bridge, the code would believe it holds an interface while the user is on the clear
+network — trading a bounded stall for an unbounded leak, which is the wrong direction for this threat
+model. It needs a device, and none was reachable. **Verify on hardware, then swap the two lines and
+close the residual window.** Until then the residual exposure is one `establish()` call, plus — only
+on the bring-up-failure path — the short hop from that call returning to the failure arm re-opening
+the bridge under the same lock.
 
 ## Coexistence with the kill-switch
 
@@ -314,25 +428,31 @@ straight back to the clear network — and whether that happened would depend on
 (after `establish()` = contained, before = exposed). A posture that is fail-closed-if-you-are-lucky is
 worse than either consistent answer.
 
-So when the session should own a tunnel and has none, `establishBlackholeTunnelLocked()` re-establishes
-a **blackhole TUN**: same session name, MTU, addresses, default routes, DNS servers and split-tunnel
-plan as a real bring-up, but **no protector registration and no Xray**. Packets enter an fd nobody
-reads and are dropped. Capture parity with `bringUpTunnel` is exact and load-bearing — in particular
+So when the session should own a tunnel and has none, the give-up ends up owning a **blackhole TUN**:
+same session name, MTU, addresses, default routes, DNS servers and split-tunnel plan as a real
+bring-up, but **no protector registration and no Xray**. Packets enter an fd nobody reads and are
+dropped. It comes from one of two places, chosen by `containmentForGiveUp` — a fresh
+`establishBlackholeTunnelLocked()`, or the **adoption of a rotation bridge** that is already open (see
+[The rotation bridge](#the-rotation-bridge-no-clear-network-during-a-switch)). Both go through the same
+builder, so this paragraph describes both. Capture parity with `bringUpTunnel` is exact and load-bearing — in particular
 `addDnsServer` is set **and** both default routes send the resolver's own address into the unread fd,
 so the system resolver, an app's own DoH/DoT to hardcoded IPs, and Private DNS strict mode all time
 out rather than leaking. Apps the user split **out** keep the direct route they already had while
 connected; everything else keeps riding the tun, now into the blackhole.
 
-`check(tunInterface == null)` sits **inside** the `try` on purpose: this method is reached from
-`rotateTunnel`'s `catch (Throwable)`, and a throw raised inside a catch block escapes that try/catch
-entirely — landing uncaught on a `SupervisorJob` with no handler, i.e. process death with the VPN up. A
-contract violation must degrade to "uncontained", never to a crash.
+The builder's `check(tunInterface == null && rotationBridgeInterface == null)` sits **inside** the
+`try` on purpose: it is reached from `rotateTunnel`'s `catch (Throwable)`, and a throw raised inside a
+catch block escapes that try/catch entirely — landing uncaught on a `SupervisorJob` with no handler,
+i.e. process death with the VPN up. A contract violation must degrade to "uncontained", never to a
+crash.
 
 ### The three outcomes
 
 `classifyGiveUpOutcome(hadTunnel, blackholeEstablished)` (pure, in `SessionLifecycleDecision.kt`).
-`hadTunnel` wins outright — if an fd was already owned we never tried to blackhole, so
-`blackholeEstablished` carries no information in that case.
+`hadTunnel` wins outright — if an fd was already owned we never tried to contain anything, so
+`blackholeEstablished` carries no information in that case. It is read **before** the containment
+step, which is what keeps an adopted rotation bridge classified `CONTAINED_BY_BLACKHOLE` instead of
+inheriting the live tunnel's copy.
 
 | Outcome | Physical situation | Connection state | Ongoing line (1101) | Alert (1105) | Stops the service? |
 |---|---|---|---|---|---|
@@ -752,10 +872,10 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 | [`failover/FailoverSettingsPersistDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverSettingsPersistDecision.kt) | Pure `resolveFailoverSettings(...)` — the autosave rule extracted out of the Activity so it is JVM-testable (the codebase's `TileClickDecision`/`StartCommandDecision` shape). |
 | [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free Connect-to-fastest orchestration: generation-counter job replacement, delivery-time re-gate, `FastestConnectOutcome` (NO_RESPONSE / BUSY / STATE_CHANGED), cancellation cleanup. |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Pure `pickFastest(states, candidates)` and `clearStaleTesting(states, ids)`. |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishBlackholeTunnel`, `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, **`shouldEstablishRotationBridge`**, **`GiveUpContainment` + `containmentForGiveUp`** (replaced `shouldEstablishBlackholeTunnel`), `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
 | [`state/ConnectAction`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) (in `VpnViewModel.kt`) | The connect gate: `ConnectAction` + `connectAction`/`connectLabelRes`/`connectEnabled`. Replaces the former boolean `canConnect`. |
 | [`state/ReconnectFlow.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ReconnectFlow.kt) | Framework-free stop→settle→start→verify sequencing for Reconnect: `STOP_TIMEOUT_MS`, `START_VERIFY_MS`, the first-wins in-flight guard (`reconnectingProfileId`), `generation` cleanup, `cancel()`. Canonical home for **why** Reconnect is not a `shouldRestartForRecovery` widening. |
-| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, `establishBlackholeTunnelLocked`, `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |
+| [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, the `rotationBridgeInterface` field and its four operations (`establishUnreadTunnelLocked` — the shared builder — plus `establishBlackholeTunnelLocked` / `establishRotationBridgeLocked` / `adoptRotationBridgeLocked` / `releaseRotationBridgeLocked`), `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |
 | [`vpn/VpnNotifications.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/VpnNotifications.kt) | Channels 4 and 5 and ids 1104/1105; `postFailover`, the three `postFailover*` give-up variants (shared id + `postGiveUp` builder), `cancelFailoverBlackholed`. Also id 1106 / `postKillSwitchNotApplied` — a new id on the kill-switch's **existing** exposure channel — **and its `cancelKillSwitchNotApplied` counterpart** (see below). |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `VpnConnectionState.BLACKHOLED`. |
 | `res/values/strings.xml`, `res/values-ru/strings.xml` | All failover strings, both locales (release lint fails on a missing one). |
@@ -811,9 +931,19 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   continuous (`stopService = false` skips `stopForeground`). Suppressing it would mean either a
   "restarting" flag threaded through `stopVpn` or reordering its state write, both of which touch the
   one function that must never grow anything that awaits.
-- **`shouldEstablishBlackholeTunnel` is redundant at its only call site** (its state arm is dead behind
-  the stand-down above it), and 3 of its 4 tests cover unreachable branches — coverage that looks
-  stronger than it is.
+- **`containmentForGiveUp`'s state arm is dead at its only call site** (the stand-down above it already
+  returned for every non-`CONNECTED` state), as it was for the `shouldEstablishBlackholeTunnel` it
+  replaced. Kept, because it is the rule that stops a future caller adopting a bridge into `PAUSED`;
+  its tests for that arm therefore cover an unreachable branch — coverage that looks stronger than it is.
+- **The rotation bridge's service-side SEQUENCING is not covered by any test.** `XrayVpnService`
+  cannot be instantiated in the JVM suite, so the pure rules
+  (`shouldEstablishRotationBridge`, `containmentForGiveUp`, and the classifier composition) are tested
+  and mutation-verified, while "each exit really does reach a release or an adoption" rests on the
+  enumeration in this document plus a code read. QA Test 23 is the device check.
+- **Bridge establishment is best-effort.** If `establish()` returns null or throws while opening the
+  bridge, the rotation proceeds through the *uncovered* gap — the pre-bridge behaviour — rather than
+  failing. It is logged (`Failover: rotation bridge TUN could not be established`) and nothing else
+  reports it, because a rotation that refused to proceed would be strictly worse.
 - **`stopVpn`'s `!shouldStop && tunInterface == null` early return skips `failoverRearmJob?.cancel()`**,
   so an up-to-an-hour timer can idle past it. Harmless: the job re-checks `isCurrentSessionLocked`.
 - **The blackhole builder omits `bringUpTunnel`'s "allow-only mode with no selected apps" warning** —
@@ -888,8 +1018,8 @@ is itself the argument for doing it.
 | `failover/FailoverSettingsPersistDecisionTest` (12) | Per-control autosave: an invalid field never vetoes the tuple; the timeout ceiling is derived from the **effective** interval; the exact headroom boundary (9 000 at interval 10 000) is accepted and the coerce-gap value (9 500) is rejected. |
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
-| `vpn/SessionLifecycleDecisionTest` (45) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release) and `shouldOverwritePendingConnect`. |
-| `vpn/SessionLifecycleRotationTest` (8) | Rotation reservation; the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. |
+| `vpn/SessionLifecycleDecisionTest` (48) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), `shouldOverwritePendingConnect`, and `containmentForGiveUp` — the live tunnel wins over a held bridge, the bridge wins over building a second TUN, the state arm, and `adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`, which composes containment with `classifyGiveUpOutcome` exactly as `giveUpRotationLocked` does. |
+| `vpn/SessionLifecycleRotationTest` (12) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
 | `state/ReconnectFlowTest` (9) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process). |
