@@ -660,16 +660,32 @@ class XrayVpnService : VpnService() {
                     // was paused to keep you protected" alert would then sit beside 1103's "the VPN
                     // is OFF and you're exposed" on an equally loud channel.
                     //
-                    // giveUpOutcome is deliberately NOT cleared here. Nothing reads it while PAUSED:
-                    // repostOngoingNotification takes its PAUSED branch, and shouldRestartForRecovery
-                    // is unreachable because every start surface refuses PAUSED
-                    // (connectAction(PAUSED) == UNAVAILABLE, decideTileClick(PAUSED) == Stop). It
-                    // cannot outlive the pause either — reviveTunnel's success path clears it, and
-                    // failRevive stops the session, which clears it too. Against that, clearing it
-                    // would add a SECOND disarm site for the marker shouldRestartForRecovery keys
-                    // off, which is exactly the coupling that produced the running-but-unconnectable
-                    // bug on the disable path. If a start affordance is ever added in PAUSED, clear
-                    // it here first — that is the trade-off being made, not an oversight.
+                    // giveUpOutcome is deliberately NOT cleared here. It has FOUR readers, and one
+                    // of them IS reachable while PAUSED:
+                    //   * repostOngoingNotification — takes its PAUSED branch, never reads it;
+                    //   * clearGiveUpStateOnRecovery — early-returns unless the state is CONNECTED,
+                    //     and the failover monitor that drives it was just stopped above;
+                    //   * shouldRestartForRecovery — unreachable, because every start surface
+                    //     refuses PAUSED (connectAction(PAUSED) == UNAVAILABLE,
+                    //     decideTileClick(PAUSED) == Stop);
+                    //   * applyFailoverPreferences' disable branch — REACHABLE. The settings
+                    //     observer is live throughout the pause and that branch is gated only on
+                    //     `enabled`, not on tunnel state. So switching auto-failover off during a
+                    //     kill-switch pause, with a CONTAINED give-up still recorded, releases it
+                    //     and emits vpn_failover_disabled_while_blackholed / _while_degraded —
+                    //     whose "tap Reconnect" names a button PAUSED does not offer.
+                    // That last one is cosmetic: it misstates the remedy, never the protection
+                    // posture, and the release itself is harmless here (the marker would have been
+                    // cleared by the revive anyway). It is recorded under Known limitations in
+                    // docs/features/auto-failover.md.
+                    //
+                    // The marker cannot outlive the pause either — reviveTunnel's success path
+                    // clears it, and failRevive stops the session, which clears it too. Against
+                    // that, clearing it here would add a SECOND disarm site for the marker
+                    // shouldRestartForRecovery keys off, which is exactly the coupling that
+                    // produced the running-but-unconnectable bug on the disable path. If a start
+                    // affordance is ever added in PAUSED, clear it here first — that is the
+                    // trade-off being made, not an oversight.
                     VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                     VpnNotifications.postExposed(
                         this@XrayVpnService,
