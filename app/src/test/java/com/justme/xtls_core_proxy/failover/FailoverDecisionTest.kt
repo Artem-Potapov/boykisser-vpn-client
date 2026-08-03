@@ -32,10 +32,24 @@ class FailoverDecisionTest {
     }
 
     @Test
-    fun nextCandidate_isDeterministic() {
-        val a = FailoverDecision.nextCandidate(pool, 1L, emptySet())?.id
-        val b = FailoverDecision.nextCandidate(pool, 1L, emptySet())?.id
-        assertEquals(a, b)
+    fun nextCandidate_followsListOrder_notIdOrder_andIsStableAcrossCalls() {
+        // This used to compare nextCandidate(...) against nextCandidate(...) with identical
+        // arguments, which a pure function cannot fail. What needs pinning is WHICH order
+        // "deterministic" means: the pool arrives in the same order the UI lists servers, so the
+        // pick must follow list POSITION, not the id value — and a pool whose ids run backwards is
+        // the only shape that can tell those two apart. `nextCandidate_skipsCurrent_...` uses
+        // [1, 2, 3], where list order and id order agree, so it cannot.
+        val reversed = listOf(profile(3), profile(1), profile(2))
+        assertEquals(
+            "must take the first eligible server in LIST order, not the lowest id",
+            3L,
+            FailoverDecision.nextCandidate(reversed, currentId = 1L, recentlyFailed = emptySet())?.id,
+        )
+        assertEquals(
+            "and must answer the same way every time it is asked",
+            3L,
+            FailoverDecision.nextCandidate(reversed, currentId = 1L, recentlyFailed = emptySet())?.id,
+        )
     }
 
     @Test
