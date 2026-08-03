@@ -1432,8 +1432,9 @@ class XrayVpnService : VpnService() {
     /**
      * Establishes a TUN with no reader attached: same session name, MTU, addresses, default routes,
      * DNS servers and split-tunnel plan as a real bring-up, but NO protector registration and NO
-     * Xray. Packets enter the fd and are dropped, which is what makes give-up genuinely fail-closed
-     * rather than fail-closed-if-you-are-lucky.
+     * Xray. Packets enter the fd and are dropped — which is what makes the give-up genuinely
+     * fail-closed rather than fail-closed-if-you-are-lucky, and what lets a rotation switch servers
+     * without ever handing traffic back to the clear network.
      *
      * ONE body, TWO users — the give-up blackhole and the rotation bridge. Deliberately not copied:
      * a drifted second copy would capture a different app set than the tunnel it replaced, which is
