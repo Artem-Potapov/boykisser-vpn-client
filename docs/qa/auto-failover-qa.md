@@ -624,7 +624,7 @@ failure counter is reset, not merely paused).
 3. **Kill-switch pause while `BLACKHOLED`** — known contradictory pair: 1105 ("paused to keep you
    protected") can sit next to 1103 ("VPN is OFF — you're exposed"). Confirm whether you see it and
    note it; it is a ledgered known limitation, not a new defect.
-3b. **The 1106 "kill-switch not applied" notice is retracted.** Provoke it first: with the kill-switch
+4. **The 1106 "kill-switch not applied" notice is retracted.** Provoke it first: with the kill-switch
    armed, open a controlled app *during a rotation* so the kill is deferred, then let the rotation
    give up (Test 3) — the notice appears on the high-importance channel. Now check **both** exits:
    **(a)** stop the VPN → 1106 disappears (it claims in the present tense that the app is still going
@@ -632,7 +632,7 @@ failure counter is reset, not merely paused).
    showing, bring the controlled app to the foreground so the kill-switch fires → 1106 must be gone
    **before** the 1103 "VPN is OFF — you're exposed" alert appears. **FAIL:** the two heads-up alerts
    are visible together, even briefly — they contradict each other on the same channel.
-4. **Uninstall/reinstall or clear data** → auto-failover is **off** again (default), and the settings
+5. **Uninstall/reinstall or clear data** → auto-failover is **off** again (default), and the settings
    screen shows interval 15000 / timeout 5000 / threshold 2 / max switches 3.
 
 ---

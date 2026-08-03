@@ -49,7 +49,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; SubscriptionRefreshCoordinator loads device-identity settings and augments fetch errors with HWID/UA guidance; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
-│       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features; also the failover rotation/give-up/blackhole wiring), StartCommandDecision, SessionLifecycleDecision (pure kill/revive/ROTATE transition + give-up rules), VpnNotifications (ids 1101/1103/1104/1105 + their channels)
+│       │   │   └── vpn/            XrayVpnService (VpnService + xray-core lifecycle; fail-closed startup → docs/features; also the failover rotation/give-up/blackhole wiring), StartCommandDecision, SessionLifecycleDecision (pure kill/revive/ROTATE transition + give-up rules), VpnNotifications (ids 1101/1103/1104/1105/1106 + their channels; 1106 = kill-switch-not-applied, posted on the EXISTING exposure channel and retracted by killTunnel/stopVpn)
 │       │   └── res/
 │       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon; ic_bolt.xml — connect-to-fastest)
 │       │       ├── values/         strings.xml (source of truth), colors, themes
@@ -439,7 +439,7 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   would hit "VPN already running". Widening that enum needs a **grep sweep**, not a green build: it is
   read by plain boolean chains the compiler cannot flag. Two JVM whole-enum guards now automate most of
   that sweep (`TileClickDecisionTest` and `MainActivityStateTest`), but `XrayVpnTileService.handleClick`
-  hand-duplicates the tile Stop gate and **no test can reach it** — update it by hand.
+  hand-duplicates the tile Stop gate and **no plain-JVM test can call it** — update it by hand.
   See `docs/features/auto-failover.md`.
 - Xray-core writes a **raw, unredacted** error log to the app-private `filesDir/logs/xray-core.log`
   during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory
@@ -534,10 +534,20 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     `shouldOverwritePendingConnect`). Add rules there, not as new
     inline `when` branches in the service. **`stopVpn` must never gain anything that awaits** — the
     UNPROTECTED recovery restart calls it on the main thread and cannot dispatch-and-await without
-    deadlocking. **Never widen `shouldRestartForRecovery` beyond `UNPROTECTED`**: the contained
-    outcomes hold a *running Xray core*, so the same path would turn a main-thread no-op into a real
-    `instance.Close()`. That is why `RECONNECT` is sequenced by `state/ReconnectFlow` (which stops via
-    `ACTION_STOP`, already marshalled onto `tunnelOpScope`) instead. The *sequencing* around these
+    deadlocking. **Never widen `shouldRestartForRecovery` beyond `UNPROTECTED`.** Each excluded outcome
+    has its own sufficient reason, so do not generalise either one into a claim about "the contained
+    outcomes":
+    - `CONTAINED_BY_LIVE_TUNNEL` holds a **running Xray core**, so that path would turn `stopVpn`'s
+      main-thread no-op into a real `instance.Close()`. This is the RISK-1 hazard.
+    - `CONTAINED_BY_BLACKHOLE` does **not** hold a running core (it is classified with
+      `hadTunnel == false`, i.e. after `tearDownTunnelLocked()` already called `stopXray()`, and the
+      blackhole builder starts none). It is excluded for the reason in the function's own KDoc: it
+      **still holds a TUN, so there is nothing for a restart to rescue** — plus the general one that
+      keeps "start while running" idempotent for the tile, `START_REDELIVER_INTENT` recovery and
+      stray intents.
+
+    That is why `RECONNECT` is sequenced by `state/ReconnectFlow` (which stops via `ACTION_STOP`,
+    already marshalled onto `tunnelOpScope`) instead — one path for both contained outcomes. The *sequencing* around these
     rules is still untested off-device; the recorded follow-up is a `vpn/FailoverEngine` behind a
     narrow `TunnelHost` seam.
 - Profile config extension points:

@@ -228,8 +228,10 @@ internal fun classifyGiveUpOutcome(
  *
  * Extracted from the service so the branch cannot be inverted silently: this is the ONLY runtime
  * producer of [VpnConnectionState.BLACKHOLED], and BLACKHOLED is a live, stoppable state whereas
- * ERROR is not. Its three pure siblings ([classifyGiveUpOutcome], [shouldStopServiceOnGiveUp],
- * [shouldRestartForRecovery]) are all tested; this rule was not.
+ * ERROR is not. It was extracted because its three pure siblings ([classifyGiveUpOutcome],
+ * [shouldStopServiceOnGiveUp], [shouldRestartForRecovery]) already had tests while this branch was
+ * still inline in the service and had none. It is covered now — `SessionLifecycleDecisionTest`'s
+ * `onlyTheUncontainedGiveUpMapsToError` pins all three outcomes.
  */
 internal fun connectionStateForGiveUp(outcome: FailoverGiveUpOutcome): VpnConnectionState =
     when (outcome) {

@@ -762,11 +762,13 @@ is itself the argument for doing it.
 
 > **The one gate still without a test is `XrayVpnTileService.handleClick`.** It re-states
 > `decideTileClick`'s Stop chain by hand for its no-IO fast path, and it is an Android `TileService`
-> method, so no JVM test can call it. `TileClickDecisionTest`'s full-enum guard fails loudly for the
-> *pure* copy, which is the closest available proxy — but it cannot see the duplicate. **A new
+> method, so no plain-JVM test can call it. `TileClickDecisionTest`'s full-enum guard fails loudly for
+> the *pure* copy, which is the closest available proxy — but it cannot see the duplicate. **A new
 > `VpnConnectionState` must be added to `handleClick` by hand, and only a reader will catch it.**
-> Extracting the shared gate would close this, and is a behavioural change deliberately not made in a
-> test-and-docs pass.
+> Extracting the shared gate would close this properly. It is a **behaviour-preserving refactor**, not
+> a behaviour change — it was left undone only because the task that added these tests was scoped to
+> prose plus one visibility change, so it is a clean candidate for the follow-up spec rather than
+> something to avoid.
 
 **Instrumented tests** (`:app:connectedDebugAndroidTest`, local only — not in CI):
 
