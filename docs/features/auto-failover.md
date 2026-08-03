@@ -317,6 +317,14 @@ their traffic is safe at the exact moment it is not. That is also why `UNPROTECT
 that additionally goes through `LogRepository.emitError`: the Logs screen is not where a user learns
 their traffic just went clear.
 
+**The rule extends to the channel description.** All three alerts share `1105` and therefore share
+`failover_blackhole_channel_description`, which is what the OS shows in the app's notification
+settings. It used to read "…your connection was paused to keep you protected" — the containment claim,
+attached to a channel that also carries `postFailoverUnprotected`. It is now outcome-neutral in both
+locales ("Warns you when your servers stop responding and we cannot switch you to a working one. Each
+alert says what happened to your connection."), which is true for all three. Any future notice added
+to this channel must keep it that way.
+
 ### `BLACKHOLED` is a friendly facade, on purpose
 
 `VpnConnectionState.BLACKHOLED` was added rather than reusing `ERROR`, because `ERROR` maps to a dead

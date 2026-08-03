@@ -586,7 +586,7 @@
     <string name="failover_notification_title">Switched server</string>
     <string name="failover_notification_body">%1$s stopped responding. Now connected to %2$s.</string>
     <string name="failover_blackhole_channel_name">Connection problems</string>
-    <string name="failover_blackhole_channel_description">Tells you when no server could be reached and your connection was paused to keep you protected.</string>
+    <string name="failover_blackhole_channel_description">Warns you when your servers stop responding and we cannot switch you to a working one. Each alert says what happened to your connection.</string>
     <string name="failover_blackhole_title">No server connection</string>
     <string name="failover_blackhole_body">None of your servers responded, so your connection is paused on purpose. That keeps your real location private instead of quietly going unprotected. Tap to choose another server or turn the VPN off.</string>
     <string name="failover_no_response_title">Server is not responding</string>

@@ -582,7 +582,7 @@
     <string name="failover_notification_title">Сервер переключён</string>
     <string name="failover_notification_body">%1$s перестал отвечать. Сейчас подключение к %2$s.</string>
     <string name="failover_blackhole_channel_name">Проблемы с подключением</string>
-    <string name="failover_blackhole_channel_description">Сообщает, когда не удалось связаться ни с одним сервером и соединение было приостановлено ради вашей защиты.</string>
+    <string name="failover_blackhole_channel_description">Предупреждает, когда серверы перестают отвечать и переключить вас на рабочий не удаётся. В каждом уведомлении указано, что стало с вашим соединением.</string>
     <string name="failover_blackhole_title">Нет связи с сервером</string>
     <string name="failover_blackhole_body">Ни один из ваших серверов не ответил, поэтому соединение намеренно приостановлено. Так ваше настоящее местоположение остаётся скрытым, а не раскрывается незаметно. Нажмите, чтобы выбрать другой сервер или отключить VPN.</string>
     <string name="failover_no_response_title">Сервер не отвечает</string>
