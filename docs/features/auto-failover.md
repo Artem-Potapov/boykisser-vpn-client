@@ -362,10 +362,69 @@ mutually-exclusive claims on the fd. The rules:
 | Situation | Behaviour | Why |
 |---|---|---|
 | Kill-switch event arrives during `ROTATING` | **Deferred**, not dropped (`shouldDeferKillDuringTransition`), recorded in `pendingKillLabel`, and replayed if the rotation commits `CONNECTED`. If the rotation instead **gives up**, the funnel **drops** it and says so — see below | The foreground monitor is edge-triggered and would never re-fire the event, leaving the tunnel CONNECTED with a kill-listed app foregrounded |
+| The listed app **leaves** before the rotation commits | The deferral is **withdrawn** (`deferredKillToWithdraw`), so nothing is replayed — see below | Same edge-triggered monitor: the leave fires once and, if dropped, the replayed kill parks the session `PAUSED` for an app that has gone, with no automatic recovery |
 | Tunnel is `PAUSED` (kill-switch) | The health monitor is **stopped**, not paused (`shouldRunFailoverMonitor` is `CONNECTED`-only) | There is no tunnel, so every probe would fail and the engine would "rotate" a tunnel the kill-switch deliberately tore down. `stop()` (not `pausePolling()`) because pausing preserves the failure count, which would trip instantly on revive |
 | Revive commits `CONNECTED` | `reviveTunnel` calls `applyFailoverPreferences` **outside** the locked block | Nothing else restarts the monitor; without this, failover is dead for the rest of the session after the first kill-switch pause. It must run after `CONNECTED` is committed or it reads `REVIVING` and no-ops |
 | Give-up lands while the state is not `CONNECTED` | Stand down: log, re-arm the monitor timer, touch nothing | `PAUSED`'s compliance contract is literally "no tunnel must exist"; establishing a blackhole (or overwriting the PAUSED connection state) would break it outright |
 | Screen off / on | One shared `BroadcastReceiver` pauses/resumes **both** monitors | Registration used to belong entirely to the kill-switch, which failed failover two ways: with failover on and the kill-switch off (the **default** pairing) no receiver existed at all, and turning the kill-switch off mid-session tore the receiver out from under a running failover monitor. `shouldHoldScreenReceiver(killSwitchLive, failoverLive)` now owns it — hold while EITHER is live, release only when NEITHER is |
+
+### The fourth leg: a leave-foreground edge must WITHDRAW the deferral
+
+The deferral has an enter edge that creates it and three exits that discharge it (two commits that
+replay, one give-up that drops). It was missing the case where the **reason for deferring ends**.
+
+The trace: a kill-listed app is opened during a rotation, so the kill is deferred. The user closes it
+while the rotation is still in flight. `onControlledAppLeftForeground` → `reviveTunnel` →
+`canReserveRevive` needs `PAUSED`, sees `ROTATING`, and no-ops — the leave edge is spent, and the
+monitor is edge-triggered so it never re-fires. The rotation then commits and replays the kill
+regardless. Result: `PAUSED` (no TUN, every app on the clear network) for an app that is no longer in
+the foreground, indefinitely, with notification 1103 telling the user the wrong reason. The only exits
+are manual. The same trace holds with `REVIVING` in place of `ROTATING`.
+
+`reviveTunnel` now calls `withdrawDeferredKillLocked` on **every** leave callback, under `lock`, on
+`tunnelOpScope`, keyed to the callback's epoch — before the revive decision and independently of it,
+because a revive reserves only from `PAUSED` while the stranding deferral is outstanding in the other
+states. The rule is the pure `deferredKillToWithdraw(pendingKillLabel, running, activeSessionEpoch,
+callbackSessionEpoch)`.
+
+**It takes no tunnel state, deliberately, and it is WIDER than the deferral rule it answers.** The
+mirror shape — withdraw only in `{REVIVING, ROTATING}` — looks right and barely fires. `tunnelOpScope`
+is `Dispatchers.IO.limitedParallelism(1)` and **`bringUpTunnel` is not a `suspend` function**, so it
+holds that single slot for its whole blocking span (config build, geo prep, `establish()`,
+`startXray`). A leave arriving in that span — which is where a leave actually lands, since the DB reads
+either side of it are milliseconds — queues behind the transition and does not execute until it has
+already committed `CONNECTED`. A rotation episode also passes through `CONNECTED` *between* two failed
+candidates with the marker still armed. So the marker, not the tunnel state, is what "a kill is queued
+for replay" means, and a leave means "no queued kill is wanted" in every state. Not re-enumerating
+`{REVIVING, ROTATING}` is the other half: that set keeps its single home in
+`shouldDeferKillDuringTransition`, and a rule with no state parameter cannot drift into a second copy
+of it. `SessionLifecycleRotationTest.everyStateThatCanDeferAKillCanAlsoWithdrawIt` asserts the
+implication over the whole enum, and `withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt` pins
+the asymmetry so it cannot be "fixed" back into a mirror.
+
+The session check is the **only** refusal, and that is the second half of the derivation. Of the
+reasons `canReserveRevive` can refuse a leave callback — stale epoch, stopped service, already
+`CONNECTED`, mid-transition — only the first two may block a withdrawal: it cancels a *safety* event,
+so a superseded session's late callback must never reach the marker a live session armed.
+
+**The commits stop consuming the marker; the replay resolves it.** This half is what makes the
+withdrawal reach the window that matters, and it is not a cleanup. `reviveTunnel`/`rotateTunnel` now
+only *observe* `pendingKillLabel != null` at the commit and dispatch `replayDeferredKill`, which calls
+`killTunnel` with a null label; `consumeDeferredKillLocked` reads and discharges the marker inside the
+replay coroutine. Had the commit captured the label, the leave described above — queued *ahead* of the
+replay but executing *after* the commit — would find an empty marker, withdraw nothing, and the replay
+would pause the tunnel anyway. Reading it in the replay lets the one serialized scope's FIFO order
+settle both cases:
+
+- leave queued **before** the replay → it withdraws, the replay finds nothing, the tunnel stays up;
+- leave queued **after** the replay → the replay pauses first, and the leave then arrives at `PAUSED`,
+  which is `reviveTunnel`'s ordinary input, so the pause/revive pair self-corrects.
+
+**No notification is posted.** 1106 (`announceDroppedDeferredKillLocked`) is the obvious-looking
+precedent and is the wrong one: it fires when a give-up drops a kill while the listed app is *still
+tunneled*, so the user asked for the VPN to be off for that app and it is not. Here the app has left —
+nothing went unhonoured, and a heads-up would alert the user to a failure that did not occur. It is
+logged only.
 
 ### The third exit: a give-up must DISCHARGE the deferred kill
 
@@ -892,7 +951,7 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 | [`failover/FailoverSettingsPersistDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverSettingsPersistDecision.kt) | Pure `resolveFailoverSettings(...)` — the autosave rule extracted out of the Activity so it is JVM-testable (the codebase's `TileClickDecision`/`StartCommandDecision` shape). |
 | [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free Connect-to-fastest orchestration: generation-counter job replacement, delivery-time re-gate, `FastestConnectOutcome` (NO_RESPONSE / BUSY / STATE_CHANGED), cancellation cleanup. |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Pure `pickFastest(states, candidates)` and `clearStaleTesting(states, ids)`. |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, **`shouldEstablishRotationBridge`**, **`GiveUpContainment` + `containmentForGiveUp`** (replaced `shouldEstablishBlackholeTunnel`), `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, **`shouldEstablishRotationBridge`**, **`GiveUpContainment` + `containmentForGiveUp`** (replaced `shouldEstablishBlackholeTunnel`), `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`deferredKillToWithdraw`**, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
 | [`state/ConnectAction`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) (in `VpnViewModel.kt`) | The connect gate: `ConnectAction` + `connectAction`/`connectLabelRes`/`connectEnabled`. Replaces the former boolean `canConnect`. |
 | [`state/ReconnectFlow.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ReconnectFlow.kt) | Framework-free stop→settle→start→verify sequencing for Reconnect: `STOP_TIMEOUT_MS`, `START_VERIFY_MS`, the first-wins in-flight guard (`reconnectingProfileId`), `generation` cleanup, `cancel()`. Canonical home for **why** Reconnect is not a `shouldRestartForRecovery` widening. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, the `rotationBridgeInterface` field and its four operations (`establishUnreadTunnelLocked` — the shared builder — plus `establishBlackholeTunnelLocked` / `establishRotationBridgeLocked` / `adoptRotationBridgeLocked` / `releaseRotationBridgeLocked`), `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |
@@ -960,6 +1019,13 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   (`shouldEstablishRotationBridge`, `containmentForGiveUp`, and the classifier composition) are tested
   and mutation-verified, while "each exit really does reach a release or an adoption" rests on the
   enumeration in this document plus a code read. QA Test 23 is the device check.
+- **The deferred-kill withdrawal's service-side SEQUENCING is not covered by any test either**, for
+  the same reason: the pure rule (`deferredKillToWithdraw`) is tested and mutation-verified, but
+  "`reviveTunnel` withdraws before it decides", "the commits observe rather than consume", and above
+  all the **FIFO ordering** on `tunnelOpScope` that the fix's correctness rests on are argued from
+  the code and this document, not asserted anywhere. QA Test 24 is the device check. Note what would
+  silently un-fix it: giving `tunnelOpScope` more than one thread, or making `bringUpTunnel` a
+  `suspend` function, both change which coroutine observes what and neither breaks a test.
 - **Bridge establishment is best-effort.** If `establish()` returns null or throws while opening the
   bridge, the rotation proceeds through the *uncovered* gap — the pre-bridge behaviour — rather than
   failing. It is logged — `Failover: rotation bridge establish() returned null` for the null return,
@@ -1040,7 +1106,7 @@ is itself the argument for doing it.
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
 | `vpn/SessionLifecycleDecisionTest` (47) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), `shouldOverwritePendingConnect`, and `containmentForGiveUp` — the live tunnel wins over a held bridge, the bridge wins over building a second TUN, the state arm, and `adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`, which composes containment with `classifyGiveUpOutcome` the way `giveUpRotationLocked` does — but with `hasTunnel` hard-coded, so it pins the composition and **not** the service's read ordering (see the give-up section). |
-| `vpn/SessionLifecycleRotationTest` (12) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. |
+| `vpn/SessionLifecycleRotationTest` (17) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. Also the sole home of `deferredKillToWithdraw`: withdraws for the current session, silent with nothing deferred, refused for a stale epoch and a stopped session, `everyStateThatCanDeferAKillCanAlsoWithdrawIt` (whole-enum implication, so a new deferral state cannot open a hole) and `withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt`. |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
 | `state/ReconnectFlowTest` (9) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process). |

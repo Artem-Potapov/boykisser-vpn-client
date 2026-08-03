@@ -7,6 +7,10 @@ versionCode 4). Reinstall with `./gradlew :app:installDebug`.
 > HEAD the gap it covers is still open, so a tester on a stale build would capture cleartext during a
 > switch and report a leak that is already fixed. Confirm the installed commit before running it.
 
+> **Test 24 requires `4dbc5cc` or later** — the deferred-kill withdrawal. On an earlier HEAD 24a
+> reproduces the defect rather than verifying the fix, so a tester on a stale build would report an
+> already-closed hole. Confirm the installed commit before running it.
+
 **What auto-failover does (the behaviour you're verifying):** while connected, the app probes the
 **live tunnel** with an HTTP 204 request through the tun. After `failureThreshold` consecutive
 failures it rotates to another server in the same pool (the same subscription, or the "My profiles"
@@ -876,6 +880,77 @@ and `adb shell dumpsys connectivity | grep -i vpn` shows **no** VPN afterwards.
 
 ---
 
+## Test 24 — The listed app opens AND closes during a switch ★★ MANDATORY BEFORE MERGE
+
+**Why:** this is the defect that leaves the device with **no TUN at all, indefinitely, with no
+automatic recovery** — the tunnel parks in `PAUSED` for an app that is no longer in the foreground.
+The foreground monitor is edge-triggered, so the leave that would have revived it is already spent.
+It is reached by an ordinary interaction (open a listed app, close it) and its only exits are manual.
+
+**Nothing in the JVM suite covers the sequencing here.** `XrayVpnService` cannot be instantiated
+there, so the pure rule is tested and this is the only check that the wiring, the lock/epoch
+discipline and — above all — the FIFO ordering on `tunnelOpScope` actually compose. Run it.
+
+**Setup:** kill-switch ON listing app **X**; auto-failover ON. Short probe timings (Test 1's). Two
+servers, A reachable and B reachable.
+
+### 24a — Leave during a rotation that COMMITS (the headline case)
+
+**Steps:**
+1. Connect to A.
+2. Kill server A so the health monitor fires and a rotation to B starts (`Failover: rotating A -> B`,
+   ongoing line reads "Switching…").
+3. **While it is still switching**, foreground **X**, then send **X** to the background again (Home,
+   or the recents switcher). Both actions must land before the switch finishes — with the suggested
+   short timings you have a couple of seconds; if the switch is too quick to interleave, slow the
+   bring-up by using a server whose handshake is slow, or repeat until you hit the window.
+
+**PASS:**
+- The log shows the deferral and then the withdrawal, in that order:
+  `Kill-switch: deferring kill for X until the in-flight transition completes`, then
+  `Kill-switch: X left the foreground before the in-flight transition committed; withdrawing the
+  kill deferred for it`.
+- If the replay coroutine ran after the withdrawal it says so and does nothing:
+  `Kill-switch: no deferred kill left to replay`.
+- Final state is **Connected** on B. **Not** Paused.
+- **No** ⚠️ "VPN is OFF — you're exposed" alert (1103) and **no** "VPN is still on" notice (1106) —
+  the app left, so there is nothing to warn about. A 1106 here is a FAIL even though the state is
+  otherwise right.
+- `adb shell dumpsys connectivity | grep -i vpn` shows a VPN present.
+
+**FAIL:** the session ends **Paused** with the exposure alert and X nowhere in the foreground. That is
+the defect: confirm it is unrecoverable by waiting — nothing revives it — then note that opening and
+closing X again is what gets the tunnel back.
+
+### 24b — Leave AFTER the switch commits (the pause/revive pair must self-correct)
+
+Same as 24a, but foreground **X** during the switch and leave it foregrounded until the ongoing line
+reads **Paused**; then background it.
+
+**PASS:** the deferred kill is replayed (state **Paused**, 1103 posted), and the subsequent leave
+revives normally to **Connected**. This is the ordering that must NOT be "fixed" into a withdrawal —
+here the kill genuinely landed first.
+
+### 24c — Leave then RE-ENTER before the switch commits
+
+Same as 24a, but after backgrounding **X** bring it to the foreground once more, still during the
+switch.
+
+**PASS:** the withdrawal is followed by a fresh deferral (or an immediate kill if the switch has
+committed by then), and the session ends **Paused** naming **X** — the current app, not a stale
+label. The kill-switch must still honour an app that is in the foreground when the dust settles.
+
+### 24d — Same interleave during a kill-switch REVIVE
+
+**Steps:** connect; foreground **X** (state **Paused**); background **X** so a revive starts; then,
+*while it is reviving*, foreground **X** and background it again.
+
+**PASS:** final state **Connected**, no exposure alert, and the log carries the same
+defer-then-withdraw pair. `REVIVING` and `ROTATING` are the same rule; this is the half that has
+nothing to do with failover.
+
+---
+
 ## Result log
 
 Record the outcome here as you go, so a partial run is still useful to the next person.
@@ -905,3 +980,4 @@ Record the outcome here as you go, so a partial run is still useful to the next 
 | 21 Tile/notification Stop overrides a Reconnect ⚠ | | known limitation — record surface + timing |
 | 22 Reconnect does not survive an Activity finish | | rotate/background must still complete |
 | 23a/b/c/d No cleartext during a switch ★★ | | capture required; record the bridge fd across 23b |
+| 24a/b/c/d Listed app opens AND closes during a switch ★★ | | 24a is the headline; record whether you had to retry to hit the window |
