@@ -169,10 +169,11 @@ with nothing left to revive it). One deliberate trade remains in the replay desi
 app *leaves* the foreground during the revive window, the commit still replays the deferred kill and the
 tunnel ends `PAUSED` with the exposed heads-up until that app next foregrounds and leaves again —
 fail-closed, and the monitor stays alive. The predicate lives in `SessionLifecycleDecision.kt`
-as `shouldDeferKillDuringRevive(...)` (current session AND `tunnelState == REVIVING`) — the service now
-calls the generalised `shouldDeferKillDuringTransition(...)`, which covers `ROTATING` too, since an
-[auto-failover](auto-failover.md) rotation tears the tunnel down and brings it back up in the same
-kind of window. `reviveTunnel`'s
+as `shouldDeferKillDuringTransition(...)` — current session AND `tunnelState` in
+{`REVIVING`, `ROTATING`}. It covers `ROTATING` because an [auto-failover](auto-failover.md) rotation
+tears the tunnel down and brings it back up in the same kind of window. A `REVIVING`-only
+`shouldDeferKillDuringRevive(...)` used to sit beside it, production-dead but holding the rule's
+entire test coverage; it has been removed and its cases folded into `SessionLifecycleRotationTest`. `reviveTunnel`'s
 coroutine body is wrapped in the same `try/catch(Throwable) → failRevive(...)` shape `killTunnel` uses,
 so an unexpected throw from its `getById`/`append`/`bringUpTunnel` can't escape into the SupervisorJob
 scope and crash the process.
@@ -370,7 +371,7 @@ fact about this screen:
 | [`log/BoundedLogLineAccumulator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/BoundedLogLineAccumulator.kt) | Byte-oriented complete-line splitter; UTF-8 decode only after `\n`; discard-until-newline on pending overflow (>64 KiB). |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `maxLines` (default 5000) + `setMaxLines` (coerce `[100, 50_000]`, immediate trim); `append` timestamps + redacts (UUID / `publicKey` / `shortId`) every line; `logs: StateFlow<List<String>>`. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringRevive` (current session AND `REVIVING` — the defer-vs-drop rule for a kill landing mid-revive). Auto-failover added the rotation half in the same file — `SessionTunnelState.ROTATING`, `canReserveRotation` (CONNECTED→ROTATING), `shouldDeferKillDuringTransition` (REVIVING **or** ROTATING), the monitor/receiver/give-up predicates and `activeProfileIdToRestoreOnRefusedStart`; see [auto-failover.md](auto-failover.md). |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringTransition` (current session AND `REVIVING`/`ROTATING` — the single defer-vs-drop rule for a kill landing mid-transition). Auto-failover added the rotation half in the same file — `SessionTunnelState.ROTATING`, `canReserveRotation` (CONNECTED→ROTATING), `shouldDeferKillDuringTransition` (REVIVING **or** ROTATING), the monitor/receiver/give-up predicates and `activeProfileIdToRestoreOnRefusedStart`; see [auto-failover.md](auto-failover.md). |
 | [`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt) | Pure `bound(lines, maxBytes)` → newest-tail `BoundedLog` (`text`/`includedLines`/`totalLines`/`truncated`) under a 256 KiB budget; keeps the inline Copy/Share payload clear of the Binder transaction limit. Export bypasses it (streams). |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, single overflow menu (Copy/Share/Export + a divider then the destructive **Clear** — no bare toolbar icon), fully-tappable radio rows (`selectable`), a large-log explainer dialog gating Copy/Share, level selector dialog (persist-only), buffer selector dialog (live). Copy/Share go through `LogShareBudget` + `runCatching`. |
 
@@ -423,11 +424,12 @@ fact about this screen:
   accepts a lifecycle callback; a callback from an earlier session is rejected even when a later
   session is running; stopped sessions reject matching callbacks. It also verifies that a matching
   `PAUSED` session accepts one revive reservation, while `REVIVING`, stale-epoch, and stopped sessions
-  reject it, and that `shouldDeferKillDuringRevive` returns true only for the current session in
-  `REVIVING` (false for CONNECTED, PAUSED, stale-epoch, and stopped). Android service/TUN/Xray
+  reject it. The kill-deferral rule itself is covered next door in `vpn/SessionLifecycleRotationTest`:
+  `shouldDeferKillDuringTransition` returns true only for the current session in `REVIVING`/`ROTATING`
+  (false for CONNECTED, PAUSED, STARTING, STOPPED, stale-epoch, and stopped sessions). Android service/TUN/Xray
   scheduling itself remains integration behavior, so this suite tests the extracted identity/transition
   decision rather than fabricating a JVM `VpnService`. The suite has since grown to cover
-  auto-failover's rules in the same file (42 tests, plus `vpn/SessionLifecycleRotationTest`) —
+  auto-failover's rules in the same file (45 tests, plus `vpn/SessionLifecycleRotationTest`) —
   including stale-epoch × `{REVIVING, ROTATING}` and `running = false` × `{REVIVING, ROTATING}` for the
   generalised transition-defer guard.
 - **JUnit4 (JVM)** — `ConfigBuilderTest` forces the `log` object (including hard-coded `access =

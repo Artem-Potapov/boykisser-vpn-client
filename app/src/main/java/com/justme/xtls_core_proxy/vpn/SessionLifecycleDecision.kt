@@ -50,27 +50,6 @@ internal fun canReserveRevive(
 )
 
 /**
- * Whether a kill-switch event that lands while a revive is in flight must be DEFERRED (recorded and
- * replayed after the revive commits) rather than dropped. A kill can only tear down a CONNECTED
- * tunnel; if the same session is mid-revive (`REVIVING`), the event would otherwise be silently and
- * permanently lost, because the foreground monitor is edge-triggered and never re-fires it. This is
- * true only for the CURRENT session and only in `REVIVING` — a CONNECTED session kills immediately,
- * and PAUSED/stale/stopped states have nothing to defer to.
- */
-internal fun shouldDeferKillDuringRevive(
-    running: Boolean,
-    activeSessionEpoch: Long?,
-    callbackSessionEpoch: Long,
-    tunnelState: SessionTunnelState,
-): Boolean = ownsTunnelTransition(
-    running = running,
-    activeSessionEpoch = activeSessionEpoch,
-    callbackSessionEpoch = callbackSessionEpoch,
-    tunnelState = tunnelState,
-    expectedState = SessionTunnelState.REVIVING,
-)
-
-/**
  * A CONNECTED session may reserve exactly one asynchronous failover rotation.
  *
  * Deliberately NOT expressed via [canReserveRevive]: revive reserves from PAUSED, rotation from
@@ -91,10 +70,19 @@ internal fun canReserveRotation(
 )
 
 /**
- * Whether a kill-switch event landing mid-transition must be DEFERRED and replayed rather than
- * dropped. Generalises [shouldDeferKillDuringRevive] to also cover ROTATING: a failover rotation
- * tears the tunnel down and brings it back up, so a kill arriving in that window would otherwise be
- * permanently lost and leave the tunnel CONNECTED with a kill-listed app in the foreground.
+ * Whether a kill-switch event landing mid-transition must be DEFERRED (recorded and replayed once
+ * the transition commits) rather than dropped.
+ *
+ * A kill can only tear down a CONNECTED tunnel. Both transitional states take the tunnel down and
+ * bring it back up — the kill-switch's own revive (`REVIVING`) and a failover rotation (`ROTATING`)
+ * — so a kill arriving in either window would otherwise be silently and permanently lost, because
+ * the foreground monitor is edge-triggered and never re-fires it, leaving the tunnel CONNECTED with
+ * a kill-listed app in the foreground. True only for the CURRENT session: a CONNECTED session kills
+ * immediately, and PAUSED/STARTING/STOPPED/stale/stopped states have nothing to defer to.
+ *
+ * This is the ONE home for the rule. A `REVIVING`-only variant existed alongside it for a while,
+ * production-dead but carrying the rule's entire test coverage — so the tests read as thorough while
+ * exercising a function nothing called. Do not reintroduce a second copy.
  */
 internal fun shouldDeferKillDuringTransition(
     running: Boolean,
