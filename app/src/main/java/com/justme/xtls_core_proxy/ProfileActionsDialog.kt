@@ -43,6 +43,7 @@ internal fun ProfileActionsDialog(
     isConnectedProfile: Boolean,
     action: ConnectAction,
     isConnecting: Boolean,
+    requestInFlight: Boolean,
     shareLink: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
@@ -82,15 +83,16 @@ internal fun ProfileActionsDialog(
                 } else {
                     ProfileActionRow(
                         icon = rememberVectorPainter(Icons.Filled.PlayArrow),
-                        // [isConnecting] here is NOT "this profile is connecting" — the row only
-                        // renders for a NON-active profile, so that could never be true. It is
-                        // "a reconnect is already in flight", which holds the connection state at
-                        // BLACKHOLED (so [action] still reads RECONNECT) while the request is
-                        // already running. Without it this row would stay enabled and a tap would
-                        // dispatch a second stop into the teardown of the session the first tap
-                        // asked for.
+                        // [isConnecting] is "THIS profile is the one being reconnected" (it scopes
+                        // the label); [requestInFlight] is "some reconnect is running" (it disables
+                        // every control, since a contending tap would be refused anyway). A
+                        // reconnect holds the connection state at BLACKHOLED, so [action] still
+                        // reads RECONNECT throughout — without the second flag this row would stay
+                        // enabled and a tap would dispatch a stop into the teardown of the session
+                        // the first tap asked for. Re-joined with `||` so the control can never read
+                        // "Connecting…" while still tappable.
                         label = stringResource(connectLabelRes(action, isConnecting)),
-                        enabled = connectEnabled(action, isConnecting),
+                        enabled = connectEnabled(action, isConnecting || requestInFlight),
                         onClick = onConnect
                     )
                 }
@@ -107,10 +109,9 @@ internal fun ProfileActionsDialog(
                     // winner is FastestConnectRunner's delivery-time re-check of the identical
                     // ConnectAction rule, immediately before it ever surfaces a winner; this gate is
                     // just the cheap, obvious no-op prevention for the common case of tapping the
-                    // row while a session is already live. It takes [isConnecting] for the same
-                    // reason the Connect row does, which is also what keeps "mirrors the row above"
-                    // literally true.
-                    enabled = connectEnabled(action, isConnecting),
+                    // row while a session is already live. It takes the same two flags as the
+                    // Connect row above, which is what keeps "mirrors the row above" literally true.
+                    enabled = connectEnabled(action, isConnecting || requestInFlight),
                     onClick = onConnectFastest
                 )
                 ProfileActionRow(

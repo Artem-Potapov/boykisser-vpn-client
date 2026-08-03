@@ -232,7 +232,22 @@ class MainActivity : LocalizedComponentActivity() {
                             viewModel.reportConnectRequestSuperseded()
                         }
                     },
-                    onDisconnect = { viewModel.disconnect(this) },
+                    onDisconnect = {
+                        // An explicit "off" must outrank a reconnect the user asked for moments
+                        // earlier. Without this the in-flight flow reads the user's OWN stop as its
+                        // teardown completing and starts the VPN straight back up, inverting the
+                        // command — and this branch's own invariant is that a running session is
+                        // stoppable on every surface, so a Disconnect that stays enabled while
+                        // ceasing to work is the worse failure shape.
+                        //
+                        // Cancelling HERE, at the user's Disconnect surface, rather than inside
+                        // viewModel.disconnect(): that method is the reconnect flow's own first
+                        // step, so cancelling there would make every reconnect cancel itself and
+                        // silently degrade Reconnect into Disconnect. ReconnectFlow.cancel's KDoc
+                        // records which stop surfaces this does NOT reach.
+                        viewModel.cancelReconnect()
+                        viewModel.disconnect(this)
+                    },
                     onOpenSettings = {
                         startActivity(Intent(this, SettingsHubActivity::class.java))
                     },
@@ -550,10 +565,12 @@ private fun MainScreen(
     val connectingFastest by viewModel.connectFastestActive.collectAsState()
     // A Reconnect holds the connection state at BLACKHOLED until its teardown lands — seconds, when
     // a live Xray core has to be closed — so the state alone cannot tell the affordance it is busy.
-    // Folded into the `isConnecting` flag every connect control already takes, which drives BOTH
-    // the "Connecting…" label and (via connectEnabled) the enablement, so the control cannot read
-    // busy while still accepting the re-tap that would tear the new session down.
-    val reconnecting by viewModel.reconnectInFlight.collectAsState()
+    // The TARGET id, not a flag, because the two halves of that rule cover different rows: only the
+    // server actually being reconnected should read "Connecting…", while every control is disabled
+    // (a contending tap would be refused anyway). Each control re-joins them with `||` so a control
+    // can never read busy while still accepting the re-tap that tears the new session down.
+    val reconnectingId by viewModel.reconnectingProfileId.collectAsState()
+    val reconnectInFlight = reconnectingId != null
 
     var menuProfile by remember { mutableStateOf<Profile?>(null) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
@@ -726,9 +743,10 @@ private fun MainScreen(
                                     profile = profile,
                                     pingState = pingStates[profile.id] ?: PingState.Idle,
                                     isActive = isActive(profile, activeId, state),
-                                    isConnecting = reconnecting ||
+                                    isConnecting = reconnectingId == profile.id ||
                                         (isActive(profile, activeId, state) &&
                                             state == VpnConnectionState.CONNECTING),
+                                    requestInFlight = reconnectInFlight,
                                     action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
@@ -758,9 +776,10 @@ private fun MainScreen(
                                     profile = profile,
                                     pingState = pingStates[profile.id] ?: PingState.Idle,
                                     isActive = isActive(profile, activeId, state),
-                                    isConnecting = reconnecting ||
+                                    isConnecting = reconnectingId == profile.id ||
                                         (isActive(profile, activeId, state) &&
                                             state == VpnConnectionState.CONNECTING),
+                                    requestInFlight = reconnectInFlight,
                                     action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
@@ -784,7 +803,8 @@ private fun MainScreen(
             profile = profile,
             isConnectedProfile = isActive(profile, activeId, state),
             action = connectAction(state),
-            isConnecting = reconnecting,
+            isConnecting = reconnectingId == profile.id,
+            requestInFlight = reconnectInFlight,
             shareLink = shareLink,
             onConnect = {
                 menuProfile = null
@@ -981,6 +1001,7 @@ private fun ProfileRow(
     pingState: PingState,
     isActive: Boolean,
     isConnecting: Boolean,
+    requestInFlight: Boolean,
     action: ConnectAction,
     onConnect: () -> Unit,
     onLongPress: () -> Unit
@@ -1032,7 +1053,11 @@ private fun ProfileRow(
 
             Button(
                 onClick = onConnect,
-                enabled = connectEnabled(action, isConnecting),
+                // The `||` is what keeps the two halves from disagreeing: [isConnecting] scopes the
+                // LABEL to this row, [requestInFlight] disables every row while any request is in
+                // flight, and re-joining them here means a control can never read "Connecting…"
+                // while still accepting a tap, whatever the caller passes.
+                enabled = connectEnabled(action, isConnecting || requestInFlight),
                 modifier = Modifier.padding(start = 8.dp)
             ) {
                 Text(stringResource(connectLabelRes(action, isConnecting)))

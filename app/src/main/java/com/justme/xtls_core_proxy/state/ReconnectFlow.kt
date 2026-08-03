@@ -53,7 +53,11 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    `BLACKHOLED`, so the affordance still renders and a re-tap is the natural user response. A
  *    second `stop()` landing after the first flow's start has set `running = true` takes the FULL
  *    teardown and kills the session the user just asked for. So the first request **wins** and the
- *    contender is refused and reported — see [inFlight].
+ *    contender is refused and reported — see [reconnectingProfileId].
+ *
+ * A third override is **not** closed here and is documented on [cancel]: a stop dispatched from the
+ * QS tile or the ongoing notification is indistinguishable, from this class's vantage point, from
+ * its own.
  */
 internal class ReconnectFlow(
     private val connectionState: StateFlow<VpnConnectionState>,
@@ -63,34 +67,77 @@ internal class ReconnectFlow(
     private val onSuperseded: () -> Unit,
     private val dispatcher: CoroutineDispatcher,
 ) {
-    private val _inFlight = MutableStateFlow(false)
+    private val _reconnectingProfileId = MutableStateFlow<Long?>(null)
 
     /**
-     * True from the moment a reconnect is admitted until its sequence ends. Two jobs: it refuses a
-     * contending request in [run], and it lets the UI render the affordance as busy so there is no
-     * reason to re-tap a button that legitimately takes seconds to act.
+     * The profile a reconnect is currently sequencing, or `null` when none is. Set from the moment
+     * a reconnect is admitted until its sequence ends.
+     *
+     * It publishes the **target id** rather than a bare flag because the UI needs both halves and
+     * they are not the same set of rows: only the target's control should read "Connecting…", while
+     * EVERY control must be disabled, since a contending request would be refused anyway. A Boolean
+     * made thirty unrelated servers claim to be connecting.
      */
-    val inFlight: StateFlow<Boolean> = _inFlight.asStateFlow()
+    val reconnectingProfileId: StateFlow<Long?> = _reconnectingProfileId.asStateFlow()
+
+    private var job: Job? = null
+
+    // Identifies which sequence a coroutine's cleanup belongs to, so a cancelled job that has not
+    // been resumed yet cannot clear a slot its SUCCESSOR already owns — the UI would stop showing a
+    // reconnect that is still in flight, and a third request would be admitted alongside it.
+    // A captured Int rather than a job-identity comparison, for the reason FastestConnectRunner's
+    // `generation` documents: under a Dispatchers.Main.immediate scope a coroutine's body (and its
+    // finally) can run synchronously inside `launch`, before the field assignments around it have
+    // happened, whereas a captured Int is fully assigned before the coroutine literal is created.
+    private var generation = 0
+
+    /**
+     * Abandons a reconnect in flight without starting anything, and releases the guard so a later
+     * one is admitted.
+     *
+     * **Scope — read this before assuming it is the whole fix.** This covers the **in-app Disconnect
+     * only**, because that is the one stop this class can be TOLD about. The flow's settle signal is
+     * `LogRepository.connectionState`, which is source-blind: it cannot tell whose stop it just
+     * observed. So the **QS tile** (`XrayVpnTileService`) and the **ongoing notification's Stop
+     * action** (`XrayVpnService`) both still override a reconnect in flight — they dispatch
+     * `ACTION_STOP` straight to the service, the state reaches `DISCONNECTED`, and this flow reads
+     * that as its own teardown completing and starts the VPN back up. That is reachable whenever
+     * `MainActivity` is merely backgrounded, since the ViewModel and this flow are still alive.
+     *
+     * Closing it completely needs the service to publish a *stop was requested* signal the flow can
+     * distinguish from its own, which means changing human-review-gated `vpn/`. Recorded for the
+     * maintainer rather than half-done here.
+     */
+    fun cancel() {
+        job?.cancel()
+        job = null
+        // Cleared here rather than left to the cancelled job's own cleanup, which a posting
+        // dispatcher may not have run yet — the guard must be released by the time this returns,
+        // since the caller's very next action can be another reconnect. That cleanup is separately
+        // stopped from clobbering a successor's slot by [generation].
+        _reconnectingProfileId.value = null
+    }
 
     /**
      * Dispatches the stop, waits up to [STOP_TIMEOUT_MS] for the session to reach
      * [VpnConnectionState.DISCONNECTED], dispatches the start for [profileId], then verifies it
      * took.
      *
-     * Returns `null` when a reconnect is already [inFlight] — the request is refused, reported via
-     * `onSuperseded`, and never queued. **First request wins**, matching the rule this branch
-     * already settled for the parked-connect slot: the earlier choice is honoured and the later one
-     * is reported rather than silently dropped.
+     * Returns `null` when a reconnect is already in flight ([reconnectingProfileId] is non-null) —
+     * the request is refused, reported via `onSuperseded`, and never queued. **First request
+     * wins**, matching the rule this branch already settled for the parked-connect slot: the
+     * earlier choice is honoured and the later one is reported rather than silently dropped.
      */
     fun run(profileId: Long, scope: CoroutineScope): Job? {
-        if (_inFlight.value) {
+        if (_reconnectingProfileId.value != null) {
             onSuperseded()
             return null
         }
+        val myGeneration = ++generation
         // Armed synchronously, before the coroutine is even launched, so a second call on the same
         // (main) thread is refused no matter how the dispatcher schedules the body.
-        _inFlight.value = true
-        return scope.launch(dispatcher) {
+        _reconnectingProfileId.value = profileId
+        val newJob = scope.launch(dispatcher) {
             try {
                 stop()
                 val settled = withTimeoutOrNull(STOP_TIMEOUT_MS) {
@@ -116,11 +163,14 @@ internal class ReconnectFlow(
                 }
                 if (started == null) start(profileId)
             } finally {
-                // Also runs on cancellation (the ViewModel being cleared), so the guard can never
-                // wedge shut and make Reconnect work exactly once per process.
-                _inFlight.value = false
+                // Also runs on cancellation (the ViewModel being cleared, or [cancel]), so the
+                // guard can never wedge shut and make Reconnect work exactly once per ViewModel.
+                // Skipped when a later run already owns the slot — see [generation].
+                if (generation == myGeneration) _reconnectingProfileId.value = null
             }
         }
+        job = newJob
+        return newJob
     }
 
     companion object {

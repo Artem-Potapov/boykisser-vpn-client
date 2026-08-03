@@ -271,11 +271,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * A later connect request contested the single `pendingProfileId` slot while an earlier one was
-     * still parked behind a system dialog, and lost. Covers any of the three sources that can write
-     * that slot — connect-to-fastest's winner delivery, the QS-tile hand-off, or a second manual
-     * tap — since whichever request parked first raised the dialog that is still on screen, and
-     * answering it must complete that request.
+     * A later connect request contested a slot an earlier one already held, and lost. One message
+     * for two shapes of the same rule — the earlier choice is honoured, the later one is reported
+     * rather than silently dropped:
+     *
+     * - **The parked `pendingProfileId` slot.** Three sources can write it — connect-to-fastest's
+     *   winner delivery, the QS-tile hand-off, or a second manual tap — and whichever parked first
+     *   raised the system dialog still on screen, so answering it must complete that request.
+     * - **A reconnect already in flight** ([reconnect]). This one writes no slot at all — the
+     *   reconnect branch clears `pendingProfileId` because it raises no dialog — but it is the same
+     *   contention and the same resolution, so it reuses the same source-neutral copy.
      */
     fun reportConnectRequestSuperseded() {
         LogRepository.emitError(R.string.connect_request_superseded)
@@ -502,14 +507,25 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         // startForegroundService (not startService) is also what keeps us clear of the API 31+
         // background-start restriction if the activity loses foreground state between gate and
         // dispatch.
-        appContext.startForegroundService(stopIntent)
+        // Guarded like connect()'s dispatch: startForegroundService can throw (e.g.
+        // ForegroundServiceStartNotAllowedException on the ERROR path above, where this CREATES the
+        // service rather than signalling a running one). ReconnectFlow now calls this from a
+        // coroutine, so an uncaught throw would reach viewModelScope's handler instead of the
+        // caller — surface it through the same error channel every other failure uses. The active
+        // profile is still cleared: the user asked to disconnect either way.
+        try {
+            appContext.startForegroundService(stopIntent)
+        } catch (e: Exception) {
+            LogRepository.emitError(R.string.vpn_start_failed_error)
+            LogRepository.append("disconnect() failed to signal the service: ${e.message}")
+        }
         ActiveProfileRepository.setActiveProfileId(context, null)
     }
 
     /**
      * Single, stable owner of Reconnect sequencing — created once and NEVER swapped, exactly like
      * [pingCoordinator] and [fastestConnectRunner]. That is load-bearing here rather than tidy:
-     * [ReconnectFlow.inFlight] is what refuses a contending second tap, and a per-call instance
+     * [ReconnectFlow.reconnectingProfileId] is what refuses a contending second tap, and a per-call instance
      * would give every tap its own fresh guard, i.e. no guard at all.
      *
      * The closures take the APPLICATION context because they run seconds after the tap;
@@ -526,13 +542,29 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     /**
-     * True while a [reconnect] is sequencing its stop and start. The UI feeds this into
+     * The profile a [reconnect] is sequencing, or null when none is. The UI feeds this into
      * [connectLabelRes]/[connectEnabled]'s `isConnecting` parameter: the connection state stays
      * `BLACKHOLED` for the whole teardown — which can run for seconds when a live Xray core has to
      * be closed — so without this the affordance would keep rendering an enabled "Reconnect" that
      * looks dead, and re-tapping it is the natural response.
+     *
+     * An id rather than a flag because the two halves of that rule cover different rows: only the
+     * target says "Connecting…", while every control is disabled. See
+     * [ReconnectFlow.reconnectingProfileId].
      */
-    val reconnectInFlight: StateFlow<Boolean> = reconnectFlow.inFlight
+    val reconnectingProfileId: StateFlow<Long?> = reconnectFlow.reconnectingProfileId
+
+    /**
+     * Abandons a reconnect in flight so an in-app Disconnect wins against it.
+     *
+     * Deliberately NOT called from [disconnect]: that method is the flow's own first step, so
+     * cancelling there would make every reconnect cancel itself and silently degrade Reconnect into
+     * Disconnect. It belongs to the user's Disconnect surface — see [ReconnectFlow.cancel], which
+     * also documents which stop surfaces this does NOT cover.
+     */
+    fun cancelReconnect() {
+        reconnectFlow.cancel()
+    }
 
     /**
      * Stops the live session, waits for it to settle, then starts [profileId] — the mechanism behind

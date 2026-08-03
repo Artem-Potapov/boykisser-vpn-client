@@ -162,6 +162,88 @@ class ReconnectFlowTest {
     }
 
     @Test
+    fun aCancelledReconnectNeverDispatchesItsStart() = runTest {
+        // The in-app Disconnect must outrank a reconnect the user asked for a moment earlier: the
+        // flow's settle signal is source-blind, so without this it reads the user's OWN stop as its
+        // own teardown completing and starts the VPN back up — inverting an explicit "off".
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler)
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        assertEquals(listOf("stop"), calls)
+
+        flow.cancel()
+        runCurrent()
+
+        // The stop the user asked for still lands; the cancelled flow must not act on it.
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        advanceTimeBy(ReconnectFlow.START_VERIFY_MS + 1); runCurrent()
+        assertEquals("a cancelled reconnect must never dispatch its start", listOf("stop"), calls)
+    }
+
+    @Test
+    fun aCancelledReconnectReleasesTheGuardForALaterOne() = runTest {
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler)
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        flow.cancel()
+        assertNull(
+            "the guard must be released by the time cancel() returns — the caller's very next "
+                + "action can be another reconnect, and a posting dispatcher has not run the "
+                + "cancelled job's own cleanup yet",
+            flow.reconnectingProfileId.value
+        )
+
+        // Deliberately NO runCurrent() before this: the cancelled job's cleanup is still pending,
+        // so the successor claims the slot first and the stale cleanup lands afterwards. That is
+        // the interleaving the generation guard exists for.
+        assertNotNull(
+            "a cancel must not wedge the guard shut",
+            flow.run(profileId = 9L, scope = this)
+        )
+        runCurrent()
+        assertEquals(
+            "a cancelled job's cleanup must not clear its successor's slot",
+            9L,
+            flow.reconnectingProfileId.value
+        )
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        assertEquals(listOf("stop", "stop", "start:9"), calls)
+    }
+
+    @Test
+    fun theReconnectTargetIsPublishedWhileInFlightAndClearedAfter() = runTest {
+        // A bare Boolean would make every row in the list render "Connecting…" while only one
+        // server is actually being reconnected. The id is what scopes the label to its own row.
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler)
+
+        assertNull(flow.reconnectingProfileId.value)
+
+        flow.run(profileId = 7L, scope = this)
+        assertEquals(
+            "published synchronously, so the very next recomposition already renders the target",
+            7L,
+            flow.reconnectingProfileId.value
+        )
+        runCurrent()
+
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        state.value = VpnConnectionState.CONNECTING
+        runCurrent()
+        assertNull("cleared once the sequence ends", flow.reconnectingProfileId.value)
+    }
+
+    @Test
     fun theInFlightGuardReleasesSoALaterReconnectIsAdmitted() = runTest {
         // Without this, Reconnect would work exactly once per process.
         val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
