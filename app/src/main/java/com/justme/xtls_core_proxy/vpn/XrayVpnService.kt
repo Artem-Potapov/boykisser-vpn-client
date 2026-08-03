@@ -925,11 +925,15 @@ class XrayVpnService : VpnService() {
                             sessionTunnelState = SessionTunnelState.CONNECTED
                             episodeFailedIds = emptySet()   // episode ends on a successful rotation
                             // ---- POST-COMMIT, still under `lock` ----
-                            // The three calls below reach a subsystem and can therefore throw:
-                            // getSystemService(...).notify/cancel are binder calls, and
+                            // Two of the three calls below reach a subsystem and can therefore
+                            // throw: getSystemService(...).notify/cancel are binder calls, and
                             // localizedString builds a configuration context and resolves a
-                            // resource. The bare field writes between them cannot, so only the
-                            // calls are guarded.
+                            // resource. The third, setConnectionState, is a bare StateFlow
+                            // assignment and realistically cannot — it is guarded anyway so all
+                            // three post-commit steps read alike and none becomes the one path
+                            // back to the outer catch. The bare field writes between them are not
+                            // guarded: they cannot throw, and wrapping the last would change the
+                            // block's return value.
                             //
                             // They are guarded IN PLACE rather than moved out of the lock. Order
                             // and atomicity are load-bearing for the first one: publishing

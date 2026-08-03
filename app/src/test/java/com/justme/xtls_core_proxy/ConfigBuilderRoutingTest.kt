@@ -114,8 +114,11 @@ class ConfigBuilderRoutingTest {
                 JSONObject(items[carveOutIndex]).getString("outboundTag")
             )
             // Ahead of every rule that could route it elsewhere — the LAN bypass, ads -> block, and
-            // (EXCEPT_COUNTRY) the country direct rules. Only the port-53 -> dns-out rule and the
-            // BLOCKED_ONLY DoH guards may precede it, and neither can claim the probe.
+            // (EXCEPT_COUNTRY) the country direct rules. Three rules may precede it and none can
+            // claim the probe: the port-53 -> dns-out rule, the BLOCKED_ONLY DoH guards, and — with
+            // XRAY IPv6 off, which this test does not exercise — applyCoreSettings' ::/0 -> block
+            // inserted at index 1, which cannot match because IPv6 off also forces queryStrategy to
+            // UseIPv4.
             val firstDivertIndex = items.indexOfFirst {
                 JSONObject(it).optString("outboundTag") !in setOf("dns-out", "proxy")
             }
