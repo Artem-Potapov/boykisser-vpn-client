@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.state.ConnectAction
+import com.justme.xtls_core_proxy.state.connectEnabled
 import com.justme.xtls_core_proxy.state.connectLabelRes
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,6 +42,7 @@ internal fun ProfileActionsDialog(
     profile: Profile,
     isConnectedProfile: Boolean,
     action: ConnectAction,
+    isConnecting: Boolean,
     shareLink: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
@@ -80,11 +82,15 @@ internal fun ProfileActionsDialog(
                 } else {
                     ProfileActionRow(
                         icon = rememberVectorPainter(Icons.Filled.PlayArrow),
-                        // isConnecting = false: the row only renders for a NON-active profile
-                        // (isConnectedProfile shows Disconnect instead), and only the active
-                        // profile can be the one connecting.
-                        label = stringResource(connectLabelRes(action, isConnecting = false)),
-                        enabled = action != ConnectAction.UNAVAILABLE,
+                        // [isConnecting] here is NOT "this profile is connecting" — the row only
+                        // renders for a NON-active profile, so that could never be true. It is
+                        // "a reconnect is already in flight", which holds the connection state at
+                        // BLACKHOLED (so [action] still reads RECONNECT) while the request is
+                        // already running. Without it this row would stay enabled and a tap would
+                        // dispatch a second stop into the teardown of the session the first tap
+                        // asked for.
+                        label = stringResource(connectLabelRes(action, isConnecting)),
+                        enabled = connectEnabled(action, isConnecting),
                         onClick = onConnect
                     )
                 }
@@ -101,8 +107,10 @@ internal fun ProfileActionsDialog(
                     // winner is FastestConnectRunner's delivery-time re-check of the identical
                     // ConnectAction rule, immediately before it ever surfaces a winner; this gate is
                     // just the cheap, obvious no-op prevention for the common case of tapping the
-                    // row while a session is already live.
-                    enabled = action != ConnectAction.UNAVAILABLE,
+                    // row while a session is already live. It takes [isConnecting] for the same
+                    // reason the Connect row does, which is also what keeps "mirrors the row above"
+                    // literally true.
+                    enabled = connectEnabled(action, isConnecting),
                     onClick = onConnectFastest
                 )
                 ProfileActionRow(

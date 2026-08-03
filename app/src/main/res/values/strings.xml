@@ -19,7 +19,7 @@
     <string name="vpn_failover_disabled_while_blackholed">Auto-failover is off, so we stopped looking for a working server. Your connection is still paused — tap Reconnect to start it again.</string>
     <string name="vpn_failover_disabled_while_degraded">Auto-failover is off, so we stopped looking for a working server. You are still protected, but pages may not load — tap Reconnect to try another server.</string>
     <string name="vpn_failover_stopped_error">We couldn\'t reach any server, so the VPN has been switched off. Choose a server and try again.</string>
-    <string name="vpn_reconnect_timeout_error">We couldn\'t stop the current connection, so we didn\'t start a new one. Please turn the VPN off and on again.</string>
+    <string name="vpn_reconnect_timeout_error">Reconnecting took too long, so we didn\'t start the new connection. Please turn the VPN off and on again.</string>
     <string name="vpn_notification_action_stop">Turn off</string>
     <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_connecting">Connecting</string>

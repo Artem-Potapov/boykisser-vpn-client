@@ -101,6 +101,7 @@ import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.state.PingState
 import com.justme.xtls_core_proxy.state.VpnViewModel
 import com.justme.xtls_core_proxy.state.connectAction
+import com.justme.xtls_core_proxy.state.connectEnabled
 import com.justme.xtls_core_proxy.state.connectLabelRes
 import com.justme.xtls_core_proxy.state.shouldAutoPing
 import com.justme.xtls_core_proxy.subs.BoykisserInfoActivity
@@ -202,20 +203,21 @@ class MainActivity : LocalizedComponentActivity() {
                         // This lambda is the single choke point for BOTH a manual per-server tap
                         // and connect-to-fastest's winner delivery (MainScreen's
                         // LaunchedEffect(fastestWinnerId) calls this same callback), which is why
-                        // the RECONNECT branch below lives HERE and not in each caller: one
-                        // mechanism, one home, for every give-up outcome.
-                        //
-                        // A give-up leaves the service RUNNING (it still owns a TUN — live or
-                        // blackhole), so a plain connect() would hit startVpn's "VPN already
-                        // running" early return and do nothing. reconnect() sequences a stop and a
-                        // start instead. It needs no permission prompt: a session is already up,
-                        // so VpnService.prepare() consent was granted for this app, and the
-                        // pendingProfileId slot below exists only to survive those system dialogs.
-                        // Read live at tap time, not captured.
+                        // the RECONNECT branch lives HERE and not in each caller: one mechanism,
+                        // one home. See ReconnectFlow's KDoc for why a give-up needs a sequenced
+                        // stop-then-start rather than a plain connect(); the state read is live at
+                        // tap time, not captured.
                         if (connectAction(viewModel.connectionState.value) ==
                             ConnectAction.RECONNECT
                         ) {
-                            viewModel.reconnect(this@MainActivity, profileId)
+                            // No permission prompt is needed (a session is already running, so
+                            // consent was granted), so this owns the request outright — and must
+                            // release the parked slot rather than leave a stale id behind. A
+                            // POST_NOTIFICATIONS dialog opened earlier and answered later would
+                            // otherwise connect a SECOND, different profile out from under the
+                            // reconnect.
+                            pendingProfileId = -1L
+                            viewModel.reconnect(profileId)
                         } else if (shouldOverwritePendingConnect(pendingProfileId, profileId)) {
                             // Whichever request parked first raised the system dialog that is
                             // still on screen; answering it must complete THAT request, not a
@@ -546,6 +548,12 @@ private fun MainScreen(
         }
     }
     val connectingFastest by viewModel.connectFastestActive.collectAsState()
+    // A Reconnect holds the connection state at BLACKHOLED until its teardown lands — seconds, when
+    // a live Xray core has to be closed — so the state alone cannot tell the affordance it is busy.
+    // Folded into the `isConnecting` flag every connect control already takes, which drives BOTH
+    // the "Connecting…" label and (via connectEnabled) the enablement, so the control cannot read
+    // busy while still accepting the re-tap that would tear the new session down.
+    val reconnecting by viewModel.reconnectInFlight.collectAsState()
 
     var menuProfile by remember { mutableStateOf<Profile?>(null) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
@@ -718,8 +726,9 @@ private fun MainScreen(
                                     profile = profile,
                                     pingState = pingStates[profile.id] ?: PingState.Idle,
                                     isActive = isActive(profile, activeId, state),
-                                    isConnecting = isActive(profile, activeId, state) &&
-                                        state == VpnConnectionState.CONNECTING,
+                                    isConnecting = reconnecting ||
+                                        (isActive(profile, activeId, state) &&
+                                            state == VpnConnectionState.CONNECTING),
                                     action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
@@ -749,8 +758,9 @@ private fun MainScreen(
                                     profile = profile,
                                     pingState = pingStates[profile.id] ?: PingState.Idle,
                                     isActive = isActive(profile, activeId, state),
-                                    isConnecting = isActive(profile, activeId, state) &&
-                                        state == VpnConnectionState.CONNECTING,
+                                    isConnecting = reconnecting ||
+                                        (isActive(profile, activeId, state) &&
+                                            state == VpnConnectionState.CONNECTING),
                                     action = connectAction(state),
                                     onConnect = { onConnect(profile.id) },
                                     onLongPress = { menuProfile = profile }
@@ -774,6 +784,7 @@ private fun MainScreen(
             profile = profile,
             isConnectedProfile = isActive(profile, activeId, state),
             action = connectAction(state),
+            isConnecting = reconnecting,
             shareLink = shareLink,
             onConnect = {
                 menuProfile = null
@@ -1021,7 +1032,7 @@ private fun ProfileRow(
 
             Button(
                 onClick = onConnect,
-                enabled = action != ConnectAction.UNAVAILABLE,
+                enabled = connectEnabled(action, isConnecting),
                 modifier = Modifier.padding(start = 8.dp)
             ) {
                 Text(stringResource(connectLabelRes(action, isConnecting)))

@@ -3,6 +3,8 @@ package com.justme.xtls_core_proxy.state
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConnectActionTest {
@@ -71,5 +73,21 @@ class ConnectActionTest {
                 connectLabelRes(action, isConnecting = true)
             )
         }
+    }
+
+    @Test
+    fun anAffordanceThatReadsConnectingIsNotAlsoTappable() {
+        // The enablement half must agree with the label half above for the SAME inputs. A Reconnect
+        // in flight holds the connection state at BLACKHOLED for the whole teardown, so the action
+        // still says RECONNECT while the request is already running: without this, the control
+        // would read "Connecting…" and remain tappable, and re-tapping it dispatches a second stop
+        // that can tear down the session the first tap just asked for.
+        for (action in ConnectAction.entries) {
+            assertFalse(action.name, connectEnabled(action, isConnecting = true))
+        }
+        assertTrue(connectEnabled(ConnectAction.RECONNECT, isConnecting = false))
+        assertTrue(connectEnabled(ConnectAction.CONNECT, isConnecting = false))
+        // Behaviour-preserving for the pre-existing case.
+        assertFalse(connectEnabled(ConnectAction.UNAVAILABLE, isConnecting = false))
     }
 }
