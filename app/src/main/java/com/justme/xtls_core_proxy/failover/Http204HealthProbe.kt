@@ -12,6 +12,14 @@ import java.net.URL
  * modes (only protect()'d Xray sockets bypass), this request travels tun -> xray -> proxy ->
  * internet and therefore tests the exact path user traffic takes.
  *
+ * **That claim only holds because the routing table is made to honour it.** Reaching the tun is not
+ * enough — Xray still decides which outbound carries the request, and `BLOCKED_ONLY` ends its rule
+ * list with a `network: tcp,udp -> direct` catch-all that would hand the GET to `freedom` on a
+ * `protect()`'d socket, returning 204 with the proxy completely dead. `ConfigBuilder` therefore
+ * carves `ConfigBuilder.HEALTH_PROBE_HOST` through the proxy in that mode, and the target is that
+ * fixed constant rather than the user-editable Ping Test URL, because a static rule and an editable
+ * target cannot both be right. Any replacement probe must keep both halves.
+ *
  * Deliberately NOT XrayBridge.measureLatency: that builds a throwaway instance whose sockets are
  * protect()'d OUT of the tun, so it answers "can this config reach that server", not "is the live
  * tunnel passing traffic" — and those diverge in precisely the failure mode this feature targets.

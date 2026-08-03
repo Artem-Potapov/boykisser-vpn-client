@@ -49,7 +49,6 @@ import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.log.XrayCoreLogTailer
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
-import com.justme.xtls_core_proxy.state.PingPreferences
 import com.justme.xtls_core_proxy.split.SplitTunnelMode
 import com.justme.xtls_core_proxy.split.SplitTunnelPlanner
 import com.justme.xtls_core_proxy.split.SplitTunnelRepository
@@ -1409,10 +1408,15 @@ class XrayVpnService : VpnService() {
                 stopFailoverMonitorLocked()
             }
 
-            val target = PingPreferences.load(this).targetUrl
             failoverMonitorSettings = settings
             failoverMonitor = TunnelHealthMonitor(
-                probe = Http204HealthProbe(target, settings.probeTimeoutMs),
+                // FIXED target, deliberately NOT PingPreferences.targetUrl. It is half of a routing
+                // rule: applyRouting carves this exact host through the proxy under BLOCKED_ONLY,
+                // and a static rule cannot cover a user-editable target. Reading the Ping Test
+                // setting here also inherited its validation gap — that target is only checked for
+                // an http:// prefix, so any non-204 URL would fail every probe forever and drive a
+                // rotation storm plus a give-up over perfectly healthy servers.
+                probe = Http204HealthProbe(ConfigBuilder.HEALTH_PROBE_TARGET_URL, settings.probeTimeoutMs),
                 availability = AndroidNetworkAvailability(applicationContext),
                 intervalMs = settings.probeIntervalMs,
                 failureThreshold = settings.failureThreshold,

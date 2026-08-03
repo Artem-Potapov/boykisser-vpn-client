@@ -28,7 +28,8 @@ must never have.
 ## The health probe: a Kotlin HTTP 204 through the live tunnel
 
 [`failover/Http204HealthProbe.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/Http204HealthProbe.kt)
-issues a plain `HttpURLConnection` GET against the ping-test target and requires HTTP **204**.
+issues a plain `HttpURLConnection` GET against a **fixed** target — `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
+— and requires HTTP **204**.
 
 **It is deliberately NOT `XrayBridge.measureLatency`.** `MeasureLatency` builds a *throwaway*
 `core.Instance` whose sockets are `protect()`'d **out** of the tun by 2A's global dial controller (see
@@ -45,6 +46,47 @@ measuring the clear network and would never fire. Treat the two as coupled.
 That coupling is also load-bearing in the other direction: it is what structurally guarantees a probe
 through a **blackhole** TUN (an fd nobody reads) can never succeed, which is why
 `clearGiveUpStateOnRecovery` can trust a healthy probe (see below).
+
+### Reaching the tun is not enough — the routing table has to cooperate
+
+Entering the tun only gets the probe as far as Xray. **Xray then picks the outbound**, and
+`BLOCKED_ONLY` ("proxy only blocked sites") ends its rule list with a `network: tcp,udp → direct`
+catch-all. Under that mode the GET went out through `freedom` on a `protect()`'d socket and returned
+204 **with the proxy completely dead** — so the watchdog could never rotate, and worse, the healthy
+branch would *clear* a legitimate `CONTAINED_BY_LIVE_TUNNEL` give-up on the strength of a request that
+never touched the proxy.
+
+Two halves close it, and they are one change:
+
+- **`ConfigBuilder` carves the probe host through the proxy** under `BLOCKED_ONLY` —
+  `healthProbeCarveOutRule(proxyTag)`, a `domain: full:cp.cloudflare.com → proxy` rule emitted in the
+  same position as its `dohGuardRules` sibling: right after the forced port-53 rule, **ahead of the LAN
+  and ad-block rules** (a later `geosite:category-ads-all → block` match would turn the probe into a
+  permanent failure). It is a `domain` rule, so it needs sniffing — which `BLOCKED_ONLY` already forces
+  through `routingNeedsDomainRules`. Like every rule this chokepoint emits, it only ever moves traffic
+  **toward** the proxy.
+- **The target is a fixed constant**, `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, no longer
+  `PingPreferences.targetUrl`. This is *forced by* the carve-out, not an extra: a static routing rule
+  and a user-editable target cannot both be right. It also closes a second hazard — the Ping Test
+  target is validated only as an `http://` prefix, so a user pointing it at any ordinary page made
+  every health probe fail forever, i.e. a rotation storm and a give-up over healthy servers. The Ping
+  Test feature keeps its own editable target and its own default; this is a **separate** constant.
+
+**Only `BLOCKED_ONLY` needs the rule.** `PROXY_ALL` emits no mode rules at all and `EXCEPT_COUNTRY`
+emits only country-scoped direct rules — in both, a destination matching nothing falls through to the
+first outbound, which is the proxy, and their one direct rule (`geoip:private` LAN bypass) cannot match
+a public host. `BLOCKED_ONLY` is the only mode that emits a direct catch-all. Emitting the carve-out
+everywhere would be dead weight in `PROXY_ALL` and would override the user's country-direct policy in
+`EXCEPT_COUNTRY` for no safety gain.
+
+`ConfigSanitizer` deliberately does **not** get a new finding for it. It reports user-selected policy
+plus the enforcements a pasted config could otherwise have overridden; the carve-out is an always-on
+internal mechanism with no user-facing knob — exactly like `dohGuardRules`, which it mirrors and which
+is likewise unreported — and it can only make the effective posture *more* proxied than the summary
+already states.
+
+The constant lives in `config/` rather than `failover/` because the carve-out owner is `ConfigBuilder`;
+a `config → failover` import for one string would be the wrong direction.
 
 ## The monitor loop
 
@@ -538,10 +580,12 @@ no Save button, each control persists on change, and an invalid field holds its 
 | `maxRotations` | 3 | 1 – 10 | Sliding-window thrash cap |
 | `rotationWindowMs` | 600 000 | 60 000 – 3 600 000 | **No UI control** — carried through from the stored tuple. Also the re-arm delay |
 
-The probe **target URL** is not a failover setting: it is deliberately shared with
-`PingPreferences.targetUrl` (read fresh in `applyFailoverPreferences`), so editing it under
-Diagnostics → Ping test also changes what the health watchdog probes. One target, one place to change
-it — but a maintainer editing either screen should know the coupling exists.
+The probe **target URL** is not a failover setting and is **not user-editable at all**: it is the fixed
+`ConfigBuilder.HEALTH_PROBE_TARGET_URL`. It used to read `PingPreferences.targetUrl`, and that sharing
+was wrong twice over — a static `BLOCKED_ONLY` routing carve-out cannot cover an editable target, and
+the Ping Test target is validated only as an `http://` prefix, so any non-204 URL made every probe fail
+forever. See ["Reaching the tun is not enough"](#reaching-the-tun-is-not-enough--the-routing-table-has-to-cooperate)
+above. The Ping Test feature keeps its own editable target; the two are now independent.
 
 ### The cross-field rule, and the lesson it taught
 

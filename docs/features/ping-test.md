@@ -193,11 +193,13 @@ modify.
 `PingPreferences` stores four global values in `xray_prefs` and is read **fresh when a probe is
 accepted**; unlike VPN connection tuning, ping settings have no session-capture rail.
 
-**The target URL has a second consumer.** [Auto-failover](auto-failover.md)'s tunnel health probe
-(`Http204HealthProbe`) reads `PingPreferences.load(...).targetUrl` in `applyFailoverPreferences`, so
-editing the target here also changes what the health watchdog probes while connected. One target, one
-place to change it — but do not treat this preference as ping-only when changing its semantics or its
-validation.
+**The target URL is ping-only.** It used to have a second consumer —
+[auto-failover](auto-failover.md)'s tunnel health probe read `PingPreferences.load(...).targetUrl` in
+`applyFailoverPreferences` — and that coupling has been **removed**. The health probe now uses the
+fixed `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, because `ConfigBuilder` carves that exact host through
+the proxy under `BLOCKED_ONLY` (a static routing rule cannot cover an editable target) and because
+`isValidTarget`'s deliberately minimal prefix check let a non-204 URL fail every health probe forever,
+driving a rotation storm over healthy servers. Editing the target here now affects the Ping Test only.
 
 | Preference | Default | Validation / meaning |
 |---|---|---|

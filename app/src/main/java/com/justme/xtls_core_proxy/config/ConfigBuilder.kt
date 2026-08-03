@@ -153,6 +153,25 @@ object ConfigBuilder {
      */
     const val TUN_MTU = 1400
 
+    /**
+     * The auto-failover tunnel health probe's target host, and the full URL built from it.
+     *
+     * FIXED, and deliberately NOT the user-editable Ping Test target. Two reasons, both hard:
+     *
+     * 1. **It is half of a routing rule.** `applyRouting` carves this exact host through the proxy
+     *    under `BLOCKED_ONLY` (see the `healthProbeCarveOutRules` call site). A static rule and a
+     *    user-editable target cannot both be right — edit the target and the carve-out stops
+     *    covering it, which silently restores the bypass this constant exists to close.
+     * 2. **The Ping Test target is validated only as a URL prefix**, not as a 204 endpoint. A user
+     *    who points it at any normal page makes `Http204HealthProbe` return false forever, which
+     *    the watchdog reads as a dead tunnel — a rotation storm and a give-up over healthy servers.
+     *
+     * It lives in `config/` because the carve-out owner is `ConfigBuilder`; `failover` and `vpn`
+     * import it. A `config -> failover` dependency for one string would be the wrong direction.
+     */
+    const val HEALTH_PROBE_HOST = "cp.cloudflare.com"
+    const val HEALTH_PROBE_TARGET_URL = "http://$HEALTH_PROBE_HOST/generate_204"
+
     const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
     const val CLOUDFLARE_DOH_SECONDARY = "https://1.0.0.1/dns-query"
     // IP-literal `https+local://` form of the Cloudflare resolvers. `+local` dials the DoH endpoint
@@ -489,7 +508,8 @@ object ConfigBuilder {
     /**
      * Global routing overlay. null → no-op (probes). Owns the geoip:private LAN rule (strips the baked
      * one, re-injects per toggle). Injected order, spliced after the forced port-53 rule:
-     * DoH-guard(mode3) · LAN · ads · mode rules · config's own rules · catch-all direct(mode3, last).
+     * DoH-guard(mode3) · health-probe carve-out(mode3) · LAN · ads · mode rules · config's own rules ·
+     * catch-all direct(mode3, last).
      * applyCoreSettings later inserts the IPv6 ::/0-block at index 1. Ensures direct/block outbounds and
      * a proxy tag exist before referencing them.
      */
@@ -524,6 +544,7 @@ object ConfigBuilder {
         val out = JSONArray()
         if (port53 != null) out.put(port53)
         if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
+        if (effectiveMode == RoutingMode.BLOCKED_ONLY) out.put(healthProbeCarveOutRule(proxyTag))
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
         when (effectiveMode) {
@@ -608,6 +629,32 @@ object ConfigBuilder {
         val ip = rule.optJSONArray("ip") ?: return false
         return ip.length() == 1 && ip.optString(0) == "geoip:private"
     }
+
+    /**
+     * Health-probe carve-out: route [HEALTH_PROBE_HOST] to the proxy so auto-failover's watchdog
+     * measures the **proxy**, not merely the tunnel.
+     *
+     * `BLOCKED_ONLY` ONLY, and emitted in the same position as its [dohGuardRules] sibling — right
+     * after the forced port-53 rule, ahead of the LAN and ad-block rules. Without it the final
+     * `network: tcp,udp -> direct` catch-all hands the probe's GET to `freedom` on a `protect()`'d
+     * socket, where it returns 204 with the proxy completely dead: the watchdog can never rotate,
+     * and its healthy branch would *clear* a legitimate `CONTAINED_BY_LIVE_TUNNEL` give-up on the
+     * strength of a request that never touched the proxy.
+     *
+     * **Why only this mode.** `BLOCKED_ONLY` is the one mode that emits a direct catch-all.
+     * `PROXY_ALL` emits no mode rules at all, and `EXCEPT_COUNTRY` emits only country-scoped direct
+     * rules — in both, a destination that matches nothing falls through to the first outbound,
+     * which is the proxy. The only direct rule they can carry is the LAN bypass (`geoip:private`),
+     * which cannot match a public host. Emitting this rule there would therefore be dead weight in
+     * `PROXY_ALL`, and in `EXCEPT_COUNTRY` it would *override* the user's country-direct policy for
+     * no safety gain.
+     *
+     * **Direction.** Like every rule this chokepoint emits, it may only move traffic TOWARD the
+     * proxy. It is a `domain` rule, so it needs sniffing — which `BLOCKED_ONLY` already forces via
+     * `routingNeedsDomainRules`.
+     */
+    private fun healthProbeCarveOutRule(proxyTag: String): JSONObject =
+        fieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag)
 
     /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
     private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {

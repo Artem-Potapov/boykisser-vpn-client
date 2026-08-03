@@ -38,15 +38,23 @@ order is:
 
 1. mandatory port-53 → `dns-out`;
 2. DoH guard for `BLOCKED_ONLY`;
-3. optional LAN direct;
-4. optional ads → blackhole;
-5. mode-specific country rules;
-6. preserved config rules;
-7. final direct catch-all, only for supported `BLOCKED_ONLY`.
+3. health-probe carve-out for `BLOCKED_ONLY`;
+4. optional LAN direct;
+5. optional ads → blackhole;
+6. mode-specific country rules;
+7. preserved config rules;
+8. final direct catch-all, only for supported `BLOCKED_ONLY`.
 
 The DoH guard keeps the effective resolver on the proxy side despite the mode's direct default. It
 covers resolver IPs, resolver hostnames, and `dns.hosts` pinned IPs. Redirecting `freedom` outbounds
 are not reused as the direct helper.
+
+The health-probe carve-out is its structural twin: `domain: full:<ConfigBuilder.HEALTH_PROBE_HOST> →
+proxy`, so auto-failover's watchdog measures the **proxy** rather than the direct catch-all. Without
+it the probe returned 204 with the proxy dead, so failover could never rotate. Both rules sit ahead of
+the LAN and ads rules on purpose — an ads → blackhole match would turn the probe into a permanent
+failure. Neither is needed in `PROXY_ALL` or `EXCEPT_COUNTRY`: those emit no direct catch-all, so an
+unmatched destination falls through to the proxy. See [`auto-failover.md`](auto-failover.md).
 
 Domain and geosite rules require sniffing. `routingNeedsDomainRules` therefore forces the final core
 overlay to enable route-only sniffing for every non-Proxy-all mode and for ad blocking. The XRAY screen
@@ -68,7 +76,9 @@ core has no geo-asset directory.
 `RoutingSettingsTest` covers list tables, required-file derivation, blocked support, sniffing
 requirements, and availability fallback. `RoutingPreferencesTest` covers persisted sanitization.
 `ConfigBuilderRoutingTest` covers rule order, LAN ownership, supported/unsupported `BLOCKED_ONLY`,
-DoH guards (including pinned and bracketed-IPv6 resolvers), helper-outbound safety, and probe stripping.
+DoH guards (including pinned and bracketed-IPv6 resolvers), the health-probe carve-out (presence,
+proxy direction, position ahead of LAN/ads, and its scoping to `BLOCKED_ONLY`), helper-outbound safety,
+and probe stripping.
 
 On-device, exercise each buildable mode with the corresponding geo assets, verify LAN/ad toggles, and
 confirm DNS still traverses the selected secure resolver. Missing-asset fallback should remain

@@ -52,6 +52,76 @@ class ConfigBuilderRoutingTest {
         assertEquals("proxy", r.getJSONObject(1).getString("outboundTag"))
     }
 
+    // I1 — the failover health probe must traverse the PROXY, not just the tunnel. BLOCKED_ONLY's
+    // final `network: tcp,udp -> direct` catch-all would otherwise send the 204 GET out through
+    // freedom on a protect()'d socket, where it succeeds with the proxy completely dead — so the
+    // watchdog could never fire, and the healthy branch would clear a legitimate give-up.
+    @Test fun blocked_only_carves_the_health_probe_target_through_the_proxy() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless,
+            tuning = TuningSettings(
+                routing = RoutingSettings(RoutingMode.BLOCKED_ONLY, RoutingCountry.RU, bypassLan = true, blockAds = true)
+            )
+        )
+        val items = ruleItems(out)
+        val carveOutIndex = items.indexOfFirst {
+            val o = JSONObject(it)
+            o.optJSONArray("domain")?.toString()?.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") == true
+        }
+        assertTrue(
+            "BLOCKED_ONLY must route the health-probe host to the proxy; rules=$items",
+            carveOutIndex >= 0
+        )
+        assertEquals(
+            "the carve-out must move traffic TOWARD the proxy, never away from it",
+            "proxy",
+            JSONObject(items[carveOutIndex]).getString("outboundTag")
+        )
+        // Ahead of the LAN and ad-block rules, exactly like its dohGuardRules sibling: a later
+        // geosite:category-ads-all -> block match would turn the probe into a permanent failure.
+        val lanIndex = items.indexOfFirst { it.contains("geoip:private") }
+        val adsIndex = items.indexOfFirst { it.contains("geosite:category-ads-all") }
+        assertTrue("carve-out must precede the LAN rule; rules=$items", carveOutIndex < lanIndex)
+        assertTrue("carve-out must precede the ad-block rule; rules=$items", carveOutIndex < adsIndex)
+        // And obviously before the direct catch-all, which is last.
+        assertTrue(carveOutIndex < items.lastIndex)
+    }
+
+    // The carve-out is scoped to BLOCKED_ONLY because it is the ONLY mode that emits a direct
+    // catch-all. PROXY_ALL emits no mode rules at all, and EXCEPT_COUNTRY emits only
+    // country-scoped direct rules; in both, an unmatched destination falls through to the first
+    // outbound, which is the proxy. Emitting the rule there anyway would be dead weight in
+    // PROXY_ALL and would override the user's country-direct policy in EXCEPT_COUNTRY.
+    @Test fun the_health_probe_carve_out_is_scoped_to_blocked_only() {
+        for (mode in listOf(RoutingMode.PROXY_ALL, RoutingMode.EXCEPT_COUNTRY)) {
+            val out = ConfigBuilder.buildRuntimeConfig(
+                vless,
+                tuning = TuningSettings(
+                    routing = RoutingSettings(mode, RoutingCountry.RU, bypassLan = true, blockAds = true)
+                )
+            )
+            assertFalse(
+                "$mode has no direct catch-all, so it needs no carve-out; rules=${ruleItems(out)}",
+                ruleItems(out).any { it.contains(ConfigBuilder.HEALTH_PROBE_HOST) }
+            )
+        }
+    }
+
+    // The domain rule can only match if the tun inbound sniffs the HTTP Host header. BLOCKED_ONLY
+    // forces sniffing via routingNeedsDomainRules, and this pins that dependency: drop the forcing
+    // and the carve-out silently stops matching while the JSON still looks correct.
+    @Test fun blocked_only_forces_sniffing_so_the_carve_out_can_match() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless,
+            tuning = TuningSettings(
+                routing = RoutingSettings(RoutingMode.BLOCKED_ONLY, RoutingCountry.RU, bypassLan = false, blockAds = false)
+            )
+        )
+        val sniffing = JSONObject(out).getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+        assertTrue(sniffing.getBoolean("enabled"))
+        assertTrue(sniffing.getJSONArray("destOverride").toString().contains("http"))
+    }
+
     @Test fun lan_rule_ownership() {
         val withLan = """
             {"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,"users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},{"tag":"direct","protocol":"freedom"}],
