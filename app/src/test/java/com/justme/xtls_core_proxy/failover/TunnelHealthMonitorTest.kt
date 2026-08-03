@@ -219,25 +219,47 @@ class TunnelHealthMonitorTest {
     }
 
     @Test
-    fun theUnhealthyListenerIsInvokedUnconditionallyOnceTheThresholdIsReached() = runTest {
+    fun theUnhealthyListenerIsInvokedEvenWhenTheLoopWasAlreadyCancelled() = runTest {
         // Regression guard for the swallow hazard. pausePolling() runs on tunnelOpScope, a different
         // thread from this poll loop, and captures `job` before nulling it — so a screen-off landing
         // between `job = null` and the listener call used to make currentCoroutineContext().isActive
         // false and SKIP the rotation request, while isStarted = false made resumePolling() return
         // early. Failover then stayed dead for the whole session over a dead tunnel, with no signal.
         //
-        // The two-thread interleaving itself is NOT reproducible on StandardTestDispatcher. What this
-        // pins is the contract that replaced it: reaching the threshold always invokes the listener,
-        // with no liveness condition attached. Verified to bite by mutation (see the report).
+        // The cancellation is staged from INSIDE the probe, which is what makes this deterministic
+        // on a single-threaded StandardTestDispatcher and, more importantly, what makes the test
+        // load-bearing. `job.getAndSet(null)` clears only the REFERENCE — it does not cancel — so a
+        // restored `isActive` gate stays true and a test that merely reaches the threshold cannot
+        // fail for this regression. Calling pausePolling() from the probe cancels the poll
+        // coroutine for real, and there is no suspension point between the probe returning and
+        // `listener?.invoke()`, so cancellation never throws and the loop runs on with isActive
+        // ALREADY false — precisely the interleaving the production code refuses to gate on.
+        //
+        // MUTATION-VERIFIED: wrapping the listener call in `if (currentCoroutineContext().isActive)`
+        // makes this fail with fired == 0. Do not add such a gate.
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fired = AtomicInteger(0)
-        val m = monitor(FakeProbe(healthy = false), FakeAvailability(), dispatcher, threshold = 1)
+        lateinit var started: TunnelHealthMonitor
+        val cancellingProbe = object : HealthProbe {
+            var calls = 0
+            override suspend fun isHealthy(): Boolean {
+                calls++
+                started.pausePolling()   // cancels THIS coroutine, mid-tick
+                return false
+            }
+        }
+        started = monitor(cancellingProbe, FakeAvailability(), dispatcher, threshold = 1)
 
-        m.start(onHealthy = null) { fired.incrementAndGet() }
+        started.start(onHealthy = null) { fired.incrementAndGet() }
         runCurrent()
-        m.stop()
+        started.stop()
 
-        assertEquals("reaching the threshold must always request a rotation", 1, fired.get())
+        assertEquals("the probe must have run exactly once", 1, cancellingProbe.calls)
+        assertEquals(
+            "reaching the threshold must request a rotation even on a cancelled loop",
+            1,
+            fired.get(),
+        )
     }
 
     // NOTE for the six tests below: they call m.stop() BEFORE asserting. A monitor that never
