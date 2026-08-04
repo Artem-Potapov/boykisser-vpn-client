@@ -6,9 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pure JVM unit tests for `decideTileClick` — the click-decision function
- * extracted out of `XrayVpnTileService` so it can be exercised without the QS
- * framework, a Context, or system services.
+ * Pure JVM unit tests for `decideTileClick` and `shouldStopOnTileClick` — the click-decision
+ * functions extracted out of `XrayVpnTileService` so they can be exercised without the QS
+ * framework, a Context, or system services. `shouldStopOnTileClick` is the whole of the Stop rule
+ * `XrayVpnTileService.handleClick` applies on its no-IO fast path, so covering it here covers that
+ * path even though the `TileService` method itself is out of reach of a plain-JVM test.
  *
  * Coverage matrix: every `VpnConnectionState` value × profile-present vs.
  * absent × VPN-consent-needed vs. not × notification-permission-missing vs.
@@ -66,15 +68,23 @@ class TileClickDecisionTest {
 
     @Test
     fun everyLiveStateDecidesStop() {
-        // XrayVpnTileService.handleClick duplicates this exact gate by hand for its no-IO fast
-        // path. That duplicate drifted once already and shipped a tile that rendered as an active
-        // Stop control and did nothing. Any state added here must be added there too.
+        // Asserted against BOTH entry points, because XrayVpnTileService.handleClick reaches the
+        // gate through shouldStopOnTileClick and never through decideTileClick — its no-IO fast
+        // path returns before the profile lookup. handleClick itself is a TileService method no
+        // plain-JVM test can call, but the whole of the rule it applies is this one function, so
+        // pinning the function pins the fast path. It used to be duplicated by hand there, and that
+        // duplicate drifted once and shipped a tile that rendered as an active Stop control and did
+        // nothing.
         for (state in listOf(
             VpnConnectionState.CONNECTING,
             VpnConnectionState.CONNECTED,
             VpnConnectionState.PAUSED,
             VpnConnectionState.BLACKHOLED,
         )) {
+            assertTrue(
+                "$state is a live state: the tile's fast path must stop in it",
+                shouldStopOnTileClick(state),
+            )
             assertEquals(
                 "$state must decide Stop",
                 TileClickDecision.Stop,
@@ -91,8 +101,12 @@ class TileClickDecisionTest {
         // branch. For a new LIVE state that reproduces the exact shipped defect this test exists
         // for: ACTION_START reaches startVpn's "VPN already running" early return, so the tile
         // renders STATE_ACTIVE and does nothing. Enumerating the full enum makes widening it a test
-        // failure rather than a grep nobody runs — and the same sweep must reach
-        // XrayVpnTileService.handleClick, MainActivity.isActive and state/connectAction.
+        // failure rather than a grep nobody runs.
+        //
+        // The sweep covers BOTH tile call sites, because both go through shouldStopOnTileClick —
+        // decideTileClick on the start path, XrayVpnTileService.handleClick on its no-IO fast path.
+        // It does NOT reach MainActivity.isActive or state/connectAction; those have their own
+        // whole-enum guards in MainActivityStateTest and ConnectActionTest.
         val stops = setOf(
             VpnConnectionState.CONNECTING,
             VpnConnectionState.CONNECTED,
@@ -108,6 +122,11 @@ class TileClickDecisionTest {
             (stops + startable).containsAll(VpnConnectionState.entries.toSet()),
         )
         for (state in VpnConnectionState.entries) {
+            assertEquals(
+                "$state: the shared gate handleClick's fast path calls",
+                state in stops,
+                shouldStopOnTileClick(state),
+            )
             val decision = decideTileClick(state, profileId = 7L, needsVpnConsent = false,
                 needsNotifPermission = false)
             assertEquals(

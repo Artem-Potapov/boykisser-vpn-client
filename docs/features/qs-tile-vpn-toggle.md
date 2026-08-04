@@ -190,15 +190,18 @@ When the QS panel is pulled down from the lock screen, `TileService.isLocked` re
 
 ## Known limitations
 
-**`BLACKHOLED` is `STATE_ACTIVE`, and the Stop gate is duplicated.** [Auto-failover](auto-failover.md)
+**`BLACKHOLED` is `STATE_ACTIVE`.** [Auto-failover](auto-failover.md)
 added `VpnConnectionState.BLACKHOLED` — the service is still running and still owns a TUN, so the tile
 must stay a working **Stop** control, exactly like `PAUSED`. Mapping it to `STATE_INACTIVE` (as `ERROR`
 is) would dispatch `ACTION_START` on tap, which `startVpn` no-ops with "VPN already running" — a dead
-control in the state where the user most needs a live one. **Widening this enum needs a grep sweep, not
-a green build:** the two exhaustive `when` sites are compiler-checked, but the Stop gate exists as a
-plain boolean chain in *two* places — `decideTileClick` **and** `handleClick`'s no-IO fast path — plus
-`sendStopIntent`'s comment. Adding the state to the render while missing the chains once left the tile
-rendering active and behaving dead, which is strictly worse than looking dead.
+control in the state where the user most needs a live one. **Widening this enum still needs a grep
+sweep, not a green build:** the two exhaustive `when` sites are compiler-checked, but the Stop gate is
+a plain boolean chain the compiler cannot flag. It now exists in exactly **one** place —
+`shouldStopOnTileClick`, called by both `decideTileClick` and `handleClick`'s no-IO fast path (plus
+`sendStopIntent`'s comment, which is prose only) — and `TileClickDecisionTest` sweeps the whole enum
+against it, so widening the enum fails a test. Before that extraction the gate was duplicated by hand
+in `handleClick`, and adding the state to the render while missing that copy left the tile rendering
+active and behaving dead, which is strictly worse than looking dead.
 
 **The tile offers Stop only in `BLACKHOLED` — the in-app "Reconnect" has no tile equivalent.** The
 in-app connect affordance is now three-valued (`state/ConnectAction`) and renders **"Reconnect"** in
@@ -240,9 +243,9 @@ is a ledgered, accepted residual — do not "fix" the tile mapping without revis
 - VM's `activeProfileId` reflects repository writes from a simulated tile path (the test calls `ActiveProfileRepository.setActiveProfileId` directly rather than going through `VpnViewModel.connect`). Uses `vm.activeProfileId.first { predicate }` to wait for the emission — a plain `.value` read would not force the `stateIn` upstream live, since `WhileSubscribed` requires a collector.
 - VM's `error` reflects `LogRepository.emitError` emissions, localized against the application context, and clears on the next CONNECTING-state transition.
 
-**Tile click decision** is covered by [`TileClickDecisionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/tile/TileClickDecisionTest.kt), a fast JVM unit test against the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` function in [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt). The function lives outside `XrayVpnTileService` so the click pipeline can be exercised without the QS framework, a Context, or system services. Coverage: every `VpnConnectionState` value × profile-present-vs-absent × VPN-consent-needed-vs-not × notification-permission-missing-vs-not, plus two whole-enum guards — `everyLiveStateDecidesStop` (the live set pinned in one place) and `everyStateIsClassifiedExplicitly` (iterates `VpnConnectionState.entries`, so **widening the enum fails a test** instead of silently falling through to `Start`).
+**Tile click decision** is covered by [`TileClickDecisionTest`](../../app/src/test/java/com/justme/xtls_core_proxy/tile/TileClickDecisionTest.kt), a fast JVM unit test against the two pure functions in [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt) — `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` and the Stop gate it delegates to, `shouldStopOnTileClick(state)`. They live outside `XrayVpnTileService` so the click pipeline can be exercised without the QS framework, a Context, or system services. Coverage: every `VpnConnectionState` value × profile-present-vs-absent × VPN-consent-needed-vs-not × notification-permission-missing-vs-not, plus two whole-enum guards — `everyLiveStateDecidesStop` (the live set pinned in one place) and `everyStateIsClassifiedExplicitly` (iterates `VpnConnectionState.entries`, so **widening the enum fails a test** instead of silently falling through to `Start`). Both guards assert against `shouldStopOnTileClick` *and* `decideTileClick`.
 
-**What that test does *not* cover: `handleClick`'s own duplicate.** `handleClick` does **not** simply translate `decideTileClick`'s result — it re-states the Stop gate **by hand** for its no-IO fast path and returns early, reaching `decideTileClick` only on the start path. So the JVM test exercises the pure copy and *cannot see the duplicate*, which is precisely the copy that drifted and shipped a live-looking dead tile. `handleClick` is a `TileService` method, so no plain-JVM test can call it. **A new `VpnConnectionState` must be added to `handleClick` by hand; only a reader will catch it.** Extracting the shared gate would close this properly.
+**How that reaches `handleClick`.** `handleClick` does **not** simply translate `decideTileClick`'s result — it applies the Stop gate itself for its no-IO fast path and returns early, reaching `decideTileClick` only on the start path. It used to re-state that gate **by hand**, and that hand-written copy is precisely the one that drifted and shipped a live-looking dead tile; a JVM test could not see it, and deleting `BLACKHOLED` from it left the whole suite green. It now calls `shouldStopOnTileClick` — the same function the tests sweep. `shouldStopOnTileClick` is deliberately a function of the **state alone**: taking a `profileId` or the permission flags would force the `ActiveProfileRepository` lookup on the one path that must not need it. `handleClick` is still a `TileService` method no plain-JVM test can call, but it no longer holds any rule of its own to drift.
 
 **Long-press intent-filter resolution** is covered by [`XrayVpnTileLongPressTest`](../../app/src/androidTest/java/com/justme/xtls_core_proxy/tile/XrayVpnTileLongPressTest.kt), an instrumented test that queries `PackageManager` for `android.service.quicksettings.action.QS_TILE_PREFERENCES` and asserts that exactly one activity in this package resolves it — `MainActivity`. Catches manifest regressions that would silently send long-press back to the system Settings page.
 

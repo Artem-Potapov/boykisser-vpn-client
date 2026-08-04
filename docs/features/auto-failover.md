@@ -582,8 +582,8 @@ session live?" and "what connect affordance does it offer?" are two different qu
 
 | Site | Rule |
 |---|---|
-| `tile/TileClickDecision.decideTileClick` | `BLACKHOLED` → `Stop` |
-| `tile/XrayVpnTileService.handleClick` | the same Stop gate, duplicated for the no-IO fast path |
+| `tile/TileClickDecision.decideTileClick` | `BLACKHOLED` → `Stop`, via `shouldStopOnTileClick` |
+| `tile/XrayVpnTileService.handleClick` | the same gate for its no-IO fast path — calls `shouldStopOnTileClick`, no longer a hand-written copy |
 | `tile/XrayVpnTileService` render | `BLACKHOLED` → `STATE_ACTIVE`, like `PAUSED` |
 | `state/connectAction` | `BLACKHOLED` → `RECONNECT` (**not** `UNAVAILABLE`) — see [Reconnect](#reconnect-the-affordance-a-give-up-actually-offers) |
 | `MainActivity.isActive` | `BLACKHOLED` is **active** — the row stays highlighted and its menu offers Disconnect, not a connect row |
@@ -1110,18 +1110,20 @@ is itself the argument for doing it.
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
 | `state/ReconnectFlowTest` (9) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process). |
-| `tile/TileClickDecisionTest` (16) | `BLACKHOLED` → `Stop`, with and without a profile; `everyLiveStateDecidesStop` pins the whole live set in one place; `everyStateIsClassifiedExplicitly` enumerates **the full enum**, so widening `VpnConnectionState` fails a test rather than silently falling through to `Start`. That last one is the grep sweep, automated — `XrayVpnTileService.handleClick`'s hand-written duplicate of this gate is still uncovered (see below). |
+| `tile/TileClickDecisionTest` (16) | `BLACKHOLED` → `Stop`, with and without a profile; `everyLiveStateDecidesStop` pins the whole live set in one place; `everyStateIsClassifiedExplicitly` enumerates **the full enum**, so widening `VpnConnectionState` fails a test rather than silently falling through to `Start`. That last one is the grep sweep, automated. Both guards assert against `shouldStopOnTileClick` as well as `decideTileClick`, so they now cover `XrayVpnTileService.handleClick`'s fast path too (see below). |
 | `MainActivityStateTest` (4) | `isActive` — every live state keeps the active row highlighted (incl. `BLACKHOLED`), dead states highlight nothing, another/`null` profile is never highlighted, and the same full-enum classification guard. `isActive` is `internal` (not `private`) purely so this test can reach it; it was **not** moved. |
 
-> **The one gate still without a test is `XrayVpnTileService.handleClick`.** It re-states
-> `decideTileClick`'s Stop chain by hand for its no-IO fast path, and it is an Android `TileService`
-> method, so no plain-JVM test can call it. `TileClickDecisionTest`'s full-enum guard fails loudly for
-> the *pure* copy, which is the closest available proxy — but it cannot see the duplicate. **A new
-> `VpnConnectionState` must be added to `handleClick` by hand, and only a reader will catch it.**
-> Extracting the shared gate would close this properly. It is a **behaviour-preserving refactor**, not
-> a behaviour change — it was left undone only because the task that added these tests was scoped to
-> prose plus one visibility change, so it is a clean candidate for the follow-up spec rather than
-> something to avoid.
+> **`XrayVpnTileService.handleClick` used to be the one gate without a test — that is now closed.**
+> It re-stated `decideTileClick`'s Stop chain by hand for its no-IO fast path, and being an Android
+> `TileService` method, no plain-JVM test could call it; `TileClickDecisionTest`'s full-enum guard
+> exercised only the *pure* copy and could not see the duplicate. Deleting `BLACKHOLED` from
+> `handleClick` left all 648 unit tests green, which is what the comment claiming otherwise was
+> hiding. The shared gate has since been extracted: `tile/TileClickDecision.shouldStopOnTileClick`
+> takes the **state alone** — deliberately not the `profileId` or the permission flags, so the fast
+> path still returns before any `ActiveProfileRepository` lookup — and both `decideTileClick` and
+> `handleClick` call it. `handleClick` is still unreachable from a plain-JVM test, but it no longer
+> holds a rule of its own to drift, and the whole-enum sweep now asserts directly against the
+> function it calls.
 
 **Instrumented tests** (`:app:connectedDebugAndroidTest`, local only — not in CI):
 

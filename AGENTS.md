@@ -460,8 +460,11 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   connectable"), which `state/ReconnectFlow` serves as a sequenced stop-then-start — a plain connect
   would hit "VPN already running". Widening that enum needs a **grep sweep**, not a green build: it is
   read by plain boolean chains the compiler cannot flag. Two JVM whole-enum guards now automate most of
-  that sweep (`TileClickDecisionTest` and `MainActivityStateTest`), but `XrayVpnTileService.handleClick`
-  hand-duplicates the tile Stop gate and **no plain-JVM test can call it** — update it by hand.
+  that sweep (`TileClickDecisionTest` and `MainActivityStateTest`). `XrayVpnTileService.handleClick`
+  no longer hand-duplicates the tile Stop gate — both it and `decideTileClick` call the shared
+  `tile/TileClickDecision.shouldStopOnTileClick` (state-only, so the fast path still needs no DB
+  lookup), which `TileClickDecisionTest` sweeps directly; the `TileService` method itself remains
+  out of reach of a plain-JVM test, but the whole of the rule it applies is now covered.
   See `docs/features/auto-failover.md`.
 - Xray-core writes a **raw, unredacted** error log to the app-private `filesDir/logs/xray-core.log`
   during a connection. Copy/Share/Export in the Logs screen read only the redacted, in-memory

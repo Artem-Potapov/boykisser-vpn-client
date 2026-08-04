@@ -308,9 +308,10 @@ present and work there too.
 
 ## Test 7 — The QS tile from `BLACKHOLED` ★
 
-**Why:** the tile renders `STATE_ACTIVE` for `BLACKHOLED`, and the Stop gate is duplicated in **two**
-places (`decideTileClick` and `handleClick`'s no-IO fast path). A mismatch would make the tile look
-live and be dead — strictly worse than looking dead.
+**Why:** the tile renders `STATE_ACTIVE` for `BLACKHOLED`, and the Stop gate is read from **two**
+call sites (`decideTileClick` and `handleClick`'s no-IO fast path). They now share one
+`shouldStopOnTileClick`, but the render is a separate `when`, so a mismatch between render and gate
+would still make the tile look live and be dead — strictly worse than looking dead.
 
 **Steps:**
 1. Add the app's tile to Quick Settings.

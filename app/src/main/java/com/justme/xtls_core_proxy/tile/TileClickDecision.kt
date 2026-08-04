@@ -32,22 +32,35 @@ internal sealed interface TileClickDecision {
     data class HandoffToMainActivity(val profileId: Long) : TileClickDecision
 }
 
+/**
+ * The tile's Stop gate: `true` for every state in which the SERVICE IS RUNNING, not just the pretty
+ * ones. `BLACKHOLED` still owns a TUN, so a Start dispatched from it would only reach `startVpn`'s
+ * "VPN already running" early return — the tile would render STATE_ACTIVE and do nothing.
+ *
+ * **Deliberately a function of [state] alone.** `XrayVpnTileService.handleClick` calls this directly
+ * for its no-IO fast path, *before* the `ActiveProfileRepository` lookup and the
+ * `VpnService.prepare` / `POST_NOTIFICATIONS` checks — taking a `profileId` or the permission flags
+ * here would force that lookup on the one path that must not need it. Keeping the gate parameterless
+ * beyond the state is what lets both call sites share one copy instead of hand-duplicating it, which
+ * is how a live-looking dead tile shipped once already.
+ *
+ * Note this is a boolean chain, not an exhaustive `when`: adding a `VpnConnectionState` constant
+ * still compiles and still falls through to `false`. `TileClickDecisionTest` sweeps the whole enum
+ * against this function to turn that into a test failure.
+ */
+internal fun shouldStopOnTileClick(state: VpnConnectionState): Boolean =
+    state == VpnConnectionState.CONNECTING ||
+        state == VpnConnectionState.CONNECTED ||
+        state == VpnConnectionState.PAUSED ||
+        state == VpnConnectionState.BLACKHOLED
+
 internal fun decideTileClick(
     state: VpnConnectionState,
     profileId: Long?,
     needsVpnConsent: Boolean,
     needsNotifPermission: Boolean,
 ): TileClickDecision {
-    // Every state in which the SERVICE IS RUNNING belongs here, not just the pretty ones.
-    // BLACKHOLED still owns a TUN, so a Start dispatched from it would only reach startVpn's
-    // "VPN already running" early return — the tile would render STATE_ACTIVE and do nothing.
-    if (state == VpnConnectionState.CONNECTING ||
-        state == VpnConnectionState.CONNECTED ||
-        state == VpnConnectionState.PAUSED ||
-        state == VpnConnectionState.BLACKHOLED
-    ) {
-        return TileClickDecision.Stop
-    }
+    if (shouldStopOnTileClick(state)) return TileClickDecision.Stop
     if (profileId == null) return TileClickDecision.NoProfileToast
     return if (needsVpnConsent || needsNotifPermission) {
         TileClickDecision.HandoffToMainActivity(profileId)

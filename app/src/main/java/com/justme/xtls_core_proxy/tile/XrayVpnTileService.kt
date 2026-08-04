@@ -59,13 +59,11 @@ class XrayVpnTileService : TileService() {
 
     private fun handleClick() {
         val state = LogRepository.connectionState.value
-        // Must mirror decideTileClick's Stop gate exactly — this is the same rule duplicated for
-        // the no-IO fast path, so BLACKHOLED (service running, TUN owned) belongs in both.
-        if (state == VpnConnectionState.CONNECTING ||
-            state == VpnConnectionState.CONNECTED ||
-            state == VpnConnectionState.PAUSED ||
-            state == VpnConnectionState.BLACKHOLED
-        ) {
+        // THE SAME function decideTileClick's Stop gate calls, not a copy of it: this fast path used
+        // to re-state the four live states by hand, and that duplicate drifted once and shipped a
+        // tile that rendered as an active Stop control and did nothing. Sharing the predicate is
+        // what puts this path under TileClickDecisionTest's whole-enum sweep.
+        if (shouldStopOnTileClick(state)) {
             // Stop path needs no IO; only the dispatch waits for unlock.
             runOrDeferUnlock { executeDecision(TileClickDecision.Stop) }
             return
