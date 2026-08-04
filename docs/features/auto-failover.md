@@ -59,12 +59,12 @@ never touched the proxy.
 
 Two halves close it, and they are one change:
 
-- **`ConfigBuilder` carves the probe host through the proxy** — `healthProbeCarveOutRule(proxyTag)`, a
-  `domain: full:cp.cloudflare.com → proxy` rule emitted in the same position as its `dohGuardRules`
-  sibling: right after the forced port-53 rule, **ahead of the LAN and ad-block rules** (a later
-  `geosite:category-ads-all → block` match would turn the probe into a permanent failure) and ahead of
-  the imported config's preserved rules. Like every rule this chokepoint emits, it only ever moves
-  traffic **toward** the proxy.
+- **`ConfigBuilder` carves the probe host through the proxy** — `healthProbeCarveOutRules(proxyTag)`,
+  **two** rules: `domain: full:cp.cloudflare.com → proxy` and `ip: <HEALTH_PROBE_IPS> → proxy`. Both are
+  emitted in the same position as their `dohGuardRules` sibling: right after the forced port-53 rule,
+  **ahead of the LAN and ad-block rules** (a later `geosite:category-ads-all → block` match would turn
+  the probe into a permanent failure) and ahead of the imported config's preserved rules. Like every
+  rule this chokepoint emits, they only ever move traffic **toward** the proxy.
 - **The target is a fixed constant**, `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, no longer
   `PingPreferences.targetUrl`. This is *forced by* the carve-out, not an extra: a static routing rule
   and a user-editable target cannot both be right. It also closes a second hazard — the Ping Test
@@ -88,15 +88,33 @@ for this one hostname**. That is a real exception to a user-visible setting, and
 the probe is the app's own diagnostic traffic, and a probe that bypasses the proxy answers the wrong
 question. It is one `full:` domain match, not a policy change.
 
-**Residual, stated rather than papered over.** The carve-out is a `domain` rule, and with a tun inbound
-the destination is an IP — nothing supplies a domain to match against unless the inbound sniffs one.
-`routingNeedsDomainRules` forces sniffing for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking, and the
-XRAY screen can force it too. In the one remaining combination — `PROXY_ALL`, ads off, user sniffing off
-— the rule is emitted but **inert**, so a preserved imported direct rule can still claim the probe
-there. Emitting it unconditionally does not fix that case; what it buys is that the rule is already in
-place the moment sniffing turns on, with no second condition to keep in sync. The only thing that would
-close the residual outright is forcing sniffing whenever routing applies, which would override the
-user's own XRAY preference for every configuration — deliberately not done.
+**Why the carve-out is two rules.** A `domain` rule matches only while sniffing is on: with a tun
+inbound the destination is an IP, and nothing supplies a domain to match against unless the inbound
+sniffs one. `routingNeedsDomainRules` forces sniffing for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and
+ad-blocking, and the XRAY screen can force it too — but in the **default posture** (`PROXY_ALL`, ads
+off, user sniffing off) nothing does, and there the `domain` rule was emitted but **inert**: a preserved
+imported direct rule claimed the probe, the 204 came back with the proxy dead, and every surface read
+healthy. The `ip` rule over `ConfigBuilder.HEALTH_PROBE_IPS` closes exactly that case — it matches
+`Outbound.Target`, which a tun inbound always populates, so it needs no sniffing anywhere.
+(`applyCoreSettings` only ever writes `routeOnly: true` sniffing, which leaves `Outbound.Target` an IP,
+so the two rules coexist rather than displacing each other.)
+
+`HEALTH_PROBE_IPS` lists **both address families** — with XRAY IPv6 on the in-tunnel resolver may return
+the AAAA, and with it off `queryStrategy=UseIPv4` forces the A. The v6 entries are the v4 ones embedded
+in Cloudflare's `2606:4700::/32` anycast prefix (`0x6810` = `104.16`), i.e. the same two endpoints.
+
+**Residual, stated rather than papered over: an address change *and* sniffing off.** The addresses are
+an optimisation, never a dependency — `HEALTH_PROBE_TARGET_URL` stays a **hostname** URL precisely so
+that a stale list degrades to the old `domain`-only behaviour instead of breaking the probe. (Making the
+URL an IP literal would invert that: Cloudflare answers a bare-IP request with **403**, so an address
+change would break every user's probe at once and manufacture a rotation storm.) Refreshing
+`HEALTH_PROBE_IPS` is the fix. Two things that are **not**: forcing sniffing whenever routing applies —
+sniffing is a global switch on the single tun inbound with no per-rule scoping, so it would also
+activate the pasted config's own `domain` rules, sending thousands of destinations direct from the
+user's real IP while the Routing screen still reads "Proxy everything" (that approach was built,
+analysed and abandoned) — and a broad Cloudflare CIDR, which would survive address rotation but route a
+large share of the web through the proxy and override the user's country-direct policy far beyond one
+diagnostic hostname.
 
 `ConfigSanitizer` deliberately does **not** get a new finding for it. It reports user-selected policy
 plus the enforcements a pasted config could otherwise have overridden; the carve-out is an always-on

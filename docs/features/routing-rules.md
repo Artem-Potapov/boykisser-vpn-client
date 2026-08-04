@@ -49,11 +49,13 @@ The DoH guard keeps the effective resolver on the proxy side despite the mode's 
 covers resolver IPs, resolver hostnames, and `dns.hosts` pinned IPs. Redirecting `freedom` outbounds
 are not reused as the direct helper.
 
-The health-probe carve-out is its structural twin: `domain: full:<ConfigBuilder.HEALTH_PROBE_HOST> →
-proxy`, so auto-failover's watchdog measures the **proxy** rather than whatever else would have carried
+The health-probe carve-out is its structural twin, and it is **two** rules —
+`domain: full:<ConfigBuilder.HEALTH_PROBE_HOST> → proxy` and `ip: <ConfigBuilder.HEALTH_PROBE_IPS> →
+proxy` — so auto-failover's watchdog measures the **proxy** rather than whatever else would have carried
 the probe. Without it the probe returned 204 with the proxy dead, so failover could never rotate. Both
 rules sit ahead of the LAN and ads rules on purpose — an ads → blackhole match would turn the probe
-into a permanent failure.
+into a permanent failure — and ahead of the preserved config rules, because Xray's router is
+first-match.
 
 Unlike the DoH guard, the carve-out is emitted in **every** mode. `BLOCKED_ONLY`'s direct catch-all is
 only one of three ways the probe can go direct: `EXCEPT_COUNTRY` emits country **direct** rules
@@ -63,9 +65,23 @@ the user's country-direct policy for that one hostname** — the probe is the ap
 and is meaningless unless it traverses the proxy. It only ever moves traffic toward the proxy, so it
 costs nothing where it is not needed.
 
-One residual, stated rather than papered over: it is a `domain` rule, so it matches only while sniffing
-is on. `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking all force sniffing; `PROXY_ALL` with ads off and
-the user's XRAY sniffing toggle off does not, and there the rule is emitted but **inert**. See
+**Why two rules.** The `domain` rule matches only while sniffing is on: with a tun inbound the
+destination is an IP, and nothing supplies a domain unless the inbound sniffs one. `BLOCKED_ONLY`,
+`EXCEPT_COUNTRY` and ad-blocking all force sniffing; `PROXY_ALL` with ads off and the user's XRAY
+sniffing toggle off does not, and there the `domain` rule was emitted but **inert** — a preserved
+imported direct rule claimed the probe and the watchdog read healthy with the proxy dead. The `ip` rule
+closes that: it matches `Outbound.Target`, which a tun inbound always populates, so it needs no
+sniffing in any posture. (`applyCoreSettings` only ever writes `routeOnly: true` sniffing, which leaves
+`Outbound.Target` an IP, so the two coexist.)
+
+The `domain` rule stays because it is the half that survives an address change: the probe URL is a
+**hostname**, so DNS follows the host wherever Cloudflare moves it. The remaining residual is therefore
+an address change *and* sniffing off, which degrades to the old `domain`-only behaviour rather than
+breaking anything. Refresh `HEALTH_PROBE_IPS` to close it. Two things that look like fixes and are not:
+forcing sniffing (a global inbound switch with no per-rule scoping — it would also activate the pasted
+config's own `domain` rules and send real traffic direct from the user's IP; built, analysed, and
+abandoned) and a broad Cloudflare CIDR (routes a large share of the web through the proxy and overrides
+the user's country-direct policy far beyond one diagnostic hostname). See
 [`auto-failover.md`](auto-failover.md).
 
 Domain and geosite rules require sniffing. `routingNeedsDomainRules` therefore forces the final core
@@ -88,9 +104,11 @@ core has no geo-asset directory.
 `RoutingSettingsTest` covers list tables, required-file derivation, blocked support, sniffing
 requirements, and availability fallback. `RoutingPreferencesTest` covers persisted sanitization.
 `ConfigBuilderRoutingTest` covers rule order, LAN ownership, supported/unsupported `BLOCKED_ONLY`,
-DoH guards (including pinned and bracketed-IPv6 resolvers), the health-probe carve-out (presence in
-every mode, proxy direction, and position ahead of every rule that could divert it), the
-unsupported-country degrade emitting the `PROXY_ALL` rule set, helper-outbound safety, and probe
+DoH guards (including pinned and bracketed-IPv6 resolvers), both halves of the health-probe carve-out
+(presence in every mode, proxy direction, both address families, survival of the ping config's geo
+stripping, and position ahead of every rule that could divert it — including the imported config's own
+direct rules, which its fixture now actually carries), the default posture matching without sniffing,
+the unsupported-country degrade emitting the `PROXY_ALL` rule set, helper-outbound safety, and probe
 stripping.
 
 On-device, exercise each buildable mode with the corresponding geo assets, verify LAN/ad toggles, and

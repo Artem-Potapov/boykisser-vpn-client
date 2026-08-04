@@ -438,15 +438,23 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   into a clear-network measurement that never fires.
 - **The health probe's validity has a second, independent dependency: routing.** Reaching the tun is
   not enough — the probe must also be *routed to the proxy* once inside it, or it measures the clear
-  network from one layer down. `ConfigBuilder.applyRouting` therefore emits a `domain:
-  full:<HEALTH_PROBE_HOST> → proxy` carve-out in **every** mode (structural twin of the `BLOCKED_ONLY`
-  DoH guard, and placed beside it, ahead of the LAN/ads rules). Three separate things would otherwise
+  network from one layer down. `ConfigBuilder.applyRouting` therefore emits **two** carve-out rules in
+  **every** mode — `domain: full:<HEALTH_PROBE_HOST> → proxy` and `ip: <HEALTH_PROBE_IPS> → proxy`
+  (structural twin of the `BLOCKED_ONLY` DoH guard, and placed beside it, ahead of the LAN/ads rules
+  and ahead of the pasted config's preserved rules). Three separate things would otherwise
   claim the probe: `BLOCKED_ONLY`'s direct catch-all, `EXCEPT_COUNTRY`'s country direct rules
   (`geoip:ru` can match a Cloudflare anycast address), and a direct rule in the pasted config, which
   is preserved in all modes. This is why the probe target is the fixed `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
   and **not** the user-editable Ping Test target: a static routing rule cannot track an editable value.
-  Known residual, deliberately not closed: it is a `domain` rule, so it is inert under `PROXY_ALL` with
-  ads off and the user's XRAY sniffing toggle off. See `docs/features/routing-rules.md`.
+  **The two rules are alternatives, not a pair** — the `domain` rule needs sniffing, which nothing
+  forces under `PROXY_ALL` + ads off + the XRAY sniffing toggle off; the `ip` rule matches
+  `Outbound.Target` and so covers that default posture with no sniffing. They must stay together:
+  `HEALTH_PROBE_TARGET_URL` remains a **hostname** URL (a bare-IP request gets 403 from Cloudflare, not
+  204), so if the addresses go stale the `ip` rule merely stops matching and behaviour degrades to the
+  `domain`-only status quo instead of breaking the probe. Residual: an address change *and* sniffing
+  off. Refreshing `HEALTH_PROBE_IPS` is the fix — forcing sniffing is **not** (it would activate the
+  pasted config's own `domain` rules and leak real traffic; built, analysed and abandoned), and neither
+  is a broad Cloudflare CIDR. See `docs/features/routing-rules.md`.
 - Auto-failover never releases traffic to the clear network on purpose: **each rotation is bridged by
   an unread TUN** (so a switch stalls apps rather than leaking them), and exhausting the pool
   re-establishes — or adopts that bridge as — a **blackhole TUN** (unread fd, DNS aimed into it, same

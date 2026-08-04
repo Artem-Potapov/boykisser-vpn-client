@@ -20,11 +20,45 @@ class ConfigBuilderRoutingTest {
         "users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}}]}
     """.trimIndent()
 
+    // A pasted panel config carrying its own direct rules — the shape `applyRouting` preserves into
+    // `passthrough`. BOTH forms are present because both can claim the probe and they are the
+    // conventional paired output of panel generators: the ip-list rule matches with sniffing off,
+    // the domain-list rule with it on. `104.16.0.0/13` covers every ConfigBuilder.HEALTH_PROBE_IPS
+    // v4 entry and `domain:cloudflare.com` covers the probe host, so this fixture genuinely
+    // competes for the probe instead of merely occupying a slot in the rule array.
+    private val vlessWithImportedDirectRules = """
+        {"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,
+        "users":[{"id":"u"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+        {"tag":"direct","protocol":"freedom"}],
+        "routing":{"rules":[
+        {"type":"field","ip":["104.16.0.0/13"],"outboundTag":"direct"},
+        {"type":"field","domain":["domain:cloudflare.com"],"outboundTag":"direct"}]}}
+    """.trimIndent()
+
     private fun rules(config: String) = JSONObject(config).getJSONObject("routing").getJSONArray("rules")
     private fun ruleItems(config: String): List<String> {
         val r = rules(config); val out = mutableListOf<String>()
         for (i in 0 until r.length()) out += r.getJSONObject(i).toString()
         return out
+    }
+
+    /** Index of the `domain: full:<probe host> -> proxy` half of the carve-out, or -1. */
+    private fun domainCarveOutIndex(items: List<String>) = items.indexOfFirst {
+        val o = JSONObject(it)
+        o.optString("outboundTag") == "proxy" &&
+            o.optJSONArray("domain")?.toString()?.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") == true
+    }
+
+    /** Index of the `ip: <probe addresses> -> proxy` half of the carve-out, or -1. */
+    private fun ipCarveOutIndex(items: List<String>) = items.indexOfFirst {
+        val o = JSONObject(it)
+        o.optString("outboundTag") == "proxy" &&
+            o.optJSONArray("ip")?.toString()?.contains(ConfigBuilder.HEALTH_PROBE_IPS.first()) == true
+    }
+
+    /** Index of the imported config's own ip-list direct rule, or -1. */
+    private fun importedDirectIndex(items: List<String>) = items.indexOfFirst {
+        JSONObject(it).optString("outboundTag") == "direct" && it.contains("104.16.0.0/13")
     }
 
     @Test fun null_routing_is_passthrough() {
@@ -96,17 +130,17 @@ class ConfigBuilderRoutingTest {
     // caused. The rule only ever moves traffic TOWARD the proxy, so it is safe everywhere.
     @Test fun the_health_probe_carve_out_is_emitted_in_every_mode() {
         for (mode in RoutingMode.entries) {
+            // M-J — the fixture must actually carry imported rules. The "precedes every non-proxy
+            // rule" property is about `passthrough`, and the old no-rules fixture never exercised
+            // it: deleting the passthrough loop entirely would have left this test green.
             val out = ConfigBuilder.buildRuntimeConfig(
-                vless,
+                vlessWithImportedDirectRules,
                 tuning = TuningSettings(
                     routing = RoutingSettings(mode, RoutingCountry.RU, bypassLan = true, blockAds = true)
                 )
             )
             val items = ruleItems(out)
-            val carveOutIndex = items.indexOfFirst {
-                JSONObject(it).optJSONArray("domain")?.toString()
-                    ?.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") == true
-            }
+            val carveOutIndex = domainCarveOutIndex(items)
             assertTrue("$mode must carve the health-probe host to the proxy; rules=$items", carveOutIndex >= 0)
             assertEquals(
                 "$mode: the carve-out must move traffic TOWARD the proxy, never away from it",
@@ -126,6 +160,121 @@ class ConfigBuilderRoutingTest {
                 "$mode: carve-out must precede every non-proxy rule; rules=$items",
                 firstDivertIndex < 0 || carveOutIndex < firstDivertIndex
             )
+            // Named separately from firstDivertIndex, which the LAN rule satisfies on its own: this
+            // is the passthrough property, and it is the one the fixture exists for.
+            val importedIndex = importedDirectIndex(items)
+            assertTrue(
+                "$mode: the imported config's direct rules must survive into passthrough; rules=$items",
+                importedIndex >= 0
+            )
+            assertTrue(
+                "$mode: carve-out must precede the imported config's own direct rules; rules=$items",
+                carveOutIndex < importedIndex
+            )
+        }
+    }
+
+    // I-D — the `domain` half only matches while the tun inbound sniffs a domain, and the default
+    // posture (PROXY_ALL + ads off + user sniffing off) forces no sniffing. An `ip` rule matches
+    // against Outbound.Target, which a tun inbound always populates, so it needs no sniffing in any
+    // mode. It is emitted ALONGSIDE the domain rule, never instead of it: the hostname target and
+    // the domain rule are what survive a Cloudflare address change, so a stale address list
+    // degrades to exactly the pre-fix behaviour instead of breaking the probe.
+    @Test fun the_health_probe_ip_carve_out_is_emitted_in_every_mode() {
+        for (mode in RoutingMode.entries) {
+            val out = ConfigBuilder.buildRuntimeConfig(
+                vlessWithImportedDirectRules,
+                tuning = TuningSettings(
+                    routing = RoutingSettings(mode, RoutingCountry.RU, bypassLan = true, blockAds = true)
+                )
+            )
+            val items = ruleItems(out)
+            val ipIndex = ipCarveOutIndex(items)
+            assertTrue("$mode must carve the health-probe ADDRESSES to the proxy; rules=$items", ipIndex >= 0)
+            assertEquals(
+                "$mode: the ip carve-out must move traffic TOWARD the proxy, never away from it",
+                "proxy",
+                JSONObject(items[ipIndex]).getString("outboundTag")
+            )
+            // Additive, not a replacement — both halves must be present in every mode.
+            assertTrue(
+                "$mode must keep the domain half of the carve-out too; rules=$items",
+                domainCarveOutIndex(items) >= 0
+            )
+            val firstDivertIndex = items.indexOfFirst {
+                JSONObject(it).optString("outboundTag") !in setOf("dns-out", "proxy")
+            }
+            assertTrue(
+                "$mode: ip carve-out must precede every non-proxy rule; rules=$items",
+                firstDivertIndex < 0 || ipIndex < firstDivertIndex
+            )
+            assertTrue(
+                "$mode: ip carve-out must precede the imported config's own direct rules; rules=$items",
+                ipIndex < importedDirectIndex(items)
+            )
+        }
+    }
+
+    // Both families, because either can carry the probe: with XRAY IPv6 on the in-tunnel resolver
+    // may hand back the AAAA, and with it off queryStrategy=UseIPv4 forces the A. A one-family list
+    // would leave the residual open for exactly half the users.
+    @Test fun the_health_probe_ip_carve_out_covers_both_address_families() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vless, tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT)
+        )
+        val items = ruleItems(out)
+        val ipIndex = ipCarveOutIndex(items)
+        assertTrue("the ip carve-out must be emitted; rules=$items", ipIndex >= 0)
+        val emitted = JSONObject(items[ipIndex]).getJSONArray("ip").let { arr ->
+            (0 until arr.length()).map { arr.getString(it) }
+        }
+        assertEquals(
+            "the ip carve-out must emit exactly HEALTH_PROBE_IPS; emitted=$emitted",
+            ConfigBuilder.HEALTH_PROBE_IPS,
+            emitted
+        )
+        assertTrue("HEALTH_PROBE_IPS must contain an IPv4 address; $emitted", emitted.any { !it.contains(':') })
+        assertTrue("HEALTH_PROBE_IPS must contain an IPv6 address; $emitted", emitted.any { it.contains(':') })
+    }
+
+    // The point of the whole change: in the DEFAULT posture the carve-out used to be emitted but
+    // inert, so a preserved imported direct rule claimed the probe and the watchdog read healthy
+    // with the proxy dead. Pin both halves of that: no sniffing is forced here, AND a carve-out that
+    // does not need sniffing precedes the imported direct rules.
+    @Test fun the_default_posture_carve_out_can_match_without_sniffing() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            vlessWithImportedDirectRules,
+            tuning = TuningSettings(
+                routing = RoutingSettings(RoutingMode.PROXY_ALL, RoutingCountry.RU, bypassLan = true, blockAds = false)
+            )
+        )
+        assertFalse(
+            "fixture check: the default posture must not force sniffing, or this test proves nothing",
+            JSONObject(out).getJSONArray("inbounds").getJSONObject(0).has("sniffing")
+        )
+        val items = ruleItems(out)
+        val ipIndex = ipCarveOutIndex(items)
+        val importedIndex = importedDirectIndex(items)
+        assertTrue("the default posture needs a sniffing-free carve-out; rules=$items", ipIndex >= 0)
+        assertTrue("fixture check: the imported direct rule must be preserved; rules=$items", importedIndex >= 0)
+        assertTrue(
+            "the sniffing-free carve-out must win over the imported direct rule; rules=$items",
+            ipIndex < importedIndex
+        )
+    }
+
+    // toPingTestConfig strips geoip:/geosite:/ext: rules because the throwaway probe core has no geo
+    // assets. Plain literals and CIDRs are NOT stripped — pin that, because emitting the carve-out
+    // as a geo reference would silently drop it from the ping config and break the probe build.
+    @Test fun the_health_probe_ip_carve_out_survives_ping_config_geo_stripping() {
+        val runtime = ConfigBuilder.buildRuntimeConfig(
+            vless, tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT)
+        )
+        val ping = ConfigBuilder.toPingTestConfig(runtime)
+        val pingRules = JSONObject(ping).getJSONObject("routing").getJSONArray("rules").toString()
+        assertFalse("the ping config must stay geo-free; rules=$pingRules", pingRules.contains("geoip:"))
+        ConfigBuilder.HEALTH_PROBE_IPS.forEach {
+            assertTrue("the ip carve-out must survive geo stripping ($it); rules=$pingRules", pingRules.contains(it))
         }
     }
 
@@ -143,13 +292,17 @@ class ConfigBuilderRoutingTest {
         val items = ruleItems(out)
         val proxyRules = items.filter { JSONObject(it).optString("outboundTag") == "proxy" }
         assertEquals(
-            "the degraded mode must emit exactly one proxy rule — the carve-out, and no DoH guard; rules=$items",
-            1,
+            "the degraded mode must emit exactly the two carve-out halves and no DoH guard; rules=$items",
+            2,
             proxyRules.size
         )
         assertTrue(
-            "that one proxy rule must be the health-probe carve-out; rules=$items",
-            proxyRules.single().contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}")
+            "one proxy rule must be the domain half of the health-probe carve-out; rules=$items",
+            proxyRules.any { it.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") }
+        )
+        assertTrue(
+            "the other must be the ip half of the health-probe carve-out; rules=$items",
+            proxyRules.any { it.contains(ConfigBuilder.HEALTH_PROBE_IPS.first()) }
         )
         val last = JSONObject(items.last())
         assertFalse(

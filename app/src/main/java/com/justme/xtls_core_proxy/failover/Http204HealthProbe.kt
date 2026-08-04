@@ -17,10 +17,16 @@ import java.net.URL
  * GET to `freedom` on a `protect()`'d socket, returning 204 with the proxy completely dead:
  * `BLOCKED_ONLY`'s `network: tcp,udp -> direct` catch-all, `EXCEPT_COUNTRY`'s country direct rules,
  * and any direct rule the imported config carries. `ConfigBuilder` therefore carves
- * `ConfigBuilder.HEALTH_PROBE_HOST` through the proxy in **every** mode (see
- * `ConfigBuilder.healthProbeCarveOutRule`, which also records the sniffing residual), and the target
- * is that fixed constant rather than the user-editable Ping Test URL, because a static rule and an
+ * `ConfigBuilder.HEALTH_PROBE_HOST` through the proxy in **every** mode, as a `domain` rule AND an
+ * `ip` rule over `ConfigBuilder.HEALTH_PROBE_IPS` (see `ConfigBuilder.healthProbeCarveOutRules`).
+ * The `ip` half is what makes the carve-out effective with sniffing off — i.e. in the default
+ * `PROXY_ALL` + ads-off posture, where the `domain` rule alone was emitted but inert. The target is
+ * that fixed constant rather than the user-editable Ping Test URL, because a static rule and an
  * editable target cannot both be right. Any replacement probe must keep both halves.
+ *
+ * **The URL must stay a hostname.** The `ip` rule is an optimisation over a stale-able address list;
+ * the hostname is what keeps the probe correct when Cloudflare moves the host. An IP-literal URL
+ * would also 403 rather than 204, because Cloudflare requires the matching `Host` header.
  *
  * Deliberately NOT XrayBridge.measureLatency: that builds a throwaway instance whose sockets are
  * protect()'d OUT of the tun, so it answers "can this config reach that server", not "is the live

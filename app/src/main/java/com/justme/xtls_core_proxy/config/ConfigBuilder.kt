@@ -159,7 +159,7 @@ object ConfigBuilder {
      * FIXED, and deliberately NOT the user-editable Ping Test target. Two reasons, both hard:
      *
      * 1. **It is half of a routing rule.** `applyRouting` carves this exact host through the proxy
-     *    in every mode (see [healthProbeCarveOutRule]). A static rule and a user-editable target
+     *    in every mode (see [healthProbeCarveOutRules]). A static rule and a user-editable target
      *    cannot both be right — edit the target and the carve-out stops covering it, which silently
      *    restores the bypass this constant exists to close.
      * 2. **The Ping Test target is validated only as a URL prefix**, not as a 204 endpoint. A user
@@ -171,6 +171,34 @@ object ConfigBuilder {
      */
     const val HEALTH_PROBE_HOST = "cp.cloudflare.com"
     const val HEALTH_PROBE_TARGET_URL = "http://$HEALTH_PROBE_HOST/generate_204"
+
+    /**
+     * [HEALTH_PROBE_HOST]'s current anycast addresses — the `ip` half of the carve-out (see
+     * [healthProbeCarveOutRules]). Kept here, beside the host and the URL, so the three cannot drift.
+     *
+     * **Both families are listed because either can carry the probe.** With the XRAY IPv6 toggle on,
+     * the in-tunnel resolver may hand back the AAAA; with it off, `applyCoreSettings` forces
+     * `queryStrategy=UseIPv4` and only the A can be returned. A single-family list would leave the
+     * residual open for half the configurations.
+     *
+     * **The v6 entries are the v4 ones embedded in Cloudflare's `2606:4700::/32` anycast prefix** —
+     * `0x6810` = `104.16`, `0x84e5` = `132.229`, `0x85e5` = `133.229` — i.e. the same two endpoints
+     * reached over the other family, not extra hosts.
+     *
+     * **These addresses are an optimisation, never a dependency.** [HEALTH_PROBE_TARGET_URL] stays a
+     * **hostname** URL precisely so that they can go stale safely: DNS still finds the host, the
+     * `domain` half still carves it out wherever sniffing is on, and this list simply stops matching
+     * — degrading to the pre-`ip`-rule behaviour rather than breaking the probe. Making the URL an IP
+     * literal would invert that: Cloudflare answers a bare-IP request with **403**, not 204 (it needs
+     * the right `Host` header), so an address change would break the probe for every user at once and
+     * manufacture a rotation storm. Do not "simplify" it that way.
+     */
+    val HEALTH_PROBE_IPS = listOf(
+        "104.16.132.229",
+        "104.16.133.229",
+        "2606:4700::6810:84e5",
+        "2606:4700::6810:85e5",
+    )
 
     const val CLOUDFLARE_DOH = "https://1.1.1.1/dns-query"
     const val CLOUDFLARE_DOH_SECONDARY = "https://1.0.0.1/dns-query"
@@ -508,8 +536,8 @@ object ConfigBuilder {
     /**
      * Global routing overlay. null → no-op (probes). Owns the geoip:private LAN rule (strips the baked
      * one, re-injects per toggle). Injected order, spliced after the forced port-53 rule:
-     * DoH-guard(mode3) · health-probe carve-out(all modes) · LAN · ads · mode rules · config's own rules ·
-     * catch-all direct(mode3, last).
+     * DoH-guard(mode3) · health-probe carve-outs, domain + ip (all modes) · LAN · ads · mode rules ·
+     * config's own rules · catch-all direct(mode3, last).
      * applyCoreSettings later inserts the IPv6 ::/0-block at index 1. Ensures direct/block outbounds and
      * a proxy tag exist before referencing them.
      */
@@ -544,7 +572,7 @@ object ConfigBuilder {
         val out = JSONArray()
         if (port53 != null) out.put(port53)
         if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
-        out.put(healthProbeCarveOutRule(proxyTag))
+        healthProbeCarveOutRules(proxyTag).forEach { out.put(it) }
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
         when (effectiveMode) {
@@ -634,9 +662,17 @@ object ConfigBuilder {
      * Health-probe carve-out: route [HEALTH_PROBE_HOST] to the proxy so auto-failover's watchdog
      * measures the **proxy**, not merely the tunnel.
      *
-     * Emitted in **every** mode, in the same position as its [dohGuardRules] sibling — right after
-     * the forced port-53 rule, ahead of the LAN, ad-block and country rules and ahead of the
-     * imported config's own preserved rules.
+     * **Two rules, one carve-out** — a `domain: full:<host>` rule and an `ip` rule over
+     * [HEALTH_PROBE_IPS]. They are alternatives, not a pair that must both hold: whichever one
+     * matches sends the probe to the proxy, and either matching is enough. See "Coverage" below for
+     * why neither alone is sufficient.
+     *
+     * Both are emitted in **every** mode, in the same position as their [dohGuardRules] sibling —
+     * right after the forced port-53 rule, ahead of the LAN, ad-block and country rules and ahead of
+     * the imported config's own preserved rules. That position is the whole point: Xray's router is
+     * first-match, so a carve-out placed after `passthrough` would lose to the imported direct rule
+     * it exists to beat, and one placed after the ads rule would be shadowed by a
+     * `geosite:category-ads-all -> block` match, turning the probe into a permanent failure.
      *
      * **What can route the probe away from the proxy.** Three things, and only the first is
      * `BLOCKED_ONLY`-specific:
@@ -659,22 +695,44 @@ object ConfigBuilder {
      * app's own diagnostic traffic and is meaningless unless it traverses the proxy, so this rule
      * wins. That is a real exception to a user-visible setting, not a side effect.
      *
-     * **Direction.** Like every rule this chokepoint emits, it may only move traffic TOWARD the
-     * proxy — which is why emitting it everywhere costs no safety.
+     * **Direction.** Like every rule this chokepoint emits, both may only move traffic TOWARD the
+     * proxy — which is why emitting them everywhere costs no safety. That also bounds the blast
+     * radius of a stale [HEALTH_PROBE_IPS]: if Cloudflare reassigns those addresses, the worst case
+     * is that someone else's traffic takes the proxy instead of going direct.
      *
-     * **Residual: it is a `domain` rule, so it only matches while sniffing is on.** With a tun
-     * inbound the destination is an IP, and nothing supplies a domain to match unless the inbound
-     * sniffs one. Sniffing is forced for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking
-     * (`routingNeedsDomainRules`), and the user can turn it on from the XRAY screen. In the one
-     * remaining case — `PROXY_ALL`, ads off, user sniffing off — the rule is **inert**: it is
-     * emitted but cannot match, so a preserved imported direct rule can still claim the probe
-     * there. Emitting it unconditionally does not fix that case; it makes the rule already present
-     * the moment sniffing turns on, with no second condition to keep in sync. Closing the residual
-     * outright would mean forcing sniffing whenever routing applies, which overrides the user's own
-     * XRAY preference for every configuration — not done here.
+     * **Coverage — why two rules.**
+     *  - The `domain` rule only matches while sniffing is on. With a tun inbound the destination is
+     *    an IP, and nothing supplies a domain to match unless the inbound sniffs one. Sniffing is
+     *    forced for `BLOCKED_ONLY`, `EXCEPT_COUNTRY` and ad-blocking (`routingNeedsDomainRules`),
+     *    and the user can turn it on from the XRAY screen — but in the **default posture**
+     *    (`PROXY_ALL`, ads off, user sniffing off) nothing forces it, and there the rule was emitted
+     *    but **inert**: a preserved imported direct rule claimed the probe, the 204 came back with
+     *    the proxy dead, and every surface read healthy.
+     *  - The `ip` rule closes exactly that case. It matches `Outbound.Target`, which a tun inbound
+     *    always populates with the destination address, so it needs no sniffing in any posture.
+     *    (`applyCoreSettings` only ever writes `routeOnly: true` sniffing, which leaves
+     *    `Outbound.Target` an IP, so the two rules coexist rather than displacing each other.)
+     *  - The `domain` rule is kept because it is the half that survives a Cloudflare address change:
+     *    [HEALTH_PROBE_TARGET_URL] is a hostname, so DNS follows the host wherever it moves.
+     *
+     * **Residual: an address change *and* sniffing off.** If Cloudflare moves the host and
+     * [HEALTH_PROBE_IPS] is not updated, the `ip` rule stops matching and the default posture falls
+     * back to the pre-`ip`-rule behaviour: never worse than it was, and failing the same silent way
+     * (the probe still reaches the host, just possibly direct). Refreshing the list is the fix; a
+     * broad Cloudflare CIDR is **not**, because it would route a large share of the web through the
+     * proxy and override the user's country-direct policy far beyond one diagnostic hostname.
+     * Forcing sniffing is likewise **not** the fix: sniffing is a global switch on the single tun
+     * inbound with no per-rule scoping, so enabling it for this rule necessarily activates the
+     * imported config's own `domain` rules — under `PROXY_ALL` an inert
+     * `domain: geosite:category-ru -> direct` would go live and send thousands of destinations to
+     * the clear network from the user's real IP while the Routing screen still reads "Proxy
+     * everything". That trade is leak-for-leak in the wrong direction; it was built, analysed and
+     * abandoned. Do not reintroduce it.
      */
-    private fun healthProbeCarveOutRule(proxyTag: String): JSONObject =
-        fieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag)
+    private fun healthProbeCarveOutRules(proxyTag: String): List<JSONObject> = listOf(
+        fieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag),
+        fieldRule("ip", HEALTH_PROBE_IPS, proxyTag),
+    )
 
     /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
     private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {
