@@ -262,6 +262,58 @@ class TunnelHealthMonitorTest {
         )
     }
 
+    @Test
+    fun theHealthyListenerIsInvokedEvenWhenTheLoopWasAlreadyCancelled() {
+        // The recovery twin of the test above, pinning the SAME rule on the other listener. Its
+        // absence was the gap: the unhealthy path was pinned, the healthy path was not, so
+        // restoring an isActive gate around the recovery invocation — the natural-looking "fix" —
+        // left the whole suite green.
+        //
+        // The swallow is WORSE here than on the unhealthy path, because it is permanent rather than
+        // per-session-terminal. reportedHealthy is latched to true immediately BEFORE the
+        // invocation, and pausePolling() preserves it, so a gated call is not retried by the
+        // relaunched loop or by any later tick: clearGiveUpStateOnRecovery never runs again for the
+        // session, and the user is left staring at BLACKHOLED over a tunnel that demonstrably works.
+        //
+        // Same staging as the unhealthy twin, for the same reason: `job.getAndSet(null)` clears only
+        // the REFERENCE, so a test that merely reaches a healthy probe leaves isActive true and
+        // cannot fail for this regression. Cancelling from INSIDE the probe cancels the poll
+        // coroutine for real, and there is no suspension point between the probe returning and
+        // h.invoke(), so cancellation never throws and the loop runs on with isActive ALREADY false.
+        //
+        // MUTATION-VERIFIED: wrapping the healthy listener call in
+        // `if (currentCoroutineContext().isActive)` makes this fail with recovered == 0.
+        // Do not add such a gate.
+        //
+        // No threshold override, unlike the unhealthy twin: recovery fires on the FIRST successful
+        // probe, so there is no counter to reach.
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val recovered = AtomicInteger(0)
+            lateinit var started: TunnelHealthMonitor
+            val cancellingProbe = object : HealthProbe {
+                var calls = 0
+                override suspend fun isHealthy(): Boolean {
+                    calls++
+                    started.pausePolling()   // cancels THIS coroutine, mid-tick
+                    return true
+                }
+            }
+            started = monitor(cancellingProbe, FakeAvailability(), dispatcher)
+
+            started.start(onHealthy = { recovered.incrementAndGet() }) { }
+            runCurrent()
+            started.stop()
+
+            assertEquals("the probe must have run exactly once", 1, cancellingProbe.calls)
+            assertEquals(
+                "the first healthy probe must report recovery even on a cancelled loop",
+                1,
+                recovered.get(),
+            )
+        }
+    }
+
     // NOTE for the six tests below: they call m.stop() BEFORE asserting. A monitor that never
     // reaches its threshold polls forever, and runTest only returns once the scheduler is idle — so
     // an assertion that throws before stop() strands the loop and HANGS the whole test task rather
