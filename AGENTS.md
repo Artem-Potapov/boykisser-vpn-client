@@ -283,11 +283,17 @@ process-scoped `AutoPingLatch` (an `object` whose atomic consumed bit re-arms on
 `DEFAULT`, so an observer-only wiring would leave failover silently dead on every process-fresh connect
 path — process death, always-on restart, a first-launch tile connect) and then observes
 `FailoverPreferences.state` for the session. While `CONNECTED`, a `TunnelHealthMonitor` probes the
-**live tunnel** (a plain-Kotlin **HTTPS** 204 through the tun — `https://` is load-bearing: this path
-uses `HttpURLConnection`, which `NetworkSecurityPolicy` governs, and at `targetSdk = 36` with no
-`usesCleartextTraffic`/`networkSecurityConfig` a cleartext target fails **every** probe, which the
-watchdog answers with a rotation storm over healthy servers. Does NOT apply to the Ping Test target,
-which is `http://` by design because the Go bridge dials it — *not* `MeasureLatency`, whose throwaway
+**live tunnel** (a plain-Kotlin **cleartext** HTTP 204 through the tun, which is only legal because
+`res/xml/network_security_config.xml` carves out `HEALTH_PROBE_HOST` and `<application>` wires it in
+via `android:networkSecurityConfig`. That chain is load-bearing: `HttpURLConnection` is governed by
+`NetworkSecurityPolicy`, and at `targetSdk = 36` cleartext is denied by default, so breaking any link
+— renaming the host, deleting the file, dropping the attribute — fails **every** probe, which the
+watchdog answers with a rotation storm over healthy servers. `HealthProbeSchemeTest` couples all
+three. Cleartext is kept deliberately over `https://`: with no tunnel the probe is on the clear
+network, where a plaintext `/generate_204` is indistinguishable from Android's own captive-portal
+check while a TLS handshake is not. The Ping Test target is also `http://` but for an unrelated
+reason and needs no exemption — the Go bridge dials it over raw native sockets — *not*
+`MeasureLatency`, whose throwaway
 instance is `protect()`'d out of the tun) and, after N consecutive failures, `rotateTunnel` reserves
 `CONNECTED → ROTATING` and swaps to a sibling from `FailoverPoolResolver`. Rotation is a peer of the
 kill-switch's kill/revive and shares its epoch/lock discipline and its screen receiver. See

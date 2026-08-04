@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cleartext carve-out for the auto-failover health probe, and NOTHING else.
+
+    WHY THIS FILE EXISTS
+    ====================
+    `failover/Http204HealthProbe` dials `ConfigBuilder.HEALTH_PROBE_TARGET_URL` with
+    HttpURLConnection, which Android's NetworkSecurityPolicy governs. The app is targetSdk 36 and at
+    targetSdk >= 28 the platform default is cleartext DENIED, so a plaintext target failed EVERY
+    probe with `IOException: Cleartext HTTP traffic ... not permitted`. The probe reports a throw as
+    "unhealthy", so the watchdog read a perfectly healthy tunnel as dead and answered with a rotation
+    storm and a give-up over working servers. Device-verified on SM-S918B / Android 15.
+
+    WHY CLEARTEXT RATHER THAN JUST USING https://
+    =============================================
+    Switching the probe to https removes the defect but costs camouflage, and this is a
+    censorship-circumvention tool where that matters more than it would elsewhere:
+
+      * When there is NO tunnel (the UNPROTECTED give-up, or the window between tunnels) the probe
+        travels the CLEAR network, where DPI can see it. A plaintext `GET /generate_204` to
+        cp.cloudflare.com is indistinguishable from Android's own captive-portal check, which is
+        cleartext BY DESIGN so that portals can intercept it. A TLS handshake to the same host is the
+        anomaly — it marks the device as running something that probes on a schedule.
+      * Inside the tunnel, a periodic ~5 KB TLS handshake is a far more distinctive traffic-analysis
+        signature than a ~300 byte plaintext request/response pair.
+
+    WHY NOT android:usesCleartextTraffic="true"
+    ===========================================
+    That would re-permit plaintext for the WHOLE app. This file permits it for exactly one hostname
+    and leaves every other destination denied by the platform default. There is deliberately no
+    <base-config> element: omitting it leaves the defaults (cleartext denied, system trust anchors,
+    user CAs untrusted) exactly as the platform sets them, so this file cannot loosen TLS trust as a
+    side effect of loosening cleartext for one host.
+
+    KEEPING IT IN SYNC
+    ==================
+    The domain below MUST equal `ConfigBuilder.HEALTH_PROBE_HOST`. If you change that constant and
+    not this file, the probe silently returns to failing every call — the exact defect above.
+    `HealthProbeSchemeTest` couples the two and fails if they drift.
+
+    NOT related to the Ping Test target (`state/PingTester.PING_TEST_TARGET`), which is also
+    cleartext but is dialled by MeasureLatency in the Go bridge — raw native sockets that
+    NetworkSecurityPolicy does not govern at all. It needs no entry here and gains nothing from one.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">cp.cloudflare.com</domain>
+    </domain-config>
+</network-security-config>

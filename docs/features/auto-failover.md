@@ -26,27 +26,57 @@ tunnel up") does not hold on the path that actually matters, and getting it wron
 dropping the user onto the clear network — the exact failure mode a censorship-circumvention client
 must never have.
 
-## The health probe: a Kotlin HTTPS 204 through the live tunnel
+## The health probe: a Kotlin HTTP 204 through the live tunnel
 
 [`failover/Http204HealthProbe.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/Http204HealthProbe.kt)
 issues an `HttpURLConnection` GET against a **fixed** target — `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
 — and requires HTTP **204**.
 
-**The target must stay `https://`.** `HttpURLConnection` is governed by Android's
-`NetworkSecurityPolicy`; the app is `targetSdk = 36` with no `usesCleartextTraffic` and no
-`networkSecurityConfig`, so cleartext is denied by platform default. While the target was `http://`,
-every probe threw `IOException: Cleartext HTTP traffic ... not permitted`, the probe's catch reported
-`false`, and the watchdog read a **healthy** tunnel as dead — rotating through the whole pool and
-giving up, potentially UNPROTECTED, which stops the service. It was invisible to the unit suite
-because every test injects a fake `opener`; `HealthProbeSchemeTest` now pins the scheme. Fixing it
-here rather than exempting cleartext in the manifest also avoids emitting a fingerprintable plaintext
-captive-portal request on a fixed interval. The move to port 443 is safe because **neither** carve-out
-rule names a port.
+### The target is cleartext, and that has a HARD manifest dependency
 
-**This does not apply to the Ping Test target**, which is deliberately `http://` and validated to
-reject `https://`: it is dialled by `MeasureLatency` in the Go bridge, i.e. raw native sockets that
-`NetworkSecurityPolicy` does not govern. The two targets differ for a real reason — see
-[ping-test.md](ping-test.md).
+`HttpURLConnection` is governed by Android's `NetworkSecurityPolicy`, and at `targetSdk = 36`
+cleartext is **denied by platform default**. The probe target is `http://`, so it only works because
+[`res/xml/network_security_config.xml`](../../app/src/main/res/xml/network_security_config.xml)
+carves out `ConfigBuilder.HEALTH_PROBE_HOST` and `<application>` wires it in via
+`android:networkSecurityConfig`. **Break any link in that chain — rename the host, delete the file,
+drop the attribute — and every probe throws `IOException: Cleartext HTTP traffic ... not permitted`.**
+The probe reports a throw as `false`, so the watchdog reads a **healthy** tunnel as dead and answers
+with a rotation storm and a give-up over working servers, potentially UNPROTECTED, which stops the
+service.
+
+That defect shipped. It was invisible to the unit suite because every test injects a fake `opener`,
+and no instrumented test had ever been run. `HealthProbeSchemeTest` now couples the constant, the XML
+and the manifest attribute so drift is a unit-test failure. **Device-verified** (SM-S918B / Android
+15): app-wide cleartext `false`, `cp.cloudflare.com` `true` → HTTP 204, `example.com` still denied,
+and `sub.cp.cloudflare.com` denied (`includeSubdomains="false"`).
+
+**Why cleartext rather than simply moving to `https://`.** HTTPS also fixes the defect and needs no
+manifest change, but it costs camouflage, which matters for this app:
+
+- When there is **no tunnel** — the `UNPROTECTED` give-up, or the window between tunnels — the probe
+  travels the **clear network**, where DPI can read it. A plaintext `GET /generate_204` to
+  `cp.cloudflare.com` is indistinguishable from Android's own captive-portal check, which is
+  cleartext *by design* so portals can intercept it. A TLS handshake to that host is the anomaly: it
+  marks the device as running something that probes on a schedule.
+- Inside the tunnel, a periodic ~5 KB TLS handshake is a more distinctive traffic-analysis signature
+  than a ~300 byte plaintext exchange.
+
+`android:usesCleartextTraffic="true"` was rejected for the obvious reason — it re-permits plaintext
+app-wide. The domain-scoped config carves exactly one host and leaves everything else on the platform
+default; there is deliberately no `<base-config>`, so the file cannot loosen TLS trust as a side
+effect.
+
+**A Go-side probe was considered and rejected.** Go's raw sockets ignore `NetworkSecurityPolicy`
+entirely, so a new bridge entry point would need no manifest change at all — but it lands in
+human-gated `xray-go/` + `bridge/`, needs an `xray.aar` rebuild, a reflection binding and a keep rule,
+and hits Go's Android DNS problem: the pure-Go resolver reads `/etc/resolv.conf`, which Android does
+not provide, which is exactly why `MeasureLatency` sidesteps it with `core.Dial`. A new probe would
+have to dial `HEALTH_PROBE_IPS` literally, reintroducing the stale-address brittleness the hostname
+URL exists to avoid. Strictly heavier than the manifest for the same benefit.
+
+**None of this applies to the Ping Test target**, which is cleartext for an unrelated reason and needs
+no exemption: `MeasureLatency` dials it from the Go bridge over raw native sockets. `isValidTarget`
+actively rejects `https://` there. Do not "unify" the two — see [ping-test.md](ping-test.md).
 
 **It is deliberately NOT `XrayBridge.measureLatency`.** `MeasureLatency` builds a *throwaway*
 `core.Instance` whose sockets are `protect()`'d **out** of the tun by 2A's global dial controller (see

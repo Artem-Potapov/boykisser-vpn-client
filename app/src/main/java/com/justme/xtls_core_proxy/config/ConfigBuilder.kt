@@ -169,38 +169,39 @@ object ConfigBuilder {
      * It lives in `config/` because the carve-out owner is `ConfigBuilder`; `failover` and `vpn`
      * import it. A `config -> failover` dependency for one string would be the wrong direction.
      *
-     * ### The scheme MUST stay `https://` — this is not a style preference
+     * ### `http://` is deliberate, and it has a HARD dependency on the manifest
      *
-     * It was `http://`, and that made the probe **impossible to satisfy on any real device**.
-     * `Http204HealthProbe` dials with [java.net.HttpURLConnection], which is governed by Android's
-     * `NetworkSecurityPolicy`. The app sets `targetSdk = 36`, and declares **no**
-     * `android:usesCleartextTraffic` and **no** `networkSecurityConfig` — and at targetSdk >= 28 the
-     * platform default is cleartext **denied**. So every probe threw
-     * `IOException: Cleartext HTTP traffic to cp.cloudflare.com not permitted`, which `runProbe`
-     * catches and reports as `false`, i.e. "tunnel unhealthy".
+     * `Http204HealthProbe` dials with [java.net.HttpURLConnection], which Android's
+     * `NetworkSecurityPolicy` governs. The app is `targetSdk = 36`, and at targetSdk >= 28 the
+     * platform default is cleartext **denied**. With no exemption, every probe threw
+     * `IOException: Cleartext HTTP traffic to cp.cloudflare.com not permitted`; `runProbe` catches a
+     * throw and reports `false`, so the watchdog read a **healthy** tunnel as dead and answered with
+     * a rotation storm and a give-up over working servers. That shipped, and no JVM test could see it
+     * — they all inject a fake `opener`. Device-verified on SM-S918B / Android 15.
      *
-     * The consequence was not a dead feature but an actively destructive one: on a perfectly healthy
-     * tunnel, every probe failed, consecutive failures tripped rotation, the pool was walked and
-     * exhausted, and a give-up fired — potentially `UNPROTECTED`, which then stops the service.
+     * **What makes cleartext legal here is `res/xml/network_security_config.xml`**, wired via
+     * `android:networkSecurityConfig` on `<application>`. It permits cleartext for **this hostname
+     * only** and leaves every other destination on the platform default. Change [HEALTH_PROBE_HOST]
+     * without changing that file and the probe silently returns to failing every call.
+     * `HealthProbeSchemeTest` couples the two so the drift is a unit-test failure.
      *
-     * No JVM test could see it: they all inject a fake `opener`. `HealthProbeSchemeTest` now pins the
-     * scheme so a revert is a unit-test failure rather than a device-only catastrophe.
+     * **Why not simply use `https://`?** It removes the defect but costs camouflage, and this is a
+     * censorship-circumvention tool. When there is **no tunnel** — the `UNPROTECTED` give-up, or the
+     * window between tunnels — the probe travels the **clear network** where DPI can read it, and a
+     * plaintext `GET /generate_204` to `cp.cloudflare.com` is indistinguishable from Android's own
+     * captive-portal check, which is cleartext *by design* so portals can intercept it. A TLS
+     * handshake to that host is the anomaly. Inside the tunnel, the same choice trades a periodic
+     * ~5 KB handshake for a ~300 byte exchange, which is a weaker traffic-analysis signature.
      *
-     * **Fixing it here rather than by exempting cleartext in the manifest is deliberate.** A
-     * `usesCleartextTraffic` flag or a network-security-config exemption would re-open plaintext for
-     * this host app-wide, and it would leave the app emitting a fingerprintable plaintext
-     * captive-portal request on a fixed interval — a poor property for a censorship-circumvention
-     * tool. HTTPS costs a TLS handshake per probe and nothing else: verified by measurement,
-     * `https://cp.cloudflare.com/generate_204` answers **204** both by hostname and by IP with SNI at
-     * every address in [HEALTH_PROBE_IPS], and neither carve-out rule names a port, so both halves
-     * keep matching on 443.
+     * **Why not `usesCleartextTraffic="true"`?** That re-permits plaintext app-wide. The
+     * domain-scoped config carves exactly one host.
      *
-     * **This does NOT apply to the Ping Test target** (`state/PingTester.PING_TEST_TARGET`), which is
-     * deliberately `http://` and must stay that way: it is dialled by `MeasureLatency` in the Go
-     * bridge, i.e. by raw native sockets that `NetworkSecurityPolicy` does not govern.
+     * The Ping Test target (`state/PingTester.PING_TEST_TARGET`) is cleartext for an unrelated
+     * reason and needs no exemption: `MeasureLatency` dials it from the Go bridge over raw native
+     * sockets, which `NetworkSecurityPolicy` does not govern. Do not "unify" the two.
      */
     const val HEALTH_PROBE_HOST = "cp.cloudflare.com"
-    const val HEALTH_PROBE_TARGET_URL = "https://$HEALTH_PROBE_HOST/generate_204"
+    const val HEALTH_PROBE_TARGET_URL = "http://$HEALTH_PROBE_HOST/generate_204"
 
     /**
      * [HEALTH_PROBE_HOST]'s current anycast addresses — the `ip` half of the carve-out (see

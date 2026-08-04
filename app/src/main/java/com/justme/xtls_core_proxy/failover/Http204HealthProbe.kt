@@ -8,18 +8,22 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * HTTPS 204 probe. Because SplitTunnelPlanner keeps this app INSIDE the tunnel in both split
+ * Plain-HTTP 204 probe. Because SplitTunnelPlanner keeps this app INSIDE the tunnel in both split
  * modes (only protect()'d Xray sockets bypass), this request travels tun -> xray -> proxy ->
  * internet and therefore tests the exact path user traffic takes.
  *
- * **The `https` is load-bearing, not cosmetic.** This class dials with [HttpURLConnection], which
- * Android's `NetworkSecurityPolicy` governs. The app is `targetSdk = 36` and declares no
- * `usesCleartextTraffic` and no `networkSecurityConfig`, so cleartext is denied by platform default
- * — a `http://` target made [runProbe] throw `IOException: Cleartext HTTP traffic ... not permitted`
- * on EVERY call, which the catch below turns into "unhealthy" and the watchdog answers with a
- * rotation storm and a give-up over healthy servers. See `ConfigBuilder.HEALTH_PROBE_TARGET_URL` and
- * `HealthProbeSchemeTest`. Note this does NOT generalise to the Ping Test target, which is dialled by
- * the Go bridge rather than by this stack.
+ * **The cleartext target has a HARD dependency on the manifest — do not assume it is self-contained.**
+ * This class dials with [HttpURLConnection], which Android's `NetworkSecurityPolicy` governs, and at
+ * `targetSdk = 36` cleartext is denied by platform default. What makes it legal is
+ * `res/xml/network_security_config.xml` carving out `ConfigBuilder.HEALTH_PROBE_HOST`, wired in via
+ * `android:networkSecurityConfig`. Break any link and [runProbe] throws
+ * `IOException: Cleartext HTTP traffic ... not permitted` on EVERY call, which the catch below turns
+ * into "unhealthy" — so the watchdog answers a perfectly healthy tunnel with a rotation storm and a
+ * give-up. That defect shipped once; `HealthProbeSchemeTest` now couples the constant, the XML and
+ * the manifest attribute. Cleartext is deliberate rather than incidental — see
+ * `ConfigBuilder.HEALTH_PROBE_TARGET_URL` for why plaintext is the better choice here, and note the
+ * Ping Test target is cleartext for a completely different reason (the Go bridge dials it, so this
+ * policy never applies to it).
  *
  * **That claim only holds because the routing table is made to honour it.** Reaching the tun is not
  * enough — Xray still decides which outbound carries the request, and several rules would hand the

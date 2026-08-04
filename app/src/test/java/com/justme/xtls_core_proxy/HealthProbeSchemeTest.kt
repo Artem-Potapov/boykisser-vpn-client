@@ -1,75 +1,137 @@
 package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.config.ConfigBuilder
+import com.justme.xtls_core_proxy.config.RoutingSettings
+import com.justme.xtls_core_proxy.config.TuningSettings
 import com.justme.xtls_core_proxy.state.PingTester
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
- * Pins the ONE property of the health-probe target that no other test can see: its **scheme**.
+ * Couples the health-probe target to the **manifest exemption that makes it legal**, which is the
+ * one relationship no other test can see and the one whose breakage is silent and total.
  *
- * This exists because `http://` here was a shipped, merge-blocking defect that 669 green unit tests,
- * a clean lint and a green R8 release build all passed over. `Http204HealthProbe` dials with
- * `HttpURLConnection`, which Android's `NetworkSecurityPolicy` governs; the app is `targetSdk = 36`
- * with no `usesCleartextTraffic` and no `networkSecurityConfig`, and at targetSdk >= 28 the platform
- * default is cleartext **denied**. Every probe therefore threw
- * `IOException: Cleartext HTTP traffic ... not permitted`, `runProbe` caught it and returned `false`,
- * and the watchdog read a perfectly healthy tunnel as dead — rotating through the whole pool and
- * giving up, potentially UNPROTECTED, which stops the service.
+ * `Http204HealthProbe` dials with `HttpURLConnection`, governed by Android's
+ * `NetworkSecurityPolicy`. The app is `targetSdk = 36`, where cleartext is denied by platform
+ * default. A plaintext target therefore only works because
+ * `res/xml/network_security_config.xml` carves out exactly [ConfigBuilder.HEALTH_PROBE_HOST]. Break
+ * that pairing — change the host, drop the file, drop the manifest attribute — and **every** probe
+ * throws `IOException: Cleartext HTTP traffic ... not permitted`, which the probe reports as
+ * "unhealthy", so the watchdog rotates through the whole pool and gives up over healthy servers.
+ * That defect shipped once already and 669 green unit tests, a clean lint and a green R8 release
+ * build all passed over it, because every unit test injects a fake `opener`.
  *
- * **Why every other test missed it:** they all inject a fake `opener` into `Http204HealthProbe`, so
- * the platform check is never exercised. That injection is correct — a unit test must not do real
- * I/O — which is precisely why the scheme needs pinning *separately*, as a property of the constant
- * rather than of the request.
+ * **What this test does NOT prove.** It cannot prove the probe works — only a device can, against a
+ * live tunnel. It proves the constant and the exemption still describe the same host, and that the
+ * routing carve-outs still cover it. Do not let it stand in for QA.
  *
- * **What this test does NOT prove.** It cannot prove the probe works; only a device can, and only
- * against a live tunnel. It proves the one thing that made success impossible. Do not let its
- * presence stand in for QA.
+ * **Known limitation — it can go stale in an incremental build.** It reads the manifest and the
+ * network-security config off the filesystem, which Gradle does not know are inputs to
+ * `testDebugUnitTest`. Editing either one alone therefore leaves the task `UP-TO-DATE` and this test
+ * simply does not run. (Observed, not theorised: both mutations below reported nothing until
+ * `--rerun-tasks` was passed.) CI builds clean, so the guard holds there; locally, verify a change to
+ * these files with `--rerun-tasks`. Declaring them as task inputs would fix it properly and is the
+ * right follow-up.
  */
 class HealthProbeSchemeTest {
 
-    @Test
-    fun healthProbeTargetIsHttps_becauseCleartextIsDeniedAtTargetSdk36() {
+    // PARSED, not substring-matched. The first cut of this test scanned raw text and failed on its
+    // own file, because the explanatory comment inside the XML mentions `<base-config>`. Matching
+    // markup with `contains` is exactly the kind of check that passes or fails for the wrong reason.
+    private val nsc: Element by lazy {
+        // AGP runs unit tests with the module directory as the working directory; the repo-root form
+        // is accepted too so the test survives being run from either place.
+        val candidates = listOf(
+            "src/main/res/xml/network_security_config.xml",
+            "app/src/main/res/xml/network_security_config.xml",
+        )
+        val found = candidates.map(::File).firstOrNull { it.isFile }
         assertTrue(
-            "HEALTH_PROBE_TARGET_URL must be https://. Reverting it to http:// makes EVERY probe " +
-                "fail on a real device (cleartext denied at targetSdk >= 28 with no " +
-                "usesCleartextTraffic / networkSecurityConfig), which the watchdog reads as a dead " +
-                "tunnel and answers with a rotation storm and a give-up over healthy servers. " +
-                "Actual: ${ConfigBuilder.HEALTH_PROBE_TARGET_URL}",
-            ConfigBuilder.HEALTH_PROBE_TARGET_URL.startsWith("https://"),
+            "network_security_config.xml must exist — it is what makes the cleartext health probe " +
+                "legal at targetSdk 36. Looked in: $candidates (cwd=${File(".").absolutePath})",
+            found != null,
+        )
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(found!!).documentElement
+    }
+
+    private fun elements(tag: String): List<Element> {
+        val nodes = nsc.getElementsByTagName(tag)
+        return (0 until nodes.length).map { nodes.item(it) as Element }
+    }
+
+    @Test
+    fun theCleartextExemptionNamesExactlyTheProbeHost() {
+        val domains = elements("domain").map { it.textContent.trim() }
+        assertTrue(
+            "network_security_config.xml must carve out ${ConfigBuilder.HEALTH_PROBE_HOST}. Without " +
+                "it every probe throws 'Cleartext HTTP traffic not permitted', which the watchdog " +
+                "reads as a dead tunnel and answers with a rotation storm over healthy servers. " +
+                "Found: $domains",
+            domains.contains(ConfigBuilder.HEALTH_PROBE_HOST),
+        )
+        assertTrue(
+            "the domain-config carving out the probe host must actually permit cleartext",
+            elements("domain-config").any { it.getAttribute("cleartextTrafficPermitted") == "true" },
         )
     }
 
     @Test
-    fun healthProbeTargetStillNamesTheCarvedOutHost() {
-        // The scheme change must not have moved the host: the routing carve-out is emitted for
-        // HEALTH_PROBE_HOST specifically, so a target pointing anywhere else would be routed by the
-        // imported config's own rules and could return 204 with the proxy dead. Scheme and host are
-        // one decision, and this is the half that keeps the carve-out honest.
+    fun theExemptionIsScopedToOneHost_notTheWholeApp() {
+        // The whole justification for a config file over android:usesCleartextTraffic="true" is that
+        // it loosens plaintext for ONE destination. A base-config permitting cleartext, or a second
+        // domain, would quietly restore app-wide plaintext and this test is the only guard on that.
         assertEquals(
-            "https://${ConfigBuilder.HEALTH_PROBE_HOST}/generate_204",
+            "exactly one <domain> entry is expected in the cleartext carve-out",
+            1,
+            elements("domain").size,
+        )
+        assertTrue(
+            "a <base-config> permitting cleartext would re-open plaintext app-wide, defeating the " +
+                "entire point of scoping this to one host",
+            elements("base-config").none { it.getAttribute("cleartextTrafficPermitted") == "true" },
+        )
+    }
+
+    @Test
+    fun theManifestActuallyWiresTheConfigIn() {
+        // The file is inert unless <application> references it. Dropping the attribute is a one-line
+        // change with the same total, silent consequence as deleting the file.
+        val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml")
+            .map(::File).first { it.isFile }.readText()
+        assertTrue(
+            "AndroidManifest must set android:networkSecurityConfig, or the carve-out is inert",
+            manifest.contains("android:networkSecurityConfig=\"@xml/network_security_config\""),
+        )
+    }
+
+    @Test
+    fun theProbeTargetStillNamesTheCarvedOutHost() {
+        // Scheme and host are one decision: the exemption is per-host and the routing carve-out is
+        // per-host, so a target pointing anywhere else is both cleartext-denied AND routed by the
+        // imported config's own rules.
+        assertEquals(
+            "http://${ConfigBuilder.HEALTH_PROBE_HOST}/generate_204",
             ConfigBuilder.HEALTH_PROBE_TARGET_URL,
         )
     }
 
     @Test
-    fun theCarveOutRulesNameNoPort_soTheySurviveTheMoveTo443() {
-        // Load-bearing for the fix: http is 80, https is 443. Had either carve-out half pinned a
-        // port, moving the scheme would have silently un-carved the probe and reopened the
-        // false-healthy hole the ip rule was added to close.
+    fun theCarveOutRulesNameNoPort() {
+        // Load-bearing if the scheme is ever revisited: http is 80, https is 443. A ported rule would
+        // silently un-carve the probe and reopen the false-healthy hole the ip rule closed.
         val config = ConfigBuilder.buildRuntimeConfig(
             VLESS_URI,
-            tuning = com.justme.xtls_core_proxy.config.TuningSettings(
-                routing = com.justme.xtls_core_proxy.config.RoutingSettings.USER_DEFAULT,
-            ),
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
         )
-        val rules = org.json.JSONObject(config)
-            .getJSONObject("routing")
-            .getJSONArray("rules")
+        val rules = JSONObject(config).getJSONObject("routing").getJSONArray("rules")
 
-        var domainHalf: org.json.JSONObject? = null
-        var ipHalf: org.json.JSONObject? = null
+        var domainHalf: JSONObject? = null
+        var ipHalf: JSONObject? = null
         for (i in 0 until rules.length()) {
             val rule = rules.optJSONObject(i) ?: continue
             val domains = rule.optJSONArray("domain")
@@ -84,25 +146,18 @@ class HealthProbeSchemeTest {
 
         assertTrue("the domain half of the carve-out must still be emitted", domainHalf != null)
         assertTrue("the ip half of the carve-out must still be emitted", ipHalf != null)
-        assertTrue(
-            "the domain carve-out must not pin a port, or moving to https would un-carve it",
-            !domainHalf!!.has("port"),
-        )
-        assertTrue(
-            "the ip carve-out must not pin a port, or moving to https would un-carve it",
-            !ipHalf!!.has("port"),
-        )
+        assertTrue("the domain carve-out must not pin a port", !domainHalf!!.has("port"))
+        assertTrue("the ip carve-out must not pin a port", !ipHalf!!.has("port"))
     }
 
     @Test
-    fun thePingTestTargetIsDeliberatelyLeftOnCleartext() {
-        // NOT an oversight, and not the same decision. The Ping Test is dialled by MeasureLatency in
-        // the Go bridge — raw native sockets, which NetworkSecurityPolicy does not govern — so it is
-        // unaffected by the defect above. PingPreferences.isValidTarget actively REJECTS https://,
-        // so "fixing" this one to match would break the ping feature outright. Pinned here so the
-        // asymmetry reads as a decision rather than as a missed spot.
+    fun thePingTestTargetIsCleartextForAnUnrelatedReason() {
+        // NOT the same decision, and it needs no manifest entry: the Ping Test is dialled by
+        // MeasureLatency in the Go bridge — raw native sockets, which NetworkSecurityPolicy does not
+        // govern at all. PingPreferences.isValidTarget actively REJECTS https://, so "unifying" the
+        // two schemes would break the ping feature. Pinned so the asymmetry reads as a decision.
         assertTrue(
-            "PING_TEST_TARGET is http:// by design (Go dialer, not HttpURLConnection)",
+            "PING_TEST_TARGET is http:// because the Go dialer, not HttpURLConnection, sends it",
             PingTester.PING_TEST_TARGET.startsWith("http://"),
         )
     }
