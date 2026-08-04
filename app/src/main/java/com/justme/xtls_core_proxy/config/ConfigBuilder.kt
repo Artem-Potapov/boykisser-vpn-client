@@ -140,7 +140,71 @@ object ConfigBuilder {
     fun replaceJsonInboundsWithTun(config: String): String {
         val root = JSONObject(config)
         root.put("inbounds", JSONArray().put(tunInboundJson()))
+        reconcileInboundTagRules(root)
         return root.toString()
+    }
+
+    /**
+     * After the tun-only inbound rewrite, any routing rule keyed on the removed inbound tags
+     * (`socks`/`http`/…) can never match. Leaving those rules in the runtime config is worse than
+     * dropping them: they look healthy, match nothing, and traffic falls through to Xray's default
+     * outbound (first in the array) — which is how balancer-over-N configs silently lose their
+     * balancer.
+     *
+     * Revival is selective and direction-constrained:
+     * - Rules that move traffic **toward** the proxy (`balancerTag`, or `outboundTag` naming a
+     *   non-helper outbound) have their `inboundTag` rewritten to [tun-in].
+     * - Rules that would send traffic to direct/block (or an unknown tag) are **dropped**, never
+     *   rewritten. Rewriting them onto tun-in would activate a previously-dead direct exception and
+     *   move traffic **away** from the proxy — forbidden for this chokepoint.
+     */
+    private fun reconcileInboundTagRules(root: JSONObject) {
+        val routing = root.optJSONObject("routing") ?: return
+        val rules = routing.optJSONArray("rules") ?: return
+        val proxyTags = proxyOutboundTags(root)
+        val cleaned = JSONArray()
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            val inboundTag = rule.optJSONArray("inboundTag")
+            if (inboundTag == null || inboundTag.length() == 0) {
+                cleaned.put(rule)
+                continue
+            }
+            var hasDead = false
+            for (j in 0 until inboundTag.length()) {
+                if (inboundTag.optString(j) != TUN_INBOUND_TAG) {
+                    hasDead = true
+                    break
+                }
+            }
+            if (!hasDead) {
+                cleaned.put(rule)
+                continue
+            }
+            val balancer = rule.optString("balancerTag")
+            val outbound = rule.optString("outboundTag")
+            val towardProxy = balancer.isNotBlank() ||
+                (outbound.isNotBlank() && outbound in proxyTags)
+            if (towardProxy) {
+                val fixed = JSONObject(rule.toString())
+                fixed.put("inboundTag", JSONArray().put(TUN_INBOUND_TAG))
+                cleaned.put(fixed)
+            }
+            // else: drop — do not revive a direct/block inboundTag rule
+        }
+        routing.put("rules", cleaned)
+    }
+
+    /** Tags of every non-helper outbound — the set a toward-proxy `outboundTag` may name. */
+    private fun proxyOutboundTags(root: JSONObject): Set<String> {
+        val outbounds = root.optJSONArray("outbounds") ?: return emptySet()
+        val tags = mutableSetOf<String>()
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.optJSONObject(i) ?: continue
+            if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
+            ob.optString("tag").takeIf { it.isNotBlank() }?.let { tags.add(it) }
+        }
+        return tags
     }
 
     enum class DnsStatus { ABSENT, SECURE, DIRTY }
@@ -242,6 +306,9 @@ object ConfigBuilder {
     private const val DNS_OUT_TAG = "dns-out"
     internal val SECURE_DNS_PREFIXES = listOf("https://", "tls://", "quic://", "h3://", "h2c://")
     private val NON_PROXY_PROTOCOLS = setOf("freedom", "blackhole", "dns")
+
+    /** Canonical tag of the single tun inbound emitted by [tunInboundJson] / [replaceJsonInboundsWithTun]. */
+    const val TUN_INBOUND_TAG = "tun-in"
 
     /**
      * Classifies a config's DNS posture.
@@ -603,7 +670,10 @@ object ConfigBuilder {
         val out = JSONArray()
         if (port53 != null) out.put(port53)
         if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
-        healthProbeCarveOutRules(proxyTag).forEach { out.put(it) }
+        // Prefer the balancer that carries tun traffic when one exists (M-K): the carve-out must
+        // measure the same path user traffic takes after I-H revives the inboundTag→balancer rule.
+        val probeBalancer = tunTrafficBalancerTag(passthrough)
+        healthProbeCarveOutRules(proxyTag, probeBalancer).forEach { out.put(it) }
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
         when (effectiveMode) {
@@ -705,6 +775,12 @@ object ConfigBuilder {
      * it exists to beat, and one placed after the ads rule would be shadowed by a
      * `geosite:category-ads-all -> block` match, turning the probe into a permanent failure.
      *
+     * **Balancer target (M-K).** When the imported config routes tun traffic via a `balancerTag`
+     * (revived by [reconcileInboundTagRules]), both carve-out halves name that balancer instead of
+     * [firstProxyOutbound]. Naming a single server would let the watchdog probe server #1 while user
+     * traffic rides the balancer's choice — a healthy probe that proves nothing about the path
+     * traffic takes. Ordering is unchanged: still ahead of passthrough.
+     *
      * **What can route the probe away from the proxy.** Three things, and only the first is
      * `BLOCKED_ONLY`-specific:
      *  - `BLOCKED_ONLY`'s final `network: tcp,udp -> direct` catch-all, which hands the GET to
@@ -760,10 +836,65 @@ object ConfigBuilder {
      * everything". That trade is leak-for-leak in the wrong direction; it was built, analysed and
      * abandoned. Do not reintroduce it.
      */
-    private fun healthProbeCarveOutRules(proxyTag: String): List<JSONObject> = listOf(
-        fieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag),
-        fieldRule("ip", HEALTH_PROBE_IPS, proxyTag),
+    private fun healthProbeCarveOutRules(proxyTag: String, balancerTag: String?): List<JSONObject> = listOf(
+        healthProbeFieldRule("domain", listOf("full:$HEALTH_PROBE_HOST"), proxyTag, balancerTag),
+        healthProbeFieldRule("ip", HEALTH_PROBE_IPS, proxyTag, balancerTag),
     )
+
+    /**
+     * Field rule for the health-probe carve-out. When [balancerTag] is non-null the rule names the
+     * balancer (same path as user traffic on a balancer-over-N config); otherwise it names the
+     * single [proxyTag] outbound.
+     */
+    private fun healthProbeFieldRule(
+        key: String,
+        items: List<String>,
+        proxyTag: String,
+        balancerTag: String?,
+    ): JSONObject {
+        val rule = JSONObject().put("type", "field").put(key, JSONArray(items))
+        if (balancerTag != null) {
+            rule.put("balancerTag", balancerTag)
+        } else {
+            rule.put("outboundTag", proxyTag)
+        }
+        return rule
+    }
+
+    /**
+     * The balancer that carries ordinary tun traffic, if any. Prefers a catch-all
+     * (inboundTag→balancer with no domain/ip/port filter) over a filtered one. Returns null when
+     * the config has no live tun→balancer rule — the carve-out then names [firstProxyOutbound].
+     */
+    private fun tunTrafficBalancerTag(rules: JSONArray): String? {
+        var catchAll: String? = null
+        var any: String? = null
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            val balancer = rule.optString("balancerTag")
+            if (balancer.isBlank()) continue
+            if (!inboundTagMatchesTun(rule)) continue
+            any = any ?: balancer
+            if (!ruleHasDestinationFilter(rule)) catchAll = catchAll ?: balancer
+        }
+        return catchAll ?: any
+    }
+
+    /** True when the rule applies to the canonical tun inbound (or to all inbounds). */
+    private fun inboundTagMatchesTun(rule: JSONObject): Boolean {
+        val tags = rule.optJSONArray("inboundTag") ?: return true
+        if (tags.length() == 0) return true
+        for (i in 0 until tags.length()) {
+            if (tags.optString(i) == TUN_INBOUND_TAG) return true
+        }
+        return false
+    }
+
+    /** True when the rule filters by destination (domain/ip/port/network/protocol/source…). */
+    private fun ruleHasDestinationFilter(rule: JSONObject): Boolean =
+        rule.has("domain") || rule.has("ip") || rule.has("port") || rule.has("network") ||
+            rule.has("protocol") || rule.has("source") || rule.has("sourcePort") ||
+            rule.has("user") || rule.has("attrs")
 
     /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
     private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {
@@ -1207,7 +1338,7 @@ object ConfigBuilder {
 
     private fun tunInboundJson(): JSONObject {
         return JSONObject().apply {
-            put("tag", "tun-in")
+            put("tag", TUN_INBOUND_TAG)
             put("protocol", "tun")
             put("settings", JSONObject().apply {
                 put("name", "xray_tun")

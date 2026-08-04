@@ -42,17 +42,24 @@ class ConfigBuilderRoutingTest {
         return out
     }
 
-    /** Index of the `domain: full:<probe host> -> proxy` half of the carve-out, or -1. */
+    /** True when a rule sends traffic toward a proxy path (outbound or balancer), never direct/block/dns. */
+    private fun routesTowardProxy(o: JSONObject): Boolean {
+        if (o.optString("balancerTag").isNotBlank()) return true
+        val tag = o.optString("outboundTag")
+        return tag.isNotBlank() && tag !in setOf("direct", "block", "dns-out")
+    }
+
+    /** Index of the `domain: full:<probe host> -> proxy|balancer` half of the carve-out, or -1. */
     private fun domainCarveOutIndex(items: List<String>) = items.indexOfFirst {
         val o = JSONObject(it)
-        o.optString("outboundTag") == "proxy" &&
+        routesTowardProxy(o) &&
             o.optJSONArray("domain")?.toString()?.contains("full:${ConfigBuilder.HEALTH_PROBE_HOST}") == true
     }
 
-    /** Index of the `ip: <probe addresses> -> proxy` half of the carve-out, or -1. */
+    /** Index of the `ip: <probe addresses> -> proxy|balancer` half of the carve-out, or -1. */
     private fun ipCarveOutIndex(items: List<String>) = items.indexOfFirst {
         val o = JSONObject(it)
-        o.optString("outboundTag") == "proxy" &&
+        routesTowardProxy(o) &&
             o.optJSONArray("ip")?.toString()?.contains(ConfigBuilder.HEALTH_PROBE_IPS.first()) == true
     }
 
@@ -466,5 +473,103 @@ class ConfigBuilderRoutingTest {
         """.trimIndent()
         val ping = ConfigBuilder.toPingTestConfig(pasted)
         assertFalse(JSONObject(ping).optJSONObject("routing")?.optJSONArray("rules").toString().contains("ext:"))
+    }
+
+    // I-H — balancer-over-N configs key ordinary traffic on inboundTag ["socks","http"]. After the
+    // tun-only rewrite those tags no longer exist, so the rule can never match and traffic falls to
+    // Xray's default outbound (first in the array) — the balancer never runs. Retarget toward-proxy
+    // inboundTag rules onto tun-in so the balancer lives again.
+    private val balancerOverN = """
+        {"inbounds":[
+          {"tag":"socks","protocol":"socks","settings":{"udp":true}},
+          {"tag":"http","protocol":"http"}],
+         "outbounds":[
+          {"tag":"proxy-0","protocol":"vless","settings":{"vnext":[{"address":"1.1.1.1","port":443,
+            "users":[{"id":"u0"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"proxy-1","protocol":"vless","settings":{"vnext":[{"address":"2.2.2.2","port":443,
+            "users":[{"id":"u1"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"direct","protocol":"freedom"}],
+         "routing":{"balancers":[{"tag":"proxy-balancer","selector":["proxy-0","proxy-1"],
+            "fallbackTag":"direct","strategy":{"type":"leastLoad"}}],
+           "rules":[
+            {"type":"field","inboundTag":["socks","http"],"balancerTag":"proxy-balancer"},
+            {"type":"field","inboundTag":["socks"],"domain":["geosite:cn"],"outboundTag":"direct"}]}}
+    """.trimIndent()
+
+    @Test fun inboundTag_balancer_rule_is_retargeted_to_tun_in() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancerOverN,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val items = ruleItems(out)
+        // Skip the health-probe carve-out halves, which also name balancerTag after M-K.
+        val balancerRule = items.map { JSONObject(it) }.firstOrNull {
+            it.optString("balancerTag") == "proxy-balancer" && it.has("inboundTag")
+        }
+        assertTrue("balancer traffic rule must survive into the runtime config; rules=$items", balancerRule != null)
+        val inbound = balancerRule!!.getJSONArray("inboundTag")
+        assertEquals(
+            "stale socks/http inboundTag must be rewritten to tun-in so the balancer can match",
+            listOf("tun-in"),
+            (0 until inbound.length()).map { inbound.getString(it) },
+        )
+    }
+
+    // I-H — rewriting an inboundTag+direct rule onto tun-in would activate a previously-dead
+    // direct exception and move traffic AWAY from the proxy. Drop it instead; do not leave a
+    // zombie that looks healthy while matching nothing.
+    @Test fun inboundTag_direct_rule_is_dropped_not_rewritten() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancerOverN,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val items = ruleItems(out)
+        assertFalse(
+            "inboundTag+direct rules must be dropped, never rewritten onto tun-in; rules=$items",
+            items.any {
+                val o = JSONObject(it)
+                o.optString("outboundTag") == "direct" && o.has("inboundTag") && it.contains("geosite:cn")
+            },
+        )
+        assertFalse(
+            "a dropped direct rule must not be revived as tun-in → direct; rules=$items",
+            items.any {
+                val o = JSONObject(it)
+                o.optString("outboundTag") == "direct" &&
+                    o.optJSONArray("inboundTag")?.toString()?.contains("tun-in") == true
+            },
+        )
+    }
+
+    // M-K — once the balancer rule matches tun-in, the health-probe carve-out must name the same
+    // balancerTag (not firstProxyOutbound). Otherwise the watchdog probes server #1 while user
+    // traffic rides the balancer — a healthy probe that proves nothing about the path traffic takes.
+    @Test fun health_probe_carve_out_uses_balancerTag_when_config_routes_via_balancer() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancerOverN,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val items = ruleItems(out)
+        val domain = JSONObject(items[domainCarveOutIndex(items)])
+        val ip = JSONObject(items[ipCarveOutIndex(items)])
+        assertEquals(
+            "domain carve-out must name the balancer, not a single proxy outbound; rule=$domain",
+            "proxy-balancer",
+            domain.getString("balancerTag"),
+        )
+        assertEquals(
+            "ip carve-out must name the balancer, not a single proxy outbound; rule=$ip",
+            "proxy-balancer",
+            ip.getString("balancerTag"),
+        )
+        assertFalse("domain carve-out must not pin outboundTag to one server; rule=$domain", domain.has("outboundTag"))
+        assertFalse("ip carve-out must not pin outboundTag to one server; rule=$ip", ip.has("outboundTag"))
+        // Still ahead of passthrough (the revived balancer rule) — first-match ordering preserved.
+        val balancerIdx = items.indexOfFirst { JSONObject(it).optString("balancerTag") == "proxy-balancer" && !it.contains(ConfigBuilder.HEALTH_PROBE_HOST) && !it.contains(ConfigBuilder.HEALTH_PROBE_IPS.first()) }
+        assertTrue("fixture: balancer traffic rule must be present; rules=$items", balancerIdx >= 0)
+        assertTrue(
+            "carve-out must still precede the balancer traffic rule; rules=$items",
+            domainCarveOutIndex(items) < balancerIdx && ipCarveOutIndex(items) < balancerIdx,
+        )
     }
 }

@@ -57,6 +57,11 @@ rules sit ahead of the LAN and ads rules on purpose — an ads → blackhole mat
 into a permanent failure — and ahead of the preserved config rules, because Xray's router is
 first-match.
 
+**Balancer target.** When the imported config routes tun traffic via a `balancerTag` (see inboundTag
+reconciliation below), both carve-out halves name that `balancerTag` instead of the first proxy
+outbound. Naming a single server would let the watchdog probe server #1 while user traffic rides the
+balancer — a healthy probe that proves nothing about the path traffic takes. Ordering is unchanged.
+
 Unlike the DoH guard, the carve-out is emitted in **every** mode. `BLOCKED_ONLY`'s direct catch-all is
 only one of three ways the probe can go direct: `EXCEPT_COUNTRY` emits country **direct** rules
 (`geoip:ru` can match a Cloudflare anycast address), and every mode preserves the imported config's own
@@ -64,6 +69,22 @@ rules, which may route direct too. In `EXCEPT_COUNTRY` the carve-out therefore *
 the user's country-direct policy for that one hostname** — the probe is the app's own diagnostic traffic
 and is meaningless unless it traverses the proxy. It only ever moves traffic toward the proxy, so it
 costs nothing where it is not needed.
+
+### InboundTag reconciliation (tun-only rewrite)
+
+`replaceJsonInboundsWithTun` replaces every inbound with a single `tun-in`. Provider configs of the
+"balancer over N servers" shape key ordinary traffic on `inboundTag: ["socks","http"]`, which can
+never match after that rewrite. Leaving those rules in the runtime config is worse than dropping them:
+they look healthy, match nothing, and traffic falls to Xray's default outbound (first in the array).
+
+`reconcileInboundTagRules` runs as part of that rewrite:
+
+- Rules that move traffic **toward** the proxy (`balancerTag`, or `outboundTag` naming a non-helper
+  outbound) have their `inboundTag` rewritten to `["tun-in"]` so the balancer (or proxy outbound)
+  matches again.
+- Rules that would send traffic to direct/block are **dropped**, never rewritten. Rewriting them onto
+  `tun-in` would activate a previously-dead direct exception and move traffic **away** from the
+  proxy — forbidden for this chokepoint.
 
 **Why two rules.** The `domain` rule matches only while sniffing is on: with a tun inbound the
 destination is an IP, and nothing supplies a domain unless the inbound sniffs one. `BLOCKED_ONLY`,
@@ -108,8 +129,9 @@ DoH guards (including pinned and bracketed-IPv6 resolvers), both halves of the h
 (presence in every mode, proxy direction, both address families, survival of the ping config's geo
 stripping, and position ahead of every rule that could divert it — including the imported config's own
 direct rules, which its fixture now actually carries), the default posture matching without sniffing,
-the unsupported-country degrade emitting the `PROXY_ALL` rule set, helper-outbound safety, and probe
-stripping.
+inboundTag reconciliation (toward-proxy rules retargeted to `tun-in`, direct inboundTag rules dropped),
+balancer-aware carve-out targeting, the unsupported-country degrade emitting the `PROXY_ALL` rule set,
+helper-outbound safety, and probe stripping.
 
 On-device, exercise each buildable mode with the corresponding geo assets, verify LAN/ad toggles, and
 confirm DNS still traverses the selected secure resolver. Missing-asset fallback should remain

@@ -451,7 +451,10 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   network from one layer down. `ConfigBuilder.applyRouting` therefore emits **two** carve-out rules in
   **every** mode — `domain: full:<HEALTH_PROBE_HOST> → proxy` and `ip: <HEALTH_PROBE_IPS> → proxy`
   (structural twin of the `BLOCKED_ONLY` DoH guard, and placed beside it, ahead of the LAN/ads rules
-  and ahead of the pasted config's preserved rules). Three separate things would otherwise
+  and ahead of the pasted config's preserved rules). When the imported config routes tun traffic via
+  a `balancerTag` (after inboundTag reconciliation retargets toward-proxy rules onto `tun-in`), both
+  halves name that balancer instead of the first proxy outbound so the watchdog measures the same
+  path user traffic takes. Three separate things would otherwise
   claim the probe: `BLOCKED_ONLY`'s direct catch-all, `EXCEPT_COUNTRY`'s country direct rules
   (`geoip:ru` can match a Cloudflare anycast address), and a direct rule in the pasted config, which
   is preserved in all modes. This is why the probe target is the fixed `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
@@ -465,6 +468,9 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   off. Refreshing `HEALTH_PROBE_IPS` is the fix — forcing sniffing is **not** (it would activate the
   pasted config's own `domain` rules and leak real traffic; built, analysed and abandoned), and neither
   is a broad Cloudflare CIDR. See `docs/features/routing-rules.md`.
+  **InboundTag reconciliation** lives in `replaceJsonInboundsWithTun`: toward-proxy
+  `inboundTag` rules (balancer/proxy outbound) are rewritten onto `tun-in`; direct/block inboundTag
+  rules are dropped (never rewritten — that would move traffic away from the proxy).
 - Auto-failover never releases traffic to the clear network on purpose: **each rotation is bridged by
   an unread TUN** (so a switch stalls apps rather than leaking them), and exhausting the pool
   re-establishes — or adopts that bridge as — a **blackhole TUN** (unread fd, DNS aimed into it, same
