@@ -24,9 +24,17 @@ object ConfigBuilder {
         val withMux = applyMux(withFragmentation, tuning.mux)
         val withDns = applyDns(withMux, tuning.dns, tuning.core.ipv6)
         val withRouting = applyRouting(withDns, tuning.routing)
-        val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        val forceSniffing = forceSniffingFor(tuning.core, tuning.routing)
         return applyCoreSettings(withRouting, tuning.core, forceSniffing)
     }
+
+    /**
+     * Single owner of the forced-sniffing decision shared by [buildRuntimeConfig] and
+     * [ConfigSanitizer]. True when the user enabled sniffing on the XRAY screen **or** routing
+     * needs domain rules ([routingNeedsDomainRules]).
+     */
+    internal fun forceSniffingFor(core: XrayCoreSettings, routing: RoutingSettings?): Boolean =
+        core.sniffing || routingNeedsDomainRules(routing)
 
     /** Overwrites the `log` object on a runtime config with the forced posture.
      *  Overwrite (not merge) so a pasted config cannot aim Xray's writes elsewhere. */

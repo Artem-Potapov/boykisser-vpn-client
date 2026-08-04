@@ -129,8 +129,10 @@ this is no longer a documented boundary.)
   read-only `internal storedDnsSurvivesPipeline(storedConfigJson, finalServers)` is the DNS-compliance
   classifier the sanitizer consumes (it structurally compares the stored server list against the array
   `ConfigSanitizer` already computed by running the FULL pipeline — `makeSecureDns` plus every tuning
-  overlay, including a global resolver override) instead of re-deriving DoH rules. **Gated file** —
-  changes need maintainer review.
+  overlay, including a global resolver override) instead of re-deriving DoH rules. Forced sniffing is
+  likewise owned once as `internal forceSniffingFor(core, routing)` — both `buildRuntimeConfig` and the
+  sanitizer's `SNIFFING` / health-probe residual findings call it, so `FindingId.SNIFFING` cannot drift
+  from the runtime pipeline. **Gated file** — changes need maintainer review.
 
 ## Testing and manual gate
 

@@ -182,7 +182,7 @@ object ConfigSanitizer {
             }
         }
 
-        val sniffingEnabled = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        val sniffingEnabled = ConfigBuilder.forceSniffingFor(tuning.core, tuning.routing)
         if (sniffingEnabled) {
             findings += Finding(
                 FindingCategory.GLOBAL_SETTING,
@@ -230,7 +230,7 @@ object ConfigSanitizer {
 
         // Health-probe carve-out: real exception to EXCEPT_COUNTRY / imported-direct for one host + IPs.
         // Delegate presence/target/residual to ConfigBuilder — do not re-parse carve-out shape here.
-        val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        val forceSniffing = ConfigBuilder.forceSniffingFor(tuning.core, tuning.routing)
         ConfigBuilder.healthProbeCarveOutInfo(final, forceSniffing)?.let { info ->
             val residual = if (info.addressListResidual) {
                 "; residual: stale address list + sniffing off can neutralize failover"
