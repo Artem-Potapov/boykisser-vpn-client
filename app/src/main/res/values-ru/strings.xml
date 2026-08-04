@@ -248,6 +248,8 @@
     <string name="main_state_connected">Подключено</string>
     <string name="main_state_paused">Приостановлено</string>
     <string name="main_state_blackholed">Нет связи с сервером</string>
+    <string name="main_state_blackholed_still_proxying">Сервер не отвечает</string>
+    <string name="main_state_blackholed_traffic_held">Нет связи с сервером — пауза</string>
     <string name="main_state_error">Ошибка</string>
     <string name="main_button_disconnect">Отключить</string>
     <string name="main_empty_profiles">Профилей пока нет.\nНажмите +, чтобы добавить сервер, или значок облака, чтобы добавить подписку.</string>

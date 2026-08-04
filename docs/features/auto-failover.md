@@ -655,13 +655,19 @@ session on every surface (tile → `STATE_INACTIVE`, no Disconnect) while a blac
 much **alive and holding a TUN**. The enum constant is technical because only developers read it;
 **every user-visible string mapped from it is deliberately plain and non-alarming**:
 
-- `main_state_blackholed` — "No server connection"
+- `main_state_blackholed_still_proxying` — "Server is not responding" (`CONTAINED_BY_LIVE_TUNNEL`)
+- `main_state_blackholed_traffic_held` — "No server connection — paused" (`CONTAINED_BY_BLACKHOLE`)
+- `main_state_blackholed` — "No server connection" (defensive fallback only when no line was recorded)
 - `vpn_status_blackholed` — "No server connection — paused to keep you protected"
 - `failover_blackhole_title/body` — "No server connection" / "…your connection is paused on purpose.
   That keeps your real location private instead of quietly going unprotected."
 
+Home and tile resolve BLACKHOLED through `vpnConnectionStateLabelRes(state, LogRepository.blackholedLine)`,
+which is the same recorded answer `giveUpRotationLocked` writes for 1101 — never re-derived from
+`giveUpOutcome`. The two contained outcomes must not share one home/tile string.
+
 No jargon ("blackhole", "traffic blocked") appears in any user-visible string, in either locale. The
-Russian copy carries the same three facts and the same register — do not "improve" it toward the
+Russian copy carries the same facts and the same register — do not "improve" it toward the
 technical wording.
 
 **Widening this enum needs a grep sweep, not a green build.** The two `when` sites over

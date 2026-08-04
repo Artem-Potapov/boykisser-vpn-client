@@ -247,6 +247,8 @@
     <string name="main_state_connected">Connected</string>
     <string name="main_state_paused">Paused</string>
     <string name="main_state_blackholed">No server connection</string>
+    <string name="main_state_blackholed_still_proxying">Server is not responding</string>
+    <string name="main_state_blackholed_traffic_held">No server connection — paused</string>
     <string name="main_state_error">Error</string>
     <string name="main_button_disconnect">Disconnect</string>
     <string name="main_empty_profiles">No profiles yet.\nTap + to add a server, or use the cloud icon to add a subscription.</string>

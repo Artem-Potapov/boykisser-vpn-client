@@ -1,6 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
+import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

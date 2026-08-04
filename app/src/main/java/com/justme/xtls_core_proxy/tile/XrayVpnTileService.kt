@@ -15,14 +15,17 @@ import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
+import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
 import com.justme.xtls_core_proxy.state.ActiveProfileRepository
 import com.justme.xtls_core_proxy.vpn.XrayVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -36,7 +39,11 @@ class XrayVpnTileService : TileService() {
         super.onStartListening()
         listenJob?.cancel()
         listenJob = serviceScope.launch {
-            LogRepository.connectionState.collect { state -> updateTile(state) }
+            combine(
+                LogRepository.connectionState,
+                LogRepository.blackholedLine,
+            ) { state, line -> state to line }
+                .collect { (state, line) -> updateTile(state, line) }
         }
     }
 
@@ -165,17 +172,20 @@ class XrayVpnTileService : TileService() {
         }
     }
 
-    private suspend fun updateTile(state: VpnConnectionState) {
+    private suspend fun updateTile(
+        state: VpnConnectionState,
+        blackholedLine: BlackholedOngoingLine? = null,
+    ) {
         val tile = qsTile ?: return
         val ctx = SupportedLanguage.localize(applicationContext)
         when (state) {
             VpnConnectionState.DISCONNECTED -> {
                 tile.state = Tile.STATE_INACTIVE
-                tile.label = ctx.getString(R.string.main_state_disconnected)
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state))
             }
             VpnConnectionState.CONNECTING -> {
                 tile.state = Tile.STATE_ACTIVE
-                tile.label = ctx.getString(R.string.main_state_connecting)
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state))
             }
             VpnConnectionState.CONNECTED -> {
                 tile.state = Tile.STATE_ACTIVE
@@ -183,19 +193,20 @@ class XrayVpnTileService : TileService() {
             }
             VpnConnectionState.PAUSED -> {
                 tile.state = Tile.STATE_ACTIVE
-                tile.label = ctx.getString(R.string.main_state_paused)
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state))
             }
             VpnConnectionState.BLACKHOLED -> {
                 // ACTIVE, exactly like PAUSED: the service is still running and still owns a TUN,
                 // so the tile must stay a working Stop control. Mapping it to INACTIVE (as ERROR
                 // is) would dispatch ACTION_START on tap, which startVpn no-ops with "VPN already
                 // running" — a dead control in the one state where the user most needs a live one.
+                // Label distinguishes the two contained outcomes via the recorded blackholedLine.
                 tile.state = Tile.STATE_ACTIVE
-                tile.label = ctx.getString(R.string.main_state_blackholed)
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state, blackholedLine))
             }
             VpnConnectionState.ERROR -> {
                 tile.state = Tile.STATE_INACTIVE
-                tile.label = ctx.getString(R.string.main_state_error)
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state))
             }
         }
         // Explicit null clears any subtitle from older builds that wrote state

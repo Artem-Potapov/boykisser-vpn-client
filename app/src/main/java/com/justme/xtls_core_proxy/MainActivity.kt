@@ -87,8 +87,10 @@ import com.justme.xtls_core_proxy.config.JsonFormatter
 import com.justme.xtls_core_proxy.config.ProfileShareLink
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
+import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
 import com.justme.xtls_core_proxy.nametheft.NameTheftDialog
 import com.justme.xtls_core_proxy.nametheft.NameTheftWarning
 import com.justme.xtls_core_proxy.settings.ServerSettingsActivity
@@ -504,6 +506,7 @@ private fun MainScreen(
     val view by viewModel.groupedProfiles.collectAsState()
     val activeId by viewModel.activeProfileId.collectAsState()
     val state by viewModel.connectionState.collectAsState()
+    val blackholedLine by LogRepository.blackholedLine.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
     val pingStates by viewModel.pingStates.collectAsState()
@@ -618,7 +621,7 @@ private fun MainScreen(
                 Text(
                     text = stringResource(
                         R.string.main_state_label,
-                        vpnConnectionStateLabel(state)
+                        vpnConnectionStateLabel(state, blackholedLine)
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -1093,17 +1096,11 @@ private fun PingResultLine(state: PingState) {
 }
 
 @Composable
-private fun vpnConnectionStateLabel(state: VpnConnectionState): String {
-    return stringResource(
-        when (state) {
-            VpnConnectionState.DISCONNECTED -> R.string.main_state_disconnected
-            VpnConnectionState.CONNECTING -> R.string.main_state_connecting
-            VpnConnectionState.CONNECTED -> R.string.main_state_connected
-            VpnConnectionState.PAUSED -> R.string.main_state_paused
-            VpnConnectionState.BLACKHOLED -> R.string.main_state_blackholed
-            VpnConnectionState.ERROR -> R.string.main_state_error
-        }
-    )
+private fun vpnConnectionStateLabel(
+    state: VpnConnectionState,
+    blackholedLine: BlackholedOngoingLine? = null,
+): String {
+    return stringResource(vpnConnectionStateLabelRes(state, blackholedLine))
 }
 
 // BLACKHOLED is grouped with the live states below, not with ERROR: the service is still running

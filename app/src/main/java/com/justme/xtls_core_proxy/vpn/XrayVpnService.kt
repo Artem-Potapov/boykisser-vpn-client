@@ -44,6 +44,7 @@ import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
 import com.justme.xtls_core_proxy.killswitch.ForegroundAppMonitor
 import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
 import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
+import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
 import com.justme.xtls_core_proxy.log.LogPreferences
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
@@ -1571,6 +1572,10 @@ class XrayVpnService : VpnService() {
         // disable branch releases that marker while leaving the state BLACKHOLED, and a repost
         // after that must not fall back to a line describing the other outcome's packet truth.
         blackholedLine = blackholedOngoingLine(outcome)
+        // Same recorded answer the 1101 line uses — publish BEFORE the state so a collector that
+        // reacts to BLACKHOLED already sees the matching line (disable later clears giveUpOutcome
+        // but must not clear this).
+        LogRepository.setBlackholedLine(blackholedLine)
         // State first, then the notifications — same ordering discipline as killTunnel.
         LogRepository.setConnectionState(connectionStateForGiveUp(outcome))
         when (outcome) {
@@ -2353,8 +2358,10 @@ class XrayVpnService : VpnService() {
             unprotectedRetryConsumed = false
             unprotectedEpisodeSinceMs = null
             // The session is over, so no BLACKHOLED line is true any more. This is the field's ONLY
-            // clear site by design — see its declaration.
+            // clear site by design — see its declaration. Mirror onto LogRepository so home/tile
+            // cannot keep showing a contained-outcome string after Disconnect.
             blackholedLine = null
+            LogRepository.setBlackholedLine(null)
             // Every OTHER exit from the rotation gap is a rotation that keeps going; this one ends
             // the session under it. Placed here, above the early return below, so it covers that
             // path too — and it is what covers ALL the stale-session exits, since losing ownership
