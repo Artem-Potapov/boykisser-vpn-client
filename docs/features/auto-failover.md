@@ -868,6 +868,18 @@ Its guard set is complete and each clause is load-bearing:
   no VPN at all. `UNPROTECTED` has no automatic *state* recovery by design; it needs the user action the
   notification and the in-app error both ask for.
 
+**It also empties `rotationAttempts`, and that has a known consequence after a THRASH-CAP give-up:**
+the session gets a full rotation budget back *inside* the window the cap was supposed to bound. The
+cap is a rate limit, and a flapping tunnel produces exactly the healthy probe that resets it — so one
+success is weaker evidence here than after a no-candidate give-up, where the pool really was exhausted.
+It is **accepted, not overlooked**, for three reasons: reaching it early takes a **user action** (a
+give-up stops the monitor, and the only thing that restarts it before the re-arm timer — which clears
+the window itself — is a failover-settings save, the same "explicit try again" reading the disable
+path's own unconditional reset already gets); an exception would need a second marker recording *which*
+give-up reason produced the state, i.e. the extra disarm site whose coupling produced the
+running-but-unconnectable defect on the disable path; and the cost is `maxRotations` extra rotations in
+one window, each **bridged** and each announced — churn, never exposure.
+
 The `CONTAINED_BY_BLACKHOLE` case is closed **structurally**, not by a guard: `SplitTunnelPlanner` puts
 this app inside the tunnel in both modes and `Http204HealthProbe` uses an unprotected
 `HttpURLConnection`, so a probe through an unread fd cannot succeed.

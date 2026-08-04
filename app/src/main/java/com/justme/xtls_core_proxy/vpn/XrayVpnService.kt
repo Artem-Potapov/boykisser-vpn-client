@@ -1551,6 +1551,26 @@ class XrayVpnService : VpnService() {
             giveUpOutcome = null
             unprotectedRetryConsumed = false
             // The episode is demonstrably over, so the sliding thrash window starts clean too.
+            //
+            // KNOWN CONSEQUENCE, accepted rather than overlooked: after a THRASH-CAP give-up this
+            // hands the session a full rotation budget back INSIDE the window the cap was meant to
+            // bound. The cap is a rate limit, and a flapping tunnel produces exactly the healthy
+            // probe that resets it — so one success is weaker evidence here than it is for the
+            // no-candidate give-up, where the pool really was exhausted and a working tunnel really
+            // does end the episode.
+            //
+            // Why it is left this way rather than given an exception:
+            //   * reaching this line early takes a USER ACTION. A give-up stops the monitor, so
+            //     onHealthy cannot fire again until something restarts it, and the only restart
+            //     that arrives before the re-arm timer (which clears the window itself when it
+            //     fires) is a failover-settings save re-emitting on the settings flow. That is the
+            //     same "explicit try again" reading applyFailoverPreferences already gives its own
+            //     unconditional reset on disable;
+            //   * an exception would have to record WHICH give-up reason produced the state — a
+            //     second marker paired with giveUpOutcome, i.e. exactly the extra disarm site whose
+            //     coupling produced the running-but-unconnectable defect on the disable path;
+            //   * the blast radius is maxRotations extra rotations in one window, each bridged by
+            //     an unread TUN and each announced. It is a churn cost, never an exposure one.
             rotationAttempts = emptyList()
             LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
             updateNotification(localizedString(R.string.vpn_status_connected))
