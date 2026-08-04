@@ -579,13 +579,14 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   - `vpn/SessionLifecycleDecision.kt` — every service-side rule is a pure function there
     (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishRotationBridge`,
+    `shouldAbortRotationForMissingBridge`,
     `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
     gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
     `shouldStopServiceOnGiveUp`,
     `blackholedOngoingLine` (which 1101 line a BLACKHOLED session shows — the service RECORDS the
     answer in `blackholedLine` rather than re-deriving it from `giveUpOutcome`, which the disable
     branch clears while keeping the state),
-    `shouldFireFailoverRetry`, `unprotectedRetryAction` (three-valued ATTEMPT/DEFER/STOP_SERVICE;
+    `shouldFireFailoverRetry`, `shouldRestoreUnprotectedRearm`, `unprotectedRetryAction` (three-valued ATTEMPT/DEFER/STOP_SERVICE;
     the retry is spent by an ATTEMPT inside `rotateTunnel`'s reservation, never at schedule time,
     and deferring is bounded so every branch terminates), `shouldRestartForRecovery`,
     `activeProfileIdToRestoreOnRefusedStart`, `shouldReleaseGiveUpOnDisable`,
