@@ -30,13 +30,9 @@ import javax.xml.parsers.DocumentBuilderFactory
  * live tunnel. It proves the constant and the exemption still describe the same host, and that the
  * routing carve-outs still cover it. Do not let it stand in for QA.
  *
- * **Known limitation — it can go stale in an incremental build.** It reads the manifest and the
- * network-security config off the filesystem, which Gradle does not know are inputs to
- * `testDebugUnitTest`. Editing either one alone therefore leaves the task `UP-TO-DATE` and this test
- * simply does not run. (Observed, not theorised: both mutations below reported nothing until
- * `--rerun-tasks` was passed.) CI builds clean, so the guard holds there; locally, verify a change to
- * these files with `--rerun-tasks`. Declaring them as task inputs would fix it properly and is the
- * right follow-up.
+ * The manifest and `network_security_config.xml` are declared as inputs of the unit-test task in
+ * `app/build.gradle.kts`, so editing either one alone invalidates `testDebugUnitTest` (without that
+ * declaration the task stayed `UP-TO-DATE` and this guard silently did not run).
  */
 class HealthProbeSchemeTest {
 

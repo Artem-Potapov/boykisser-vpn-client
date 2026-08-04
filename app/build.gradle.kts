@@ -227,6 +227,14 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+// HealthProbeSchemeTest reads the manifest + network_security_config.xml off the filesystem.
+// Without declaring them as inputs, editing either alone leaves testDebugUnitTest UP-TO-DATE and
+// the guard silently does not run. (Observed: both mutations reported nothing until --rerun-tasks.)
+tasks.withType<Test>().configureEach {
+    inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
+    inputs.file(layout.projectDirectory.file("src/main/res/xml/network_security_config.xml"))
+}
+
 // --- connectedAndroidTest post-run uninstall: OPT-IN -------------------------------------------
 // AGP's connectedAndroidTest UNINSTALLS the app-under-test after the run by default, deleting
 // /data/data/<pkg> (the app's Room DB + SharedPreferences). On a device holding real user data that
