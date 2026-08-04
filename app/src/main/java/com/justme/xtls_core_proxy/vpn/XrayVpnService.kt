@@ -1286,8 +1286,32 @@ class XrayVpnService : VpnService() {
                         // NOT START_REDELIVER_INTENT, though — a redelivered intent carries the
                         // original EXTRA_PROFILE_ID and StartCommandDecision.decide routes it by
                         // that, never through the active profile.
+                        // The OWNERSHIP RE-CHECK is not redundant with the guard around it:
+                        // afterRotationCommitted is a try/catch, which answers "did this throw",
+                        // never "does this coroutine still own the session". This step runs OFF the
+                        // lock, so a stop — or a stop plus a whole new session — can have landed
+                        // since the commit, and this is a write to PROCESS-GLOBAL state that
+                        // outlives the process: resolveActiveAndStart reads exactly this value, so
+                        // a superseded rotation would point the UI, the QS tile and the next
+                        // always-on/boot start at a server the current session is not using. Same
+                        // discipline as every other mutation in this method — re-check under
+                        // `lock`, and do the write under the SAME acquisition so the check cannot
+                        // go stale between the two. setActiveProfileId writes via apply(), so this
+                        // holds no disk I/O under the lock.
                         afterRotationCommitted("recording the new active profile") {
-                            ActiveProfileRepository.setActiveProfileId(this@XrayVpnService, next.id)
+                            synchronized(lock) {
+                                if (isCurrentSessionLocked(session.epoch)) {
+                                    ActiveProfileRepository.setActiveProfileId(
+                                        this@XrayVpnService,
+                                        next.id,
+                                    )
+                                } else {
+                                    LogRepository.append(
+                                        "Failover: superseded rotation is not recording " +
+                                            "${next.name} as the active profile"
+                                    )
+                                }
+                            }
                         }
                         afterRotationCommitted("posting the switched-server notice") {
                             VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)

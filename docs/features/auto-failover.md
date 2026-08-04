@@ -210,6 +210,18 @@ Key properties:
   Guarded **per step**, not as one block: skipping `applyFailoverPreferences` leaves the watchdog dead
   for the rest of the session and skipping the replay silently drops a kill-switch event, so a shared
   guard would let a throw in the trivial first step take both out.
+- **That guard is not an ownership check, and the active-profile write needs one.** The off-lock
+  post-commit steps run after the lock is dropped, so a stop — or a stop plus a whole new session —
+  can land underneath them, and `afterRotationCommitted` only answers "did this throw".
+  `ActiveProfileRepository.setActiveProfileId` is a write to **process-global state that outlives the
+  process**: `resolveActiveAndStart` reads exactly that value, so a superseded rotation writing it
+  would point the UI, the QS tile and the next always-on/boot start at a server the current session is
+  not using. It therefore re-checks `isCurrentSessionLocked` and performs the write **under the same
+  lock acquisition**, like every other mutation in `rotateTunnel`. Its three siblings need no such
+  treatment: `applyFailoverPreferences` and the deferred-kill replay (via `killTunnel`) both re-check
+  the session under `lock` themselves, and `postFailover` (1104) is an auto-cancel informational notice
+  about a switch that genuinely happened — a stale one is cosmetic, not a false claim about the
+  current state.
 - **A committed REVIVE is guarded the same way, for a different consequence.** `reviveTunnel` does
   the same class of post-commit work (publish `CONNECTED`, retract 1103/1105, refresh 1101, restart
   the watchdog, replay a deferred kill) with its own `catch (Throwable) → failRevive` funnel still
