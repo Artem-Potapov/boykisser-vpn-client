@@ -79,4 +79,45 @@ class MainActivityStateTest {
             assertTrue("$state", isActive(profile, 7L, state) == (state in live))
         }
     }
+
+    @Test
+    fun theDisconnectGateIncludesErrorAndEveryLiveState() {
+        // Deliberately NOT the tile Stop / isActive set: ERROR is disconnectable here (an
+        // UNPROTECTED give-up leaves the service running and tells the user to turn the VPN off)
+        // while the tile maps ERROR to INACTIVE/Start. Omitting BLACKHOLED or ERROR here would
+        // hide Disconnect in the states that most need it.
+        for (state in listOf(
+            VpnConnectionState.CONNECTED,
+            VpnConnectionState.CONNECTING,
+            VpnConnectionState.PAUSED,
+            VpnConnectionState.BLACKHOLED,
+            VpnConnectionState.ERROR,
+        )) {
+            assertTrue("$state must show Disconnect", shouldShowDisconnect(state))
+        }
+        assertFalse(shouldShowDisconnect(VpnConnectionState.DISCONNECTED))
+    }
+
+    @Test
+    fun everyStateIsClassifiedForTheDisconnectGate() {
+        val shows = setOf(
+            VpnConnectionState.CONNECTED,
+            VpnConnectionState.CONNECTING,
+            VpnConnectionState.PAUSED,
+            VpnConnectionState.BLACKHOLED,
+            VpnConnectionState.ERROR,
+        )
+        val hides = setOf(
+            VpnConnectionState.DISCONNECTED,
+        )
+        assertTrue(
+            "A VpnConnectionState was added without deciding whether the top-bar Disconnect " +
+                "button shows. Classify it here — this gate includes ERROR on purpose; do not " +
+                "copy the tile Stop set.",
+            (shows + hides).containsAll(VpnConnectionState.entries.toSet()),
+        )
+        for (state in VpnConnectionState.entries) {
+            assertTrue("$state", shouldShowDisconnect(state) == (state in shows))
+        }
+    }
 }

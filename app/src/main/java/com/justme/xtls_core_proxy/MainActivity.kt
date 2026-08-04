@@ -644,12 +644,9 @@ private fun MainScreen(
                 // ForegroundServiceDidNotStartInTimeException — keep stopVpn free of awaits.
                 // The tap also clears the active profile even though the session never connected;
                 // accepted, since the user asked to disconnect.
-                if (state == VpnConnectionState.CONNECTED ||
-                    state == VpnConnectionState.CONNECTING ||
-                    state == VpnConnectionState.PAUSED ||
-                    state == VpnConnectionState.BLACKHOLED ||
-                    state == VpnConnectionState.ERROR
-                ) {
+                // Predicate extracted as [shouldShowDisconnect] so MainActivityStateTest can whole-
+                // enum-sweep it (includes ERROR; do not copy the tile Stop set).
+                if (shouldShowDisconnect(state)) {
                     OutlinedButton(onClick = onDisconnect) {
                         Text(stringResource(R.string.main_button_disconnect))
                     }
@@ -1115,6 +1112,20 @@ internal fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionSta
             state == VpnConnectionState.PAUSED ||
             state == VpnConnectionState.BLACKHOLED)
 }
+
+/**
+ * Whether the top-bar Disconnect button should render.
+ *
+ * Includes [VpnConnectionState.ERROR] on purpose — the tile Stop gate and [isActive] do **not**.
+ * An UNPROTECTED give-up leaves the service running in ERROR while telling the user to turn the
+ * VPN off; this was historically the only surface that could. Do not "simplify" it to the tile set.
+ */
+internal fun shouldShowDisconnect(state: VpnConnectionState): Boolean =
+    state == VpnConnectionState.CONNECTED ||
+        state == VpnConnectionState.CONNECTING ||
+        state == VpnConnectionState.PAUSED ||
+        state == VpnConnectionState.BLACKHOLED ||
+        state == VpnConnectionState.ERROR
 
 /**
  * Copy [text] to the clipboard, flagging the clip sensitive on API 33+ so the system hides the

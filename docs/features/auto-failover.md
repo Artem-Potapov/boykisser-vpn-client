@@ -686,7 +686,7 @@ session live?" and "what connect affordance does it offer?" are two different qu
 | `tile/XrayVpnTileService` render | `BLACKHOLED` → `STATE_ACTIVE`, like `PAUSED` |
 | `state/connectAction` | `BLACKHOLED` → `RECONNECT` (**not** `UNAVAILABLE`) — see [Reconnect](#reconnect-the-affordance-a-give-up-actually-offers) |
 | `MainActivity.isActive` | `BLACKHOLED` is **active** — the row stays highlighted and its menu offers Disconnect, not a connect row |
-| `MainActivity` Disconnect gate | `BLACKHOLED` **and** `ERROR` both show Disconnect |
+| `MainActivity.shouldShowDisconnect` | `BLACKHOLED` **and** `ERROR` both show Disconnect (whole-enum sweep in `MainActivityStateTest`; deliberately wider than the tile Stop set) |
 | `XrayVpnService.repostOngoingNotification` | `BLACKHOLED` restores 1101 only (1105 is `setAutoCancel` — re-posting it would fight a deliberate dismissal), and picks its line from the recorded `blackholedLine`, **never** by re-deriving it from `giveUpOutcome` (see below); `ERROR` restores 1101 **only when** `giveUpOutcome == UNPROTECTED` |
 
 **The BLACKHOLED line is a RECORDED answer, not a re-derived one.** `repostOngoingNotification` used
