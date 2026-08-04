@@ -33,6 +33,7 @@ class SanitizationPresentationTest {
         assertEquals(R.string.san_dns_resolver, findingTitleRes(FindingId.DNS_RESOLVER))
         assertEquals(R.string.san_routing, findingTitleRes(FindingId.ROUTING))
         assertEquals(R.string.san_domain_strategy, findingTitleRes(FindingId.DOMAIN_STRATEGY))
+        assertEquals(R.string.san_health_probe_carveout, findingTitleRes(FindingId.HEALTH_PROBE_CARVEOUT))
     }
 
     @Test

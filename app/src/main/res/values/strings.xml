@@ -142,6 +142,7 @@
     <string name="san_dns_resolver">DNS resolver</string>
     <string name="san_routing">Routing</string>
     <string name="san_domain_strategy">Domain resolution</string>
+    <string name="san_health_probe_carveout">Health-probe carve-out</string>
     <string name="sanitization_cd_back">Back</string>
 
     <!-- DNS settings screen -->

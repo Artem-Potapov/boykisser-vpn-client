@@ -70,7 +70,10 @@ config, or the running VPN session.
 
 Security findings cover the single tun inbound, DoH-only resolver shape, forced app-private log
 posture, port 53 → `dns-out`, and proxy-outbound `ForceIP`. Global findings cover enabled
-fragmentation/Mux.Cool, effective sniffing, MTU, IPv6, resolver, routing, and domain strategy.
+fragmentation/Mux.Cool, effective sniffing, MTU, IPv6, resolver, routing, domain strategy, and the
+health-probe carve-out (a deliberate override of `EXCEPT_COUNTRY` / imported-direct for
+`ConfigBuilder.HEALTH_PROBE_HOST` and `HEALTH_PROBE_IPS`, including the address-list residual when
+sniffing is not forced).
 The forced-log and port-53 findings are derived from the **final JSON structure** (log `access=none`,
 a matching level, and an app-private `error` path; a present port-53 → `dns-out` rule) and report
 `Added` vs `Applied` from that structure — a non-conforming final shape yields `NotApplicable`, never

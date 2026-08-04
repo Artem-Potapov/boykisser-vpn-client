@@ -490,4 +490,53 @@ class ConfigSanitizerTest {
 
         assertEquals("Proxy everything", byId(report, FindingId.ROUTING)?.detail)
     }
+
+    // M-G — the health-probe carve-out overrides EXCEPT_COUNTRY / imported-direct for one host and
+    // those IPs; the diagnostic must surface that real exception to a user-visible setting.
+    @Test
+    fun health_probe_carve_out_is_reported_when_routing_overlay_applies() {
+        val tuning = TuningSettings(
+            routing = RoutingSettings(
+                mode = RoutingMode.EXCEPT_COUNTRY,
+                country = RoutingCountry.RU,
+                bypassLan = true,
+                blockAds = false,
+            ),
+        )
+        val report = ConfigSanitizer.analyze(dirty, log, tuning)
+        val finding = byId(report, FindingId.HEALTH_PROBE_CARVEOUT)
+        assertTrue("carve-out must appear as a finding when routing applies; report=$report", finding != null)
+        assertEquals(Status.Applied, finding!!.status)
+        assertTrue(
+            "detail must name the probe host override; detail=${finding.detail}",
+            finding.detail.contains(ConfigBuilder.HEALTH_PROBE_HOST),
+        )
+        assertTrue(
+            "detail must say the carve-out overrides country-direct / imported-direct; detail=${finding.detail}",
+            finding.detail.contains("overrides", ignoreCase = true),
+        )
+    }
+
+    // Residual: address change + sniffing off can silently neutralize failover — surface it when
+    // the default posture does not force sniffing.
+    @Test
+    fun health_probe_carve_out_surfaces_address_list_residual_when_sniffing_not_forced() {
+        val tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT) // PROXY_ALL, ads off
+        val report = ConfigSanitizer.analyze(dirty, log, tuning)
+        val finding = byId(report, FindingId.HEALTH_PROBE_CARVEOUT)!!
+        assertTrue(
+            "default posture must warn about the address-list residual; detail=${finding.detail}",
+            finding.detail.contains("address", ignoreCase = true) &&
+                finding.detail.contains("sniffing", ignoreCase = true),
+        )
+    }
+
+    @Test
+    fun health_probe_carve_out_omitted_when_routing_overlay_absent() {
+        val report = ConfigSanitizer.analyze(dirty, log, TuningSettings.NONE)
+        assertNull(
+            "no routing overlay → no carve-out emission → no finding",
+            byId(report, FindingId.HEALTH_PROBE_CARVEOUT),
+        )
+    }
 }

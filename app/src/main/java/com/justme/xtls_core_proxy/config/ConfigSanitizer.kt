@@ -227,6 +227,24 @@ object ConfigSanitizer {
             Status.Applied,
             tuning.core.domainStrategy.wire ?: "From config",
         )
+
+        // Health-probe carve-out: real exception to EXCEPT_COUNTRY / imported-direct for one host + IPs.
+        // Delegate presence/target/residual to ConfigBuilder — do not re-parse carve-out shape here.
+        val forceSniffing = tuning.core.sniffing || routingNeedsDomainRules(tuning.routing)
+        ConfigBuilder.healthProbeCarveOutInfo(final, forceSniffing)?.let { info ->
+            val residual = if (info.addressListResidual) {
+                "; residual: stale address list + sniffing off can neutralize failover"
+            } else {
+                ""
+            }
+            findings += Finding(
+                FindingCategory.GLOBAL_SETTING,
+                FindingId.HEALTH_PROBE_CARVEOUT,
+                Status.Applied,
+                "overrides country-direct/imported-direct for ${ConfigBuilder.HEALTH_PROBE_HOST} " +
+                    "and pinned IPs → ${info.targetLabel}$residual",
+            )
+        }
         return findings
     }
 
@@ -406,6 +424,7 @@ enum class FindingId {
     DNS_RESOLVER,
     ROUTING,
     DOMAIN_STRATEGY,
+    HEALTH_PROBE_CARVEOUT,
 }
 
 sealed class Status {

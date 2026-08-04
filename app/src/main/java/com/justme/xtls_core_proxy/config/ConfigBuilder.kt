@@ -749,6 +749,56 @@ object ConfigBuilder {
         return root.toString()
     }
 
+    /**
+     * Read-only description of the health-probe carve-out present in a final runtime config.
+     * Used by [ConfigSanitizer] so it does not re-derive carve-out shape.
+     *
+     * @param targetLabel `outbound:<tag>` or `balancer:<tag>`
+     * @param addressListResidual true when sniffing is not forced — a stale [HEALTH_PROBE_IPS] plus
+     *   sniffing-off can silently neutralize the domain half (the residual documented on
+     *   [healthProbeCarveOutRules]).
+     */
+    data class HealthProbeCarveOutInfo(
+        val targetLabel: String,
+        val addressListResidual: Boolean,
+    )
+
+    /**
+     * Inspects the final routing rules for both carve-out halves. Returns null when absent
+     * (e.g. [TuningSettings.NONE] skipped [applyRouting]).
+     */
+    internal fun healthProbeCarveOutInfo(finalRoot: JSONObject, forceSniffing: Boolean): HealthProbeCarveOutInfo? {
+        val rules = finalRoot.optJSONObject("routing")?.optJSONArray("rules") ?: return null
+        var targetLabel: String? = null
+        var sawDomain = false
+        var sawIp = false
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            val domains = rule.optJSONArray("domain")
+            val ips = rule.optJSONArray("ip")
+            val isDomainHalf = domains != null &&
+                (0 until domains.length()).any { domains.optString(it) == "full:$HEALTH_PROBE_HOST" }
+            val isIpHalf = ips != null &&
+                (0 until ips.length()).any { ips.optString(it) == HEALTH_PROBE_IPS.first() }
+            if (!isDomainHalf && !isIpHalf) continue
+            if (isDomainHalf) sawDomain = true
+            if (isIpHalf) sawIp = true
+            if (targetLabel == null) {
+                val balancer = rule.optString("balancerTag")
+                targetLabel = if (balancer.isNotBlank()) {
+                    "balancer:$balancer"
+                } else {
+                    "outbound:${rule.optString("outboundTag")}"
+                }
+            }
+        }
+        if (!sawDomain || !sawIp || targetLabel == null) return null
+        return HealthProbeCarveOutInfo(
+            targetLabel = targetLabel,
+            addressListResidual = !forceSniffing,
+        )
+    }
+
     private fun fieldRule(key: String, items: List<String>, tag: String): JSONObject =
         JSONObject().put("type", "field").put(key, JSONArray(items)).put("outboundTag", tag)
 
