@@ -168,9 +168,39 @@ object ConfigBuilder {
      *
      * It lives in `config/` because the carve-out owner is `ConfigBuilder`; `failover` and `vpn`
      * import it. A `config -> failover` dependency for one string would be the wrong direction.
+     *
+     * ### The scheme MUST stay `https://` — this is not a style preference
+     *
+     * It was `http://`, and that made the probe **impossible to satisfy on any real device**.
+     * `Http204HealthProbe` dials with [java.net.HttpURLConnection], which is governed by Android's
+     * `NetworkSecurityPolicy`. The app sets `targetSdk = 36`, and declares **no**
+     * `android:usesCleartextTraffic` and **no** `networkSecurityConfig` — and at targetSdk >= 28 the
+     * platform default is cleartext **denied**. So every probe threw
+     * `IOException: Cleartext HTTP traffic to cp.cloudflare.com not permitted`, which `runProbe`
+     * catches and reports as `false`, i.e. "tunnel unhealthy".
+     *
+     * The consequence was not a dead feature but an actively destructive one: on a perfectly healthy
+     * tunnel, every probe failed, consecutive failures tripped rotation, the pool was walked and
+     * exhausted, and a give-up fired — potentially `UNPROTECTED`, which then stops the service.
+     *
+     * No JVM test could see it: they all inject a fake `opener`. `HealthProbeSchemeTest` now pins the
+     * scheme so a revert is a unit-test failure rather than a device-only catastrophe.
+     *
+     * **Fixing it here rather than by exempting cleartext in the manifest is deliberate.** A
+     * `usesCleartextTraffic` flag or a network-security-config exemption would re-open plaintext for
+     * this host app-wide, and it would leave the app emitting a fingerprintable plaintext
+     * captive-portal request on a fixed interval — a poor property for a censorship-circumvention
+     * tool. HTTPS costs a TLS handshake per probe and nothing else: verified by measurement,
+     * `https://cp.cloudflare.com/generate_204` answers **204** both by hostname and by IP with SNI at
+     * every address in [HEALTH_PROBE_IPS], and neither carve-out rule names a port, so both halves
+     * keep matching on 443.
+     *
+     * **This does NOT apply to the Ping Test target** (`state/PingTester.PING_TEST_TARGET`), which is
+     * deliberately `http://` and must stay that way: it is dialled by `MeasureLatency` in the Go
+     * bridge, i.e. by raw native sockets that `NetworkSecurityPolicy` does not govern.
      */
     const val HEALTH_PROBE_HOST = "cp.cloudflare.com"
-    const val HEALTH_PROBE_TARGET_URL = "http://$HEALTH_PROBE_HOST/generate_204"
+    const val HEALTH_PROBE_TARGET_URL = "https://$HEALTH_PROBE_HOST/generate_204"
 
     /**
      * [HEALTH_PROBE_HOST]'s current anycast addresses — the `ip` half of the carve-out (see

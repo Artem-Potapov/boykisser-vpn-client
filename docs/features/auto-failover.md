@@ -26,11 +26,27 @@ tunnel up") does not hold on the path that actually matters, and getting it wron
 dropping the user onto the clear network — the exact failure mode a censorship-circumvention client
 must never have.
 
-## The health probe: a Kotlin HTTP 204 through the live tunnel
+## The health probe: a Kotlin HTTPS 204 through the live tunnel
 
 [`failover/Http204HealthProbe.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/Http204HealthProbe.kt)
-issues a plain `HttpURLConnection` GET against a **fixed** target — `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
+issues an `HttpURLConnection` GET against a **fixed** target — `ConfigBuilder.HEALTH_PROBE_TARGET_URL`
 — and requires HTTP **204**.
+
+**The target must stay `https://`.** `HttpURLConnection` is governed by Android's
+`NetworkSecurityPolicy`; the app is `targetSdk = 36` with no `usesCleartextTraffic` and no
+`networkSecurityConfig`, so cleartext is denied by platform default. While the target was `http://`,
+every probe threw `IOException: Cleartext HTTP traffic ... not permitted`, the probe's catch reported
+`false`, and the watchdog read a **healthy** tunnel as dead — rotating through the whole pool and
+giving up, potentially UNPROTECTED, which stops the service. It was invisible to the unit suite
+because every test injects a fake `opener`; `HealthProbeSchemeTest` now pins the scheme. Fixing it
+here rather than exempting cleartext in the manifest also avoids emitting a fingerprintable plaintext
+captive-portal request on a fixed interval. The move to port 443 is safe because **neither** carve-out
+rule names a port.
+
+**This does not apply to the Ping Test target**, which is deliberately `http://` and validated to
+reject `https://`: it is dialled by `MeasureLatency` in the Go bridge, i.e. raw native sockets that
+`NetworkSecurityPolicy` does not govern. The two targets differ for a real reason — see
+[ping-test.md](ping-test.md).
 
 **It is deliberately NOT `XrayBridge.measureLatency`.** `MeasureLatency` builds a *throwaway*
 `core.Instance` whose sockets are `protect()`'d **out** of the tun by 2A's global dial controller (see

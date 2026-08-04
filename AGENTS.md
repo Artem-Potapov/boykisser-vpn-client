@@ -283,7 +283,11 @@ process-scoped `AutoPingLatch` (an `object` whose atomic consumed bit re-arms on
 `DEFAULT`, so an observer-only wiring would leave failover silently dead on every process-fresh connect
 path — process death, always-on restart, a first-launch tile connect) and then observes
 `FailoverPreferences.state` for the session. While `CONNECTED`, a `TunnelHealthMonitor` probes the
-**live tunnel** (a plain-Kotlin HTTP 204 through the tun — *not* `MeasureLatency`, whose throwaway
+**live tunnel** (a plain-Kotlin **HTTPS** 204 through the tun — `https://` is load-bearing: this path
+uses `HttpURLConnection`, which `NetworkSecurityPolicy` governs, and at `targetSdk = 36` with no
+`usesCleartextTraffic`/`networkSecurityConfig` a cleartext target fails **every** probe, which the
+watchdog answers with a rotation storm over healthy servers. Does NOT apply to the Ping Test target,
+which is `http://` by design because the Go bridge dials it — *not* `MeasureLatency`, whose throwaway
 instance is `protect()`'d out of the tun) and, after N consecutive failures, `rotateTunnel` reserves
 `CONNECTED → ROTATING` and swaps to a sibling from `FailoverPoolResolver`. Rotation is a peer of the
 kill-switch's kill/revive and shares its epoch/lock discipline and its screen receiver. See

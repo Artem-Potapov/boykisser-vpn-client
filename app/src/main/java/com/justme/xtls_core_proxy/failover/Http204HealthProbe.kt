@@ -8,9 +8,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Plain-HTTP 204 probe. Because SplitTunnelPlanner keeps this app INSIDE the tunnel in both split
+ * HTTPS 204 probe. Because SplitTunnelPlanner keeps this app INSIDE the tunnel in both split
  * modes (only protect()'d Xray sockets bypass), this request travels tun -> xray -> proxy ->
  * internet and therefore tests the exact path user traffic takes.
+ *
+ * **The `https` is load-bearing, not cosmetic.** This class dials with [HttpURLConnection], which
+ * Android's `NetworkSecurityPolicy` governs. The app is `targetSdk = 36` and declares no
+ * `usesCleartextTraffic` and no `networkSecurityConfig`, so cleartext is denied by platform default
+ * — a `http://` target made [runProbe] throw `IOException: Cleartext HTTP traffic ... not permitted`
+ * on EVERY call, which the catch below turns into "unhealthy" and the watchdog answers with a
+ * rotation storm and a give-up over healthy servers. See `ConfigBuilder.HEALTH_PROBE_TARGET_URL` and
+ * `HealthProbeSchemeTest`. Note this does NOT generalise to the Ping Test target, which is dialled by
+ * the Go bridge rather than by this stack.
  *
  * **That claim only holds because the routing table is made to honour it.** Reaching the tun is not
  * enough — Xray still decides which outbound carries the request, and several rules would hand the
