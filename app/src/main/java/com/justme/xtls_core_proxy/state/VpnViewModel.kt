@@ -348,8 +348,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearError() {
-        _error.value = null
-        errorRetention.onErrorCleared()
+        clearVpnError(clearBanner = { _error.value = null }, retention = errorRetention)
     }
 
     fun addProfile(name: String, config: String) {

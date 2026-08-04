@@ -2,6 +2,7 @@ package com.justme.xtls_core_proxy.state
 
 import com.justme.xtls_core_proxy.R
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,10 +10,11 @@ import org.junit.Test
  * Pure JVM tests for the rule that decides whether a transition to
  * `VpnConnectionState.CONNECTING` wipes the message in `VpnViewModel.error`.
  *
- * The `error` banner has no dismiss control and no timeout — `clearError()` has no callers — so that
- * transition is the ONLY thing that ever clears it. That made it wipe the one class of message it
- * must not: a **refusal**, which explains why the request the user just made did nothing. The
- * winning request's own `CONNECTING` landed milliseconds later and erased the explanation.
+ * The `error` banner has no dismiss control and no timeout — `clearError()` has no production
+ * callers yet — so that transition is the ONLY thing that ever clears it today. That made it wipe
+ * the one class of message it must not: a **refusal**, which explains why the request the user just
+ * made did nothing. The winning request's own `CONNECTING` landed milliseconds later and erased the
+ * explanation.
  */
 class ConnectErrorRetentionTest {
 
@@ -67,12 +69,18 @@ class ConnectErrorRetentionTest {
 
     @Test
     fun clearingTheMessageRevokesTheReprieve() {
-        // Keeps the invariant "the reprieve belongs to the message in _error" true when the message
-        // is taken away by clearError() rather than replaced.
+        // Exercises the REAL clearError wiring ([clearVpnError]), not onErrorCleared alone.
+        // MUTATION-VERIFIED: dropping retention.onErrorCleared() from clearVpnError leaves the
+        // refusal reprieve armed, so onConnectingTransition() returns false and this fails.
         val retention = ConnectErrorRetention()
+        var banner: String? = "refusal on screen"
         retention.onErrorShown(R.string.connect_request_superseded)
-        retention.onErrorCleared()
-        assertTrue(retention.onConnectingTransition())
+        clearVpnError(clearBanner = { banner = null }, retention = retention)
+        assertNull("clearError must empty the banner", banner)
+        assertTrue(
+            "clearError must revoke the reprieve, or the next CONNECTING keeps a ghost refusal",
+            retention.onConnectingTransition(),
+        )
     }
 
     @Test

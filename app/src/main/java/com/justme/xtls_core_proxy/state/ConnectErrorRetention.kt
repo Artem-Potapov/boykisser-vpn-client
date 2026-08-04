@@ -4,15 +4,33 @@ import androidx.annotation.StringRes
 import com.justme.xtls_core_proxy.R
 
 /**
+ * The body of [VpnViewModel.clearError]: empty the banner and revoke any refusal reprieve in one
+ * step. Kept as a top-level so the wiring is JVM-testable — a test that only calls
+ * [ConnectErrorRetention.onErrorCleared] would stay green if [VpnViewModel.clearError] dropped that
+ * half.
+ *
+ * [VpnViewModel.clearError] currently has no production callers (the banner has no dismiss
+ * affordance); this exists so a future dismiss path can call through without inventing a second
+ * clear sequence. Until then, the `CONNECTING` auto-clear remains the only live clear path.
+ */
+internal fun clearVpnError(
+    clearBanner: () -> Unit,
+    retention: ConnectErrorRetention,
+) {
+    clearBanner()
+    retention.onErrorCleared()
+}
+
+/**
  * Decides whether a transition to [com.justme.xtls_core_proxy.log.VpnConnectionState.CONNECTING]
  * clears the message in `VpnViewModel.error`.
  *
  * ### Why the auto-clear exists, and must stay
- * `error` has **no dismiss control and no timeout** — `VpnViewModel.clearError()` has no callers —
- * so the `CONNECTING` transition is the only thing that ever clears the banner. It is keyed on the
- * state rather than on `VpnViewModel.connect()` because the QS tile starts the VPN by dispatching
- * `ACTION_START` straight to the service, never through `connect()`; clearing inside `connect()`
- * alone missed every tile-initiated start. Do not move it back.
+ * `error` has **no dismiss control and no timeout** — [VpnViewModel.clearError] has no production
+ * callers yet — so the `CONNECTING` transition is the only thing that ever clears the banner. It is
+ * keyed on the state rather than on `VpnViewModel.connect()` because the QS tile starts the VPN by
+ * dispatching `ACTION_START` straight to the service, never through `connect()`; clearing inside
+ * `connect()` alone missed every tile-initiated start. Do not move it back.
  *
  * ### What it used to get wrong
  * It cleared **every** message, including a **refusal** — the message that explains why the request
