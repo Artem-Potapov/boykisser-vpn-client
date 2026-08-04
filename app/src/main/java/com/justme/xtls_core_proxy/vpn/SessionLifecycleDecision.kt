@@ -241,19 +241,21 @@ internal enum class GiveUpContainment {
  * stranding the bridge fd and leaving the process holding two VPN interfaces, with no compile-time
  * or runtime signal. An exhaustive `when` over this enum makes that ordering unrepresentable.
  *
- * [hasTunnel] wins outright, as it does in [classifyGiveUpOutcome]: a live fd is already containing
- * traffic and both other arms would overwrite the field holding it.
+ * [hasTunnel] wins outright: an fd already in `tunInterface` (live proxy OR unread containment) is
+ * already containing traffic and both other arms would overwrite the field holding it. Whether that
+ * fd is still proxying is [classifyGiveUpOutcome]'s job via [TunInterfaceKind], not this one's.
  *
  * `CONNECTED` only, for the reason the blackhole predicate always had: `PAUSED` is the kill-switch's
  * deliberate no-tunnel state and its compliance contract is "no tunnel must exist", so ADOPTING one
  * there breaks it exactly as surely as building one would. Every other state has a different owner
  * mid-transition who will establish (or tear down) itself.
  *
- * Note what this does NOT decide: whether the containment succeeded. Both acting arms report that
- * back to [classifyGiveUpOutcome] as `blackholeEstablished`, and an adopted bridge is honestly a
- * blackhole — same builder, same captured apps, no protector, no Xray — so it classifies
- * `CONTAINED_BY_BLACKHOLE`, never `CONTAINED_BY_LIVE_TUNNEL`. That distinction only survives because
- * the caller reads `hasTunnel` BEFORE the adoption, not after.
+ * Note what this does NOT decide: whether the containment succeeded, or which give-up outcome to
+ * report. Both acting arms report success back to [classifyGiveUpOutcome] as `blackholeEstablished`,
+ * and an adopted bridge is honestly a blackhole — same builder, same captured apps, no protector, no
+ * Xray. That distinction only survives because the caller captures [TunInterfaceKind] BEFORE the
+ * adoption (and keeps the kind honest as UNREAD_CONTAINMENT after writing the fd into
+ * `tunInterface`), not after a bare `!= null` read.
  */
 internal fun containmentForGiveUp(
     hasTunnel: Boolean,
@@ -316,19 +318,43 @@ internal enum class FailoverGiveUpOutcome {
 }
 
 /**
- * Classifies a give-up from the two facts the service knows: whether a TUN existed before the
- * attempt, and whether establishing a blackhole succeeded.
+ * What [com.justme.xtls_core_proxy.vpn.XrayVpnService]'s `tunInterface` currently holds — not merely
+ * whether an fd exists. A blackhole give-up (or an adopted rotation bridge) writes an unread fd into
+ * that field; treating "fd present" as "still proxying" is the across-give-ups misclassification.
+ */
+internal enum class TunInterfaceKind {
+    /** No fd in `tunInterface`. */
+    NONE,
+
+    /** Live, still-proxying tunnel (protector + Xray behind the fd). */
+    LIVE_PROXY,
+
+    /** Unread containment fd — give-up blackhole or adopted rotation bridge. */
+    UNREAD_CONTAINMENT,
+}
+
+/**
+ * Classifies a give-up from the kind of TUN held *before* the containment step, and whether a
+ * blackhole (or bridge adoption) then succeeded.
  *
- * [hadTunnel] wins outright — if an fd was already owned we never tried to blackhole, so
- * [blackholeEstablished] carries no information in that case.
+ * [TunInterfaceKind.LIVE_PROXY] and [TunInterfaceKind.UNREAD_CONTAINMENT] both win outright — an fd
+ * is already containing traffic, so [blackholeEstablished] carries no information in those cases.
+ * They must not share one outcome: unread containment is drop-only, never "still proxying".
+ *
+ * Within one give-up, [heldKind] is captured before adoption/establish writes the unread fd into
+ * `tunInterface`. Across give-ups, the service must keep [TunInterfaceKind] honest after that write
+ * — a boolean `tunInterface != null` is not enough.
  */
 internal fun classifyGiveUpOutcome(
-    hadTunnel: Boolean,
+    heldKind: TunInterfaceKind,
     blackholeEstablished: Boolean,
-): FailoverGiveUpOutcome = when {
-    hadTunnel -> FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL
-    blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
-    else -> FailoverGiveUpOutcome.UNPROTECTED
+): FailoverGiveUpOutcome = when (heldKind) {
+    TunInterfaceKind.LIVE_PROXY -> FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL
+    TunInterfaceKind.UNREAD_CONTAINMENT -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
+    TunInterfaceKind.NONE -> when {
+        blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
+        else -> FailoverGiveUpOutcome.UNPROTECTED
+    }
 }
 
 /**
@@ -498,7 +524,8 @@ internal fun shouldFireFailoverRetry(
  *   outcome turns it into a real `instance.Close()` plus an fd close on the main thread. **That is
  *   RISK-1**, documented in `AGENTS.md` and in `docs/features/auto-failover.md`. It is also why the
  *   sibling rule holds: never add anything that awaits to `stopVpn`.
- * - **`CONTAINED_BY_BLACKHOLE` holds no running core** — it is classified with `hadTunnel == false`,
+ * - **`CONTAINED_BY_BLACKHOLE` holds no running core** — it is classified with
+ *   [TunInterfaceKind.NONE] (or already-[TunInterfaceKind.UNREAD_CONTAINMENT] on a later give-up),
  *   i.e. after `tearDownTunnelLocked()` has already called `stopXray()`, and the blackhole builder
  *   starts none. RISK-1 therefore does not apply to it. It is excluded for the *other* reason: it
  *   **still holds a TUN, so there is nothing for a restart to rescue** — plus the general one above

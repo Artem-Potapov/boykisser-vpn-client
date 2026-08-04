@@ -83,17 +83,24 @@ class XrayVpnService : VpnService() {
 
     private val lock = Any()
     private var tunInterface: ParcelFileDescriptor? = null
+    /**
+     * What [tunInterface] currently holds. Must stay in lock-step with every write/clear of that
+     * field: a blackhole or adopted bridge is an unread fd, not a live proxy, and
+     * [classifyGiveUpOutcome] needs the distinction.
+     */
+    private var tunInterfaceKind: TunInterfaceKind = TunInterfaceKind.NONE
 
     /**
      * The rotation BRIDGE fd: an unread TUN held only across the window in which a failover
      * rotation owns no interface. Guarded by `lock`.
      *
      * A SEPARATE FIELD ON PURPOSE — this is the whole reason the bridge is not simply written into
-     * [tunInterface]. That field does not mean "an fd exists"; it means **the live, still-proxying
-     * tunnel**, and three readers depend on exactly that:
-     *  - `giveUpRotationLocked` reads it as `hadTunnel`, which `classifyGiveUpOutcome` turns into
-     *    CONTAINED_BY_LIVE_TUNNEL — so a bridge stored there would tell a user their traffic is
-     *    still being proxied at a moment when no Xray is running at all;
+     * [tunInterface]. That field's *presence* is overloaded (live proxy OR unread containment after
+     * a give-up); the bridge must not join that overload mid-rotation, or a give-up in the gap
+     * would inherit CONTAINED_BY_LIVE_TUNNEL copy before adoption can re-kind it. See
+     * [tunInterfaceKind] and the tunnel-role enum refactor recommendation in the Wave A report.
+     *
+     * Other readers that still treat null specially:
      *  - `clearGiveUpStateOnRecovery` refuses to clear a give-up while it is null, because a probe
      *    with no tunnel travels the clear network and succeeds for the wrong reason;
      *  - `bringUpTunnel` and the blackhole builder both `check` it is null before `establish()`.
@@ -634,6 +641,7 @@ class XrayVpnService : VpnService() {
                     ?: throw IllegalStateException("VpnService.establish() returned null")
 
                 tunInterface = pfd
+                tunInterfaceKind = TunInterfaceKind.LIVE_PROXY
                 val fd = pfd.fd
                 LogRepository.append("TUN established with fd=$fd")
                 LogRepository.append("Using geofiles from ${geoAssetDir.absolutePath}")
@@ -660,6 +668,7 @@ class XrayVpnService : VpnService() {
             LogRepository.append("TUN close warning: ${error.message}")
         } finally {
             tunInterface = null
+            tunInterfaceKind = TunInterfaceKind.NONE
         }
     }
 
@@ -1342,10 +1351,9 @@ class XrayVpnService : VpnService() {
                                 // nothing to record for.
                                 episodeFailedIds = episodeFailedIds + next.id
                                 // bringUpTunnel can fail AFTER establish() (e.g. startXray threw),
-                                // leaving a real fd with an indeterminate Xray behind it. Drop it,
-                                // so "tunInterface != null" keeps its single meaning downstream:
-                                // the live, still-proxying tunnel. Without this, a give-up would
-                                // mistake that half-built fd for a working tunnel.
+                                // leaving a real fd with an indeterminate Xray behind it. Drop it
+                                // and clear tunInterfaceKind, so a give-up cannot mistake that
+                                // half-built fd for either a working tunnel or an unread containment.
                                 tearDownTunnelLocked()
                                 // Re-open the bridge before handing control to the next candidate.
                                 // Idempotent by shouldEstablishRotationBridge, and BOTH answers are
@@ -1455,17 +1463,15 @@ class XrayVpnService : VpnService() {
             return
         }
 
-        // hadTunnel is captured BEFORE the containment step, and that ordering is load-bearing
-        // twice over. Thanks to the teardown in the bring-up-failure arm, a non-null fd here can
-        // only be the live, still-proxying tunnel (the no-candidate and thrash-cap give-ups both run
-        // before any teardown) — never a half-built one whose Xray state is unknown. And because
-        // ADOPT_ROTATION_BRIDGE writes tunInterface, reading it AFTER the step would make a give-up
-        // that landed in the rotation gap classify CONTAINED_BY_LIVE_TUNNEL: "your traffic is still
-        // being proxied", said over an unread fd with no Xray behind it.
-        val hadTunnel = tunInterface != null
+        // heldKind is captured BEFORE the containment step. Within one give-up that ordering keeps
+        // an adopted bridge classified CONTAINED_BY_BLACKHOLE (adoption writes tunInterface and
+        // retags the kind). Across give-ups the kind must stay honest: after a blackhole/adopt,
+        // tunInterface holds an unread fd tagged UNREAD_CONTAINMENT — a boolean `!= null` would
+        // mislabel the next give-up as CONTAINED_BY_LIVE_TUNNEL.
+        val heldKind = tunInterfaceKind
         val blackholeEstablished = when (
             containmentForGiveUp(
-                hasTunnel = hadTunnel,
+                hasTunnel = heldKind != TunInterfaceKind.NONE,
                 hasRotationBridge = rotationBridgeInterface != null,
                 tunnelState = sessionTunnelState,
             )
@@ -1478,7 +1484,7 @@ class XrayVpnService : VpnService() {
             GiveUpContainment.NONE -> false
         }
 
-        val outcome = classifyGiveUpOutcome(hadTunnel, blackholeEstablished)
+        val outcome = classifyGiveUpOutcome(heldKind, blackholeEstablished)
 
         if (shouldStopServiceOnGiveUp(outcome, unprotectedRetryConsumed)) {
             // The one automatic recovery attempt has been spent and traffic is STILL not contained.
@@ -1876,6 +1882,7 @@ class XrayVpnService : VpnService() {
     private fun establishBlackholeTunnelLocked(): Boolean {
         val pfd = establishUnreadTunnelLocked("blackhole") ?: return false
         tunInterface = pfd
+        tunInterfaceKind = TunInterfaceKind.UNREAD_CONTAINMENT
         return true
     }
 
@@ -1896,8 +1903,9 @@ class XrayVpnService : VpnService() {
      * Hands the bridge to the give-up funnel: the fd it is already holding is byte-for-byte the
      * blackhole a give-up would build, so building a second one would strand this one.
      *
-     * Moves the fd into [tunInterface] and returns whether traffic is contained. The caller reads
-     * `hadTunnel` BEFORE calling this — that ordering is what keeps the adopted bridge classified
+     * Moves the fd into [tunInterface] as [TunInterfaceKind.UNREAD_CONTAINMENT] and returns whether
+     * traffic is contained. The caller reads [tunInterfaceKind] BEFORE calling this — that ordering
+     * (plus keeping the kind honest after this write) is what keeps the adopted bridge classified
      * `CONTAINED_BY_BLACKHOLE` instead of inheriting the live tunnel's "still proxying" copy.
      *
      * Caller must hold `lock`, and must have checked [containmentForGiveUp].
@@ -1906,6 +1914,7 @@ class XrayVpnService : VpnService() {
         val pfd = rotationBridgeInterface ?: return false
         rotationBridgeInterface = null
         tunInterface = pfd
+        tunInterfaceKind = TunInterfaceKind.UNREAD_CONTAINMENT
         LogRepository.append("Failover: give-up adopted the rotation bridge (fd=${pfd.fd})")
         return true
     }

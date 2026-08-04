@@ -592,8 +592,9 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     - `CONTAINED_BY_LIVE_TUNNEL` holds a **running Xray core**, so that path would turn `stopVpn`'s
       main-thread no-op into a real `instance.Close()`. This is the RISK-1 hazard.
     - `CONTAINED_BY_BLACKHOLE` does **not** hold a running core (it is classified with
-      `hadTunnel == false`, i.e. after `tearDownTunnelLocked()` already called `stopXray()`, and the
-      blackhole builder starts none). It is excluded for the reason in the function's own KDoc: it
+      `TunInterfaceKind.NONE` / already-`UNREAD_CONTAINMENT`, i.e. after `tearDownTunnelLocked()`
+      already called `stopXray()`, and the blackhole builder starts none). It is excluded for the
+      reason in the function's own KDoc: it
       **still holds a TUN, so there is nothing for a restart to rescue** — plus the general one that
       keeps "start while running" idempotent for the tile, `START_REDELIVER_INTENT` recovery and
       stray intents.

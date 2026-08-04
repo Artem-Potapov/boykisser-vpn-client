@@ -253,8 +253,8 @@ Key properties:
   `CONNECTED`, retry → `CONNECTING` again, give-up → `BLACKHOLED`/`ERROR`.
 - **A failed candidate's fd is torn down.** `bringUpTunnel` can fail *after* `establish()` (e.g.
   `startXray` threw), leaving a real fd with an indeterminate Xray behind it. The failure arm drops it
-  so `tunInterface != null` keeps its single downstream meaning: *the live, still-proxying tunnel*.
-  Without this, a give-up would mistake that half-built fd for a working tunnel.
+  and clears `tunInterfaceKind`, so a give-up cannot mistake that half-built fd for either a working
+  tunnel or an unread containment.
 - **`currentProfileId` is rolled back on failure.** It is what `reviveTunnel` brings up; leaving it on
   a server just proved dead would make a kill-switch revive fail and `failRevive` → `stopVpn` take the
   whole tunnel down. It also keeps the field in step with `ActiveProfileRepository`, which only
@@ -332,20 +332,29 @@ instead of briefly leaking.
 already held. Scope is **rotation only** — an initial connect has no prior tunnel to bridge from, and
 `reviveTunnel` starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
 
-### `tunInterface` keeps its single meaning — the bridge is its own field
+### `tunInterface` holds either a live proxy or unread containment — kind is explicit
 
-The bridge lives in `rotationBridgeInterface`, **never** in `tunInterface`. That is not tidiness; it
-is the whole reason this fix is not worse than the bug. `tunInterface != null` does not mean "an fd
-exists", it means **the live, still-proxying tunnel**, and three readers depend on exactly that:
+The bridge lives in `rotationBridgeInterface`, **never** in `tunInterface` during the rotation gap.
+That is still load-bearing: mid-rotation the bridge must not join `tunInterface`'s overloaded meaning
+before a give-up can adopt and re-kind it.
 
-| Reader | What it does with `tunInterface` | What a bridge stored there would cause |
+`tunInterface != null` alone is **not** "still proxying". After a blackhole give-up or bridge adoption,
+that field holds an **unread** fd. `tunInterfaceKind` (`NONE` / `LIVE_PROXY` / `UNREAD_CONTAINMENT`)
+tracks which, and `classifyGiveUpOutcome(heldKind, …)` keys off the kind — not a boolean presence
+check. Without the kind, a **second** give-up in the same session (monitor rebuild over a blackhole,
+or `failRotation` after a post-settlement throw) would post `vpn_status_no_response` over a drop-only
+fd.
+
+| Reader | What it does | What a bare `!= null` would cause after a blackhole |
 |---|---|---|
-| `giveUpRotationLocked` (`hadTunnel`) | feeds `classifyGiveUpOutcome` | `CONTAINED_BY_LIVE_TUNNEL` — "your traffic is still being proxied", said over an unread fd with no Xray behind it |
-| `clearGiveUpStateOnRecovery` | refuses to clear a give-up while it is null, because a probe with no tunnel travels the clear network and succeeds for the wrong reason | a stale give-up cleared over no tunnel |
-| `bringUpTunnel` / the unread-TUN builder | `check(… == null)` before `establish()` | a bring-up refused by its own precondition |
+| `giveUpRotationLocked` (`heldKind`) | feeds `classifyGiveUpOutcome` | `CONTAINED_BY_LIVE_TUNNEL` over an unread fd |
+| `clearGiveUpStateOnRecovery` | refuses to clear while null (clear-network probe) | unchanged — still presence-based, and correct: a blackhole probe cannot succeed |
+| `bringUpTunnel` / the unread-TUN builder | `check(… == null)` before `establish()` | unchanged |
 
-That first row is this branch's cardinal failure shape — one outcome inheriting another's meaning —
-reintroduced by the fix for it. Hence the separate identity.
+A fuller **tunnel-role enum** that also folds `rotationBridgeInterface` into one field
+(`LIVE_PROXY` / `UNREAD_BRIDGE` / `UNREAD_BLACKHOLE` / `NONE`) remains the recommended follow-up —
+see the Wave A report — but the kind on `tunInterface` closes the misclassification without that
+wider refactor.
 
 ### A give-up in the gap ADOPTS the bridge
 
@@ -363,16 +372,12 @@ adopting a bridge into `PAUSED` would break the kill-switch's "no tunnel must ex
 as surely as building one would.
 
 The outcome is `CONTAINED_BY_BLACKHOLE`, and it is reached **honestly, not by coincidence**: an
-adopted bridge is byte-for-byte the blackhole the give-up would have built. It stays honest only
-because `giveUpRotationLocked` reads `hadTunnel` **before** the containment step — adoption writes
-`tunInterface`, so reading it after would classify the same give-up `CONTAINED_BY_LIVE_TUNNEL`.
-`SessionLifecycleDecisionTest.adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel` pins the
-*pure* composition — that `containmentForGiveUp(false, true, CONNECTED)` fed to
-`classifyGiveUpOutcome` yields `CONTAINED_BY_BLACKHOLE`. **It does not pin the read ordering**, which
-is the actual hazard: it hard-codes `hasTunnel = false`, so swapping the two lines in
-`giveUpRotationLocked` leaves the suite green. That ordering is not testable from the JVM — the
-`hadTunnel` read lives in a method of a service that cannot be instantiated there. QA Test 23b is the
-check, and its FAIL criterion names exactly this inversion.
+adopted bridge is byte-for-byte the blackhole the give-up would have built. It stays honest because
+`giveUpRotationLocked` captures `tunInterfaceKind` **before** the containment step and retags it
+`UNREAD_CONTAINMENT` on adoption — so a later give-up over the same fd cannot inherit live-tunnel
+copy either. `SessionLifecycleDecisionTest.adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`
+pins the *within-one-give-up* composition; `giveUpOverAnExistingUnreadContainment_staysBlackhole_neverLiveTunnel`
+pins the *across-give-ups* case.
 
 ### Every exit releases or adopts the bridge
 
@@ -613,16 +618,17 @@ crash.
 
 ### The three outcomes
 
-`classifyGiveUpOutcome(hadTunnel, blackholeEstablished)` (pure, in `SessionLifecycleDecision.kt`).
-`hadTunnel` wins outright — if an fd was already owned we never tried to contain anything, so
-`blackholeEstablished` carries no information in that case. It is read **before** the containment
-step, which is what keeps an adopted rotation bridge classified `CONTAINED_BY_BLACKHOLE` instead of
-inheriting the live tunnel's copy.
+`classifyGiveUpOutcome(heldKind, blackholeEstablished)` (pure, in `SessionLifecycleDecision.kt`).
+`LIVE_PROXY` and `UNREAD_CONTAINMENT` both win outright — an fd is already containing traffic, so
+`blackholeEstablished` carries no information in those cases — but they must not share one outcome:
+unread containment is drop-only. `heldKind` is captured **before** the containment step within one
+give-up, and the service keeps `tunInterfaceKind` honest after blackhole/adopt writes so a later
+give-up cannot misread the same fd as still proxying.
 
 | Outcome | Physical situation | Connection state | Ongoing line (1101) | Alert (1105) | Stops the service? |
 |---|---|---|---|---|---|
 | `CONTAINED_BY_LIVE_TUNNEL` | The current server's tunnel is **still up and still proxying**; there was simply nowhere to rotate to (no-candidate / thrash-cap, both of which run before any teardown) | `BLACKHOLED` | `vpn_status_no_response` | `postFailoverNoResponse` | never |
-| `CONTAINED_BY_BLACKHOLE` | No tunnel existed; a blackhole was established. Traffic is deliberately dropped | `BLACKHOLED` | `vpn_status_blackholed` | `postFailoverBlackholed` | never |
+| `CONTAINED_BY_BLACKHOLE` | No live proxy; a blackhole was established or an unread containment fd was already held. Traffic is deliberately dropped | `BLACKHOLED` | `vpn_status_blackholed` | `postFailoverBlackholed` | never |
 | `UNPROTECTED` | No tunnel **and** the blackhole could not be established. The user **is** on the clear network | `ERROR` + `LogRepository.emitError` | `vpn_status_unprotected` | `postFailoverUnprotected` | on the **second** consecutive one (see below) |
 
 **These must never share one message.** An earlier revision fired the blackhole copy unconditionally,
@@ -905,8 +911,9 @@ on, and widening this predicate deadlocks a VPN service on the main thread:
 - `CONTAINED_BY_LIVE_TUNNEL` holds a **running Xray core**, so admitting it turns the main-thread
   `stopVpn` below into a real `instance.Close()`. **That is RISK 1**, and it is the reason the
   companion rule — never add anything that awaits to `stopVpn` — has to hold too.
-- `CONTAINED_BY_BLACKHOLE` holds **no running core**: it is classified with `hadTunnel == false`,
-  i.e. after `tearDownTunnelLocked()` already called `stopXray()`, and the blackhole builder starts
+- `CONTAINED_BY_BLACKHOLE` holds **no running core**: it is classified with
+  `TunInterfaceKind.NONE` (or already-`UNREAD_CONTAINMENT` on a later give-up), i.e. after
+  `tearDownTunnelLocked()` already called `stopXray()`, and the blackhole builder starts
   none. RISK 1 does not apply to it. It is excluded because it **still holds a TUN, so there is
   nothing for a restart to rescue**, plus the general idempotence reason above.
 

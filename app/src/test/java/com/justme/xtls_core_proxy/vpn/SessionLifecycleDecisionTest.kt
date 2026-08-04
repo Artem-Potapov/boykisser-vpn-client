@@ -303,14 +303,12 @@ class SessionLifecycleDecisionTest {
 
     @Test
     fun adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel() {
-        // THE hazard of the rotation bridge, composed exactly as giveUpRotationLocked composes it:
-        // `hasTunnel` is read BEFORE the containment step, so an adopted bridge reaches
-        // classifyGiveUpOutcome as `hadTunnel = false, blackholeEstablished = true`. Read it after
-        // the adoption instead and the give-up would report CONTAINED_BY_LIVE_TUNNEL — telling the
-        // user their traffic is still being proxied when no Xray is running at all.
-        val hasTunnel = false
+        // Within-one-give-up hazard: `heldKind` is read BEFORE the containment step, so an adopted
+        // bridge reaches classifyGiveUpOutcome as NONE + blackholeEstablished. Reading the fd after
+        // adoption without a kind would report CONTAINED_BY_LIVE_TUNNEL over an unread fd.
+        val heldKind = TunInterfaceKind.NONE
         val containment = containmentForGiveUp(
-            hasTunnel = hasTunnel,
+            hasTunnel = heldKind != TunInterfaceKind.NONE,
             hasRotationBridge = true,
             tunnelState = SessionTunnelState.CONNECTED,
         )
@@ -321,7 +319,7 @@ class SessionLifecycleDecisionTest {
         }
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(hadTunnel = hasTunnel, blackholeEstablished = contained)
+            classifyGiveUpOutcome(heldKind = heldKind, blackholeEstablished = contained)
         )
     }
 
@@ -334,12 +332,18 @@ class SessionLifecycleDecisionTest {
         // simply false.
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
-            classifyGiveUpOutcome(hadTunnel = true, blackholeEstablished = false)
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.LIVE_PROXY,
+                blackholeEstablished = false,
+            )
         )
         assertEquals(
             "a live tunnel wins regardless of what the blackhole attempt would have said",
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
-            classifyGiveUpOutcome(hadTunnel = true, blackholeEstablished = true)
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.LIVE_PROXY,
+                blackholeEstablished = true,
+            )
         )
     }
 
@@ -347,7 +351,10 @@ class SessionLifecycleDecisionTest {
     fun giveUpWithNoTunnel_andASuccessfulBlackhole_isContained() {
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(hadTunnel = false, blackholeEstablished = true)
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.NONE,
+                blackholeEstablished = true,
+            )
         )
     }
 
@@ -357,7 +364,32 @@ class SessionLifecycleDecisionTest {
         // with the reassuring "traffic is blocked on purpose" copy.
         assertEquals(
             FailoverGiveUpOutcome.UNPROTECTED,
-            classifyGiveUpOutcome(hadTunnel = false, blackholeEstablished = false)
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.NONE,
+                blackholeEstablished = false,
+            )
+        )
+    }
+
+    @Test
+    fun giveUpOverAnExistingUnreadContainment_staysBlackhole_neverLiveTunnel() {
+        // Across-give-ups hazard: after a blackhole (or an adopted bridge) lands in tunInterface,
+        // a second give-up in the same session must not read "fd present" as "still proxying".
+        // That lie posts vpn_status_no_response over a drop-only fd.
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.UNREAD_CONTAINMENT,
+                blackholeEstablished = false,
+            )
+        )
+        assertEquals(
+            "already-held unread containment wins even if a blackhole attempt flag is true",
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(
+                heldKind = TunInterfaceKind.UNREAD_CONTAINMENT,
+                blackholeEstablished = true,
+            )
         )
     }
 
