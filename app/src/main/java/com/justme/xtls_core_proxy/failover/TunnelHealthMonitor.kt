@@ -15,6 +15,28 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
+ * Atomically installs [candidate] into [slot] when the slot is empty and [stillLive] still holds.
+ * Returns true when [candidate] is the live occupant. Returns false when the caller must cancel
+ * [candidate] — another install won the slot, or [stillLive] flipped false under us (the
+ * `stop()`/`resumePolling()` race that used to leave an orphaned poll loop).
+ */
+internal fun tryInstallJob(
+    slot: AtomicReference<Job?>,
+    stillLive: () -> Boolean,
+    candidate: Job,
+): Boolean {
+    if (!stillLive()) return false
+    if (!slot.compareAndSet(null, candidate)) return false
+    if (!stillLive()) {
+        // stop() raced after our CAS: retire ourselves if we still own the slot. If stop already
+        // getAndSet'd us out, compareAndSet fails and stop has cancelled the candidate.
+        slot.compareAndSet(candidate, null)
+        return false
+    }
+    return true
+}
+
+/**
  * Polls [probe] on a fixed cadence and reports the tunnel unhealthy after [failureThreshold]
  * consecutive failures. **Terminal after firing:** it invokes the listener at most once per
  * [start] call, then stops polling on its own ([isStarted] and the internal job are cleared
@@ -42,21 +64,23 @@ class TunnelHealthMonitor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
-    /**
-     * The live poll-loop coroutine, or null when the monitor is stopped, paused, or terminal.
-     *
-     * An `AtomicReference` rather than a `@Volatile var` because two different threads retire it:
-     * the poll loop nulls it from its own coroutine when it goes terminal, while
-     * `stop`/`pausePolling` null it from the service's lifecycle lock. The old `job?.cancel();
-     * job = null` was a non-atomic check-then-act across that boundary, so both could act on the
-     * same job. Every retirement now goes through `getAndSet(null)`, so exactly one side wins and
-     * the loser sees null and does nothing.
-     *
-     * NOTE this does NOT make the fire path race-free on its own — a cancel arriving between the
-     * threshold check and the listener call would still land, whoever won the swap. That is why
-     * the unhealthy listener is invoked unconditionally below, with no liveness gate.
-     */
-    private val job = AtomicReference<Job?>(null)
+/**
+ * The live poll-loop coroutine, or null when the monitor is stopped, paused, or terminal.
+ *
+ * An `AtomicReference` rather than a `@Volatile var` because creation and retirement both cross
+ * threads: the poll loop nulls it from its own coroutine when it goes terminal,
+ * `stop`/`pausePolling` null it from the service's lifecycle lock, and `resumePolling` may install
+ * from the screen-receiver main thread while `stop` runs on `tunnelOpScope`. Retirement goes
+ * through `getAndSet(null)`; creation goes through [tryInstallJob] (`compareAndSet` + a post-CAS
+ * `isStarted` re-check) so a resume racing a stop cannot park an orphaned loop in the slot after
+ * stop cleared it. The old `if (job.get() != null) return; … job.set(launched)` was a non-atomic
+ * check-then-act on the creation half.
+ *
+ * NOTE this does NOT make the fire path race-free on its own — a cancel arriving between the
+ * threshold check and the listener call would still land, whoever won the swap. That is why
+ * the unhealthy listener is invoked unconditionally below, with no liveness gate.
+ */
+private val job = AtomicReference<Job?>(null)
 
     @Volatile private var listener: (() -> Unit)? = null
     @Volatile private var healthyListener: (() -> Unit)? = null
@@ -117,7 +141,6 @@ class TunnelHealthMonitor(
 
     fun resumePolling() {
         if (!isStarted) return
-        if (job.get() != null) return
         val launched = scope.launch {
             try {
                 runPollLoop()
@@ -127,7 +150,9 @@ class TunnelHealthMonitor(
                 LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
             }
         }
-        job.set(launched)
+        if (!tryInstallJob(job, stillLive = { isStarted }, launched)) {
+            launched.cancel()
+        }
     }
 
     private suspend fun runPollLoop() {
