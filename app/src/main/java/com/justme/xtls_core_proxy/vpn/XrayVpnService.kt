@@ -688,11 +688,15 @@ class XrayVpnService : VpnService() {
                     // The kill-switch subsystem may have been disabled after this event was queued on
                     // tunnelOpScope (applyKillSwitchPreferences stops + nulls the monitor under the lock).
                     // Do not tear down a tunnel for a feature that is no longer active — drop the stale
-                    // queued kill. (A replay can't reach here at all: the disable branch clears
-                    // pendingKillLabel under this same lock, so a replay that was already dispatched
-                    // finds the marker empty and returns above. That now holds even when the disable
-                    // lands AFTER the commit dispatched it, which is only true because the commit
-                    // leaves the marker armed instead of capturing the label.)
+                    // queued kill.
+                    //
+                    // A REPLAY can reach here, and an earlier revision of this comment wrongly said
+                    // it could not. applyKillSwitchPreferences runs on serviceScope, not on this
+                    // scope, so a killTunnel enqueued BEFORE a disable can execute AFTER it — and
+                    // its defer branch above runs ahead of this check, so it can arm the marker
+                    // post-disable. The commit then dispatches a replay that lands right here.
+                    // Dropping it is the correct outcome (the feature is off), so only the
+                    // impossibility claim was wrong, never the behaviour.
                     if (killSwitchMonitor == null) {
                         LogRepository.append(
                             "Kill-switch: ignoring queued kill for $label (feature disabled)"
@@ -870,8 +874,10 @@ class XrayVpnService : VpnService() {
                     // decision below and INDEPENDENTLY of it, because the two questions have
                     // different answers: a revive reserves only from PAUSED, while the deferral that
                     // strands the session is outstanding in every other state. (The other caller,
-                    // applyKillSwitchPreferences' disable branch, has already cleared the marker
-                    // itself, so this is a no-op there.)
+                    // applyKillSwitchPreferences' disable branch, clears the marker itself before
+                    // launching this — but only USUALLY a no-op there: it launches and drops the
+                    // lock, so a killTunnel queued ahead of this coroutine can re-arm the marker in
+                    // between. Clearing it again is then real work, and harmless.)
                     withdrawDeferredKillLocked(sessionEpoch)
                     if (!canReserveRevive(
                             running = running,

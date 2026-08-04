@@ -138,14 +138,22 @@ class SessionLifecycleRotationTest {
         // Anti-drift guard, whole-enum. shouldDeferKillDuringTransition owns the {REVIVING,
         // ROTATING} set and this rule must never re-enumerate it — so instead of listing states,
         // assert the IMPLICATION over every state there is: wherever a kill can be parked, the
-        // leave edge can take it back. A new deferral state added to that rule cannot open a hole
-        // here without failing this test.
+        // leave edge can take it back.
+        //
+        // The `deferrable` counter is what stops this being VACUOUS, and it is the whole reason the
+        // assertion below is worth anything. deferredKillToWithdraw takes no tunnel state (by
+        // design — see its KDoc), so the call inside the loop is identical on every iteration and
+        // the `continue` is the only thing `state` controls. Without the final check, mutating
+        // shouldDeferKillDuringTransition to return false everywhere would skip every iteration and
+        // leave this test GREEN — i.e. it would be silenced by breaking the very rule it guards.
+        var deferrable = 0
         for (state in SessionTunnelState.entries) {
             val canDefer = shouldDeferKillDuringTransition(
                 running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
                 tunnelState = state,
             )
             if (!canDefer) continue
+            deferrable++
             assertEquals(
                 "a kill deferrable in $state must be withdrawable in $state",
                 "Bank",
@@ -155,6 +163,12 @@ class SessionLifecycleRotationTest {
                 )
             )
         }
+        assertEquals(
+            "the deferral rule must still name REVIVING and ROTATING — if it names neither, this " +
+                "test asserted nothing and the implication above is unproven",
+            2,
+            deferrable,
+        )
     }
 
     @Test
