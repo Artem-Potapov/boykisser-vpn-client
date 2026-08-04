@@ -580,12 +580,14 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     (`canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`,
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishRotationBridge`,
     `shouldAbortRotationForMissingBridge`,
+    `shouldFunnelRotationReservationRefusal`,
     `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
     gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
     `shouldStopServiceOnGiveUp`,
     `blackholedOngoingLine` (which 1101 line a BLACKHOLED session shows — the service RECORDS the
     answer in `blackholedLine` rather than re-deriving it from `giveUpOutcome`, which the disable
-    branch clears while keeping the state),
+    branch clears while keeping the state; the paired service/repository line is cleared after
+    successful rotation, revive, healthy recovery, or full teardown),
     `shouldFireFailoverRetry`, `shouldRestoreUnprotectedRearm`, `unprotectedRetryAction` (three-valued ATTEMPT/DEFER/STOP_SERVICE;
     the retry is spent by an ATTEMPT inside `rotateTunnel`'s reservation, never at schedule time,
     and deferring is bounded so every branch terminates), `shouldRestartForRecovery`,

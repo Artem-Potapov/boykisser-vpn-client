@@ -57,6 +57,59 @@ class SessionLifecycleRotationTest {
     }
 
     @Test
+    fun failedCandidate_bridgeHeld_disableBeforeQueuedRetry_funnelsToGiveUp() {
+        // A failed candidate has torn down the live TUN, reopened the unread bridge, and returned
+        // the episode to CONNECTED before queueing the next rotation. If disable wins that queue
+        // race, the bridge is the sole containment and must be adopted by the give-up funnel, not
+        // released on the reservation-refusal path.
+        assertFalse(
+            canReserveRotation(
+                running = true,
+                activeSessionEpoch = 5L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = false,
+            )
+        )
+        assertTrue(
+            shouldFunnelRotationReservationRefusal(
+                running = true,
+                activeSessionEpoch = 5L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+                hasTunnel = false,
+                hasRotationBridge = true,
+            )
+        )
+        assertEquals(
+            GiveUpContainment.ADOPT_ROTATION_BRIDGE,
+            containmentForGiveUp(
+                hasTunnel = false,
+                hasRotationBridge = true,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        )
+    }
+
+    @Test
+    fun queuedRetry_admissionUsesTheAuthoritativeDisabledState() {
+        // The service cache may still say enabled while FailoverPreferences.state already carries
+        // the synchronous save. The value passed to canReserveRotation must be that current state.
+        val serviceCacheEnabled = true
+        val authoritativeEnabled = false
+        assertTrue("fixture: the service cache is stale", serviceCacheEnabled)
+        assertFalse(
+            canReserveRotation(
+                running = true,
+                activeSessionEpoch = 5L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = authoritativeEnabled,
+            )
+        )
+    }
+
+    @Test
     fun killIsDeferred_duringBothRevivingAndRotating() {
         // A kill landing mid-transition must be recorded and replayed, never dropped: the
         // foreground monitor is edge-triggered and will not re-fire it.

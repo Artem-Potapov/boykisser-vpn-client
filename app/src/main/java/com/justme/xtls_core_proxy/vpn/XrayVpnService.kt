@@ -206,11 +206,8 @@ class XrayVpnService : VpnService() {
      * being held. Restoring the marker instead is not available — its release is load-bearing.
      *
      * Written under `lock` by the ONE producer of BLACKHOLED ([giveUpRotationLocked]) and cleared on
-     * full teardown. It deliberately gets no other clear sites: the only reader is
-     * [repostOngoingNotification]'s BLACKHOLED arm, which is unreachable unless a give-up has
-     * published that state and written this in the same locked block, so a stale value cannot be
-     * read. Adding paired clears would recreate exactly the multi-site coupling this field exists
-     * to escape.
+     * successful recovery or full teardown. It is paired with [LogRepository.blackholedLine] so a
+     * successful transition cannot leave home/tile carrying a line from the previous give-up.
      */
     @Volatile private var blackholedLine: BlackholedOngoingLine? = null
 
@@ -1003,6 +1000,7 @@ class XrayVpnService : VpnService() {
                             // is what stops a concurrent kill-switch pause or stop — both of which
                             // write LogRepository state while holding `lock` — from being
                             // overwritten by a late CONNECTED from here.
+                            clearBlackholedLineLocked()
                             afterReviveCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
@@ -1101,13 +1099,35 @@ class XrayVpnService : VpnService() {
                             activeSessionEpoch = activeSessionEpoch,
                             callbackSessionEpoch = sessionEpoch,
                             tunnelState = sessionTunnelState,
-                            failoverEnabled = failoverSettings.enabled,
+                            // FailoverPreferences.save updates this process-global StateFlow
+                            // synchronously, while the service collector is asynchronous. Admission
+                            // must use the authoritative value or a queued retry can rotate after
+                            // the user has already disabled the feature.
+                            failoverEnabled = FailoverPreferences.state.value.enabled,
                         )
                     ) {
+                        // A failed candidate returns to CONNECTED with no live TUN and its unread
+                        // rotation bridge held across the queued retry. If disable wins this race,
+                        // the bridge is the sole containment and must enter the give-up funnel for
+                        // adoption; releasing it would expose traffic between sessions.
+                        if (shouldFunnelRotationReservationRefusal(
+                                running = running,
+                                activeSessionEpoch = activeSessionEpoch,
+                                callbackSessionEpoch = sessionEpoch,
+                                tunnelState = sessionTunnelState,
+                                hasTunnel = tunInterface != null,
+                                hasRotationBridge = rotationBridgeInterface != null,
+                            )
+                        ) {
+                            giveUpRotationLocked(
+                                sessionEpoch,
+                                "rotation reservation refused while holding the containment bridge",
+                            )
+                            return@launch
+                        }
                         // Nothing was attempted — the transition could not even be reserved
-                        // (kill-switch pause, disable, stale epoch, …). A bridge held between
-                        // candidates would otherwise leak until stopVpn if disable vetoed here —
-                        // release is idempotent when none is held.
+                        // (kill-switch pause, stale epoch, …). No sole containment bridge is held
+                        // in this branch, so release remains the correct cleanup.
                         releaseRotationBridgeLocked("rotation reservation refused")
                         // A recovery that never happened must not spend the single retry, and it
                         // must not silently drop the bound that stops a service protecting nothing
@@ -1115,7 +1135,7 @@ class XrayVpnService : VpnService() {
                         // feature is still enabled (same veto shape as shouldFireFailoverRetry).
                         if (unprotectedRecoverySinceMs != null &&
                             isCurrentSessionLocked(sessionEpoch) &&
-                            failoverSettings.enabled
+                            FailoverPreferences.state.value.enabled
                         ) {
                             LogRepository.append(
                                 "Failover: recovery rotation could not reserve the transition " +
@@ -1296,6 +1316,7 @@ class XrayVpnService : VpnService() {
                             // understating a working connection, indefinitely, which is a lie in
                             // the SAFE direction — against letting the throw escape and tear down a
                             // healthy session's monitor while writing BLACKHOLED over it.
+                            clearBlackholedLineLocked()
                             afterRotationCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
@@ -1694,6 +1715,7 @@ class XrayVpnService : VpnService() {
             //   * the blast radius is maxRotations extra rotations in one window, each bridged by
             //     an unread TUN and each announced. It is a churn cost, never an exposure one.
             rotationAttempts = emptyList()
+            clearBlackholedLineLocked()
             LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
             updateNotification(localizedString(R.string.vpn_status_connected))
             VpnNotifications.cancelFailoverBlackholed(this)
@@ -2009,6 +2031,12 @@ class XrayVpnService : VpnService() {
             LogRepository.append("Failover: rotation bridge close warning: ${error.message}")
         }
         LogRepository.append("Failover: rotation bridge released ($reason)")
+    }
+
+    /** Clears the paired service/repository line once no BLACKHOLED give-up describes the session. */
+    private fun clearBlackholedLineLocked() {
+        blackholedLine = null
+        LogRepository.clearBlackholedLine()
     }
 
     private inner class KillSwitchListener(
@@ -2357,11 +2385,10 @@ class XrayVpnService : VpnService() {
             giveUpOutcome = null
             unprotectedRetryConsumed = false
             unprotectedEpisodeSinceMs = null
-            // The session is over, so no BLACKHOLED line is true any more. This is the field's ONLY
-            // clear site by design — see its declaration. Mirror onto LogRepository so home/tile
-            // cannot keep showing a contained-outcome string after Disconnect.
-            blackholedLine = null
-            LogRepository.setBlackholedLine(null)
+            // The session is over, so no BLACKHOLED line is true any more. Mirror onto
+            // LogRepository so home/tile cannot keep showing a contained-outcome string after
+            // Disconnect.
+            clearBlackholedLineLocked()
             // Every OTHER exit from the rotation gap is a rotation that keeps going; this one ends
             // the session under it. Placed here, above the early return below, so it covers that
             // path too — and it is what covers ALL the stale-session exits, since losing ownership

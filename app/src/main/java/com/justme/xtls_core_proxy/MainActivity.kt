@@ -655,11 +655,21 @@ private fun MainScreen(
 
             if (error != null) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = error ?: "",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = error ?: "",
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    IconButton(onClick = { viewModel.clearError() }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.main_cd_dismiss_error),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
             }
 
             // Connect-to-fastest can run for up to timeout * ceil(n / concurrency) — several minutes

@@ -80,14 +80,19 @@ object LogRepository {
 
     /**
      * The recorded packet-truth line for a [VpnConnectionState.BLACKHOLED] session, or null when
-     * none applies. Written beside [setConnectionState] at give-up and cleared only in the same
-     * place the service clears its in-memory copy (`stopVpn`) — so a disable that releases
+     * none applies. Written beside [setConnectionState] at give-up and cleared with the service's
+     * in-memory copy after successful recovery or full teardown — so a disable that releases
      * `giveUpOutcome` while keeping BLACKHOLED cannot make home/tile re-derive the wrong copy.
      */
     val blackholedLine: StateFlow<BlackholedOngoingLine?> = _blackholedLine
 
     fun setBlackholedLine(line: BlackholedOngoingLine?) {
         _blackholedLine.value = line
+    }
+
+    /** Clears the recorded give-up line after a successful recovery or full teardown. */
+    fun clearBlackholedLine() {
+        _blackholedLine.value = null
     }
 
     private val _errorEvents = MutableSharedFlow<Int>(

@@ -77,6 +77,31 @@ internal fun canReserveRotation(
 )
 
 /**
+ * Whether a refused rotation reservation must enter the give-up funnel instead of releasing the
+ * bridge it is currently holding.
+ *
+ * A failed candidate returns the episode to CONNECTED with no live TUN and an unread bridge held
+ * across the queued retry. If that retry loses the reservation race (most importantly because the
+ * user disabled failover), the bridge is the sole containment and must be adopted by give-up.
+ * Stale callbacks and every state with another lifecycle owner remain outside this rule.
+ */
+internal fun shouldFunnelRotationReservationRefusal(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+    hasTunnel: Boolean,
+    hasRotationBridge: Boolean,
+): Boolean = acceptsSessionLifecycleCallback(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+) &&
+    tunnelState == SessionTunnelState.CONNECTED &&
+    !hasTunnel &&
+    hasRotationBridge
+
+/**
  * Whether a kill-switch event landing mid-transition must be DEFERRED (recorded and replayed once
  * the transition commits) rather than dropped.
  *

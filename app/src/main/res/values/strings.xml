@@ -241,6 +241,7 @@
     <string name="main_cd_subscriptions">Subscriptions</string>
     <string name="main_cd_settings">Settings</string>
     <string name="main_cd_add_profile">Add profile</string>
+    <string name="main_cd_dismiss_error">Dismiss error</string>
     <string name="main_state_label">State: %1$s</string>
     <string name="main_state_disconnected">Disconnected</string>
     <string name="main_state_connecting">Connecting</string>

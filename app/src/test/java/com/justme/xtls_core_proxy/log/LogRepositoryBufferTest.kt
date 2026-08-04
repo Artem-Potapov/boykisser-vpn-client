@@ -9,7 +9,16 @@ import java.time.ZoneOffset
 class LogRepositoryBufferTest {
     @After fun tearDown() {
         LogRepository.clear()
+        LogRepository.clearBlackholedLine()
         LogRepository.setMaxLines(5000)
+    }
+
+    @Test fun clearBlackholedLine_removesARecordedGiveUpLine() {
+        LogRepository.setBlackholedLine(BlackholedOngoingLine.TRAFFIC_HELD)
+
+        LogRepository.clearBlackholedLine()
+
+        org.junit.Assert.assertNull(LogRepository.blackholedLine.value)
     }
 
     @Test fun setMaxLines_trimsCurrentBufferImmediately() {

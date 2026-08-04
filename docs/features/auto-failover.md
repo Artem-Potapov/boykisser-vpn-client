@@ -105,12 +105,19 @@ never touched the proxy.
 
 Two halves close it, and they are one change:
 
-- **`ConfigBuilder` carves the probe host through the proxy** — `healthProbeCarveOutRules(proxyTag)`,
-  **two** rules: `domain: full:cp.cloudflare.com → proxy` and `ip: <HEALTH_PROBE_IPS> → proxy`. Both are
-  emitted in the same position as their `dohGuardRules` sibling: right after the forced port-53 rule,
-  **ahead of the LAN and ad-block rules** (a later `geosite:category-ads-all → block` match would turn
-  the probe into a permanent failure) and ahead of the imported config's preserved rules. Like every
-  rule this chokepoint emits, they only ever move traffic **toward** the proxy.
+- **`ConfigBuilder` carves the probe host through the validated proxy path** —
+  `healthProbeCarveOutRules(proxyTag, balancerTag)`, **two** rules: `domain: full:cp.cloudflare.com`
+  and `ip: <HEALTH_PROBE_IPS>`. Both are emitted in the same position as their `dohGuardRules`
+  sibling: right after the forced port-53 rule, **ahead of the LAN and ad-block rules** (a later
+  `geosite:category-ads-all → block` match would turn the probe into a permanent failure) and ahead
+  of the imported config's preserved rules. When tun traffic uses a balancer, both rules and the DoH
+  guard use that same balancer; otherwise they use the first proxy outbound. Like every rule this
+  chokepoint emits, they only ever move traffic **toward** a proxy path.
+- **Imported balancers are sanitized before inbound-tag revival.** Selectors and fallback tags are
+  retained only when they name non-helper proxy outbounds. A `fallbackTag: direct` (or any freedom,
+  blackhole, DNS, or unknown helper) is removed, and a balancer with no proxy selector is removed
+  with its stale inbound-tag rules. A dead proxy balancer therefore cannot make the health probe
+  succeed through `freedom`; it fails closed instead.
 - **The target is a fixed constant**, `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, no longer
   `PingPreferences.targetUrl`. This is *forced by* the carve-out, not an extra: a static routing rule
   and a user-editable target cannot both be right. It also closes a second hazard — the Ping Test
@@ -408,10 +415,11 @@ Two things the table above depends on that are **not visible from it**:
   bridge and reads as unrelated cleanup.
 - **Disabling auto-failover mid-episode does not leave a stranded bridge.** The disable branch does
   not release a bridge mid-`ROTATING` (releasing on a settings change would drop the user onto the
-  clear network), but `canReserveRotation` now requires `failoverEnabled`, so a recursive retry already
-  queued on `tunnelOpScope` refuses reservation and **releases** any between-candidates bridge there.
-  A rotation that already holds `ROTATING` still runs to a handled exit (release / re-open / adopt /
-  abort-to-give-up).
+  clear network). Reservation reads `FailoverPreferences.state.value.enabled`, not the asynchronously
+  collected service cache. If a queued retry refuses while the failed candidate's bridge is held,
+  the refusal enters the give-up funnel and **adopts** that bridge as `CONTAINED_BY_BLACKHOLE`; only
+  refusals without a sole containment bridge use the ordinary release cleanup. A rotation that
+  already holds `ROTATING` still runs to a handled exit (release / re-open / adopt / abort-to-give-up).
 
 ### One builder body, two users
 
@@ -698,9 +706,10 @@ a user with a working connection that their traffic was being held. `giveUpRotat
 `blackholedLine = blackholedOngoingLine(outcome)` (pure, `null` for `UNPROTECTED`, which renders as
 `ERROR`) in the same locked block that publishes the state. Restoring `giveUpOutcome` instead was not
 available: that field is the "a recovery is still owed" marker `shouldRestartForRecovery` keys off, and
-its release is load-bearing. The field has exactly **one** clear site (`stopVpn`), on purpose — its only
-reader is unreachable unless a give-up wrote it, so paired clears would rebuild the multi-site coupling
-it exists to escape.
+its release is load-bearing. The service and `LogRepository` clear the paired recorded line on a
+successful rotation, successful revive, healthy recovery callback, and full teardown; disabling a
+contained give-up still deliberately clears only `giveUpOutcome` while leaving `BLACKHOLED` and its
+truthful line in place.
 
 Three deliberate **non**-changes: `MainActivity.isConnecting`, `VpnViewModel`'s
 `filter { CONNECTING }` error gate (widening it would erase the very error the user needs), and
@@ -1188,10 +1197,12 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
 - **`rotateTunnel` refuses reservation when failover is disabled.** `canReserveRotation` takes
   `failoverEnabled` (same veto shape as `shouldFireFailoverRetry` at the timer). A monitor callback or
   mid-episode recursive dispatch already queued on `tunnelOpScope` when the user disables therefore
-  bails without admitting — and releases any between-candidates bridge. A rotation that already holds
-  `ROTATING` is unaffected and still exits via release / adopt / give-up. The check is on `enabled`,
-  not on the monitor, so the `UNPROTECTED` retry (which legitimately rotates with
-  `failoverMonitor == null`) still works while the feature is on.
+  bails without admitting. If the failed candidate's bridge is the only containment TUN, that refusal
+  enters give-up and adopts it as `CONTAINED_BY_BLACKHOLE`; otherwise the ordinary cleanup releases
+  the between-candidates bridge. A rotation that already holds `ROTATING` is unaffected and still
+  exits via release / adopt / give-up. The check is on `enabled`, not on the monitor, so the
+  `UNPROTECTED` retry (which legitimately rotates with `failoverMonitor == null`) still works while
+  the feature is on.
 - **The single automatic recovery rotation excludes the last-known-good server**, because
   `nextCandidate` filters out `currentId` and `currentProfileId` was rolled back to it.
 - **`UNPROTECTED` can briefly coexist with a live tunnel and a running core** — `bringUpTunnel` releases

@@ -148,6 +148,7 @@ object ConfigBuilder {
     fun replaceJsonInboundsWithTun(config: String): String {
         val root = JSONObject(config)
         root.put("inbounds", JSONArray().put(tunInboundJson()))
+        sanitizeProxyBalancers(root)
         reconcileInboundTagRules(root)
         return root.toString()
     }
@@ -170,6 +171,7 @@ object ConfigBuilder {
         val routing = root.optJSONObject("routing") ?: return
         val rules = routing.optJSONArray("rules") ?: return
         val proxyTags = proxyOutboundTags(root)
+        val balancerTags = safeBalancerTags(root)
         val cleaned = JSONArray()
         for (i in 0 until rules.length()) {
             val rule = rules.optJSONObject(i) ?: continue
@@ -191,7 +193,7 @@ object ConfigBuilder {
             }
             val balancer = rule.optString("balancerTag")
             val outbound = rule.optString("outboundTag")
-            val towardProxy = balancer.isNotBlank() ||
+            val towardProxy = (balancer.isNotBlank() && balancer in balancerTags) ||
                 (outbound.isNotBlank() && outbound in proxyTags)
             if (towardProxy) {
                 val fixed = JSONObject(rule.toString())
@@ -211,6 +213,57 @@ object ConfigBuilder {
             val ob = outbounds.optJSONObject(i) ?: continue
             if (ob.optString("protocol").lowercase() in NON_PROXY_PROTOCOLS) continue
             ob.optString("tag").takeIf { it.isNotBlank() }?.let { tags.add(it) }
+        }
+        return tags
+    }
+
+    /**
+     * Keeps imported balancers proxy-only. A direct/helper selector or fallback would let a dead
+     * proxy answer the health probe successfully on the clear network, and would move user traffic
+     * away from the fail-closed runtime path. Unsupported members are removed; a balancer with no
+     * proxy members is removed together with its now-invalid inboundTag rules.
+     */
+    private fun sanitizeProxyBalancers(root: JSONObject) {
+        val routing = root.optJSONObject("routing") ?: return
+        val balancers = routing.optJSONArray("balancers") ?: return
+        val proxyTags = proxyOutboundTags(root)
+        val cleaned = JSONArray()
+        for (i in 0 until balancers.length()) {
+            val balancer = balancers.optJSONObject(i) ?: continue
+            val tag = balancer.optString("tag").takeIf { it.isNotBlank() } ?: continue
+            val selectors = balancer.optJSONArray("selector") ?: continue
+            val safeSelectors = (0 until selectors.length())
+                .map { selectors.optString(it) }
+                .filter { it in proxyTags }
+                .distinct()
+            if (safeSelectors.isEmpty()) continue
+
+            val safe = JSONObject(balancer.toString())
+            safe.put("selector", JSONArray(safeSelectors))
+            val fallback = safe.optString("fallbackTag")
+            if (fallback.isNotBlank() && fallback !in proxyTags) {
+                safe.remove("fallbackTag")
+            }
+            cleaned.put(safe)
+        }
+        routing.put("balancers", cleaned)
+    }
+
+    /** Tags of balancers surviving [sanitizeProxyBalancers]. */
+    private fun safeBalancerTags(root: JSONObject): Set<String> {
+        val routing = root.optJSONObject("routing") ?: return emptySet()
+        val balancers = routing.optJSONArray("balancers") ?: return emptySet()
+        val proxyTags = proxyOutboundTags(root)
+        val tags = mutableSetOf<String>()
+        for (i in 0 until balancers.length()) {
+            val balancer = balancers.optJSONObject(i) ?: continue
+            val tag = balancer.optString("tag")
+            val selectors = balancer.optJSONArray("selector") ?: continue
+            if (tag.isNotBlank() &&
+                (0 until selectors.length()).any { selectors.optString(it) in proxyTags }
+            ) {
+                tags += tag
+            }
         }
         return tags
     }
@@ -677,10 +730,14 @@ object ConfigBuilder {
 
         val out = JSONArray()
         if (port53 != null) out.put(port53)
-        if (effectiveMode == RoutingMode.BLOCKED_ONLY) dohGuardRules(root, proxyTag).forEach { out.put(it) }
         // Prefer the balancer that carries tun traffic when one exists (M-K): the carve-out must
         // measure the same path user traffic takes after I-H revives the inboundTag→balancer rule.
-        val probeBalancer = tunTrafficBalancerTag(passthrough)
+        val probeBalancer = tunTrafficBalancerTag(root, passthrough)
+        if (effectiveMode == RoutingMode.BLOCKED_ONLY) {
+            // The DoH guard is user traffic too: it must follow the same validated balancer, or a
+            // dead first proxy can be guarded while the real path falls through another member.
+            dohGuardRules(root, proxyTag, probeBalancer).forEach { out.put(it) }
+        }
         healthProbeCarveOutRules(proxyTag, probeBalancer).forEach { out.put(it) }
         if (routing.bypassLan) out.put(fieldRule("ip", listOf("geoip:private"), directTag))
         if (routing.blockAds && blockTag != null) out.put(fieldRule("domain", listOf("geosite:category-ads-all"), blockTag))
@@ -924,13 +981,14 @@ object ConfigBuilder {
      * (inboundTag→balancer with no domain/ip/port filter) over a filtered one. Returns null when
      * the config has no live tun→balancer rule — the carve-out then names [firstProxyOutbound].
      */
-    private fun tunTrafficBalancerTag(rules: JSONArray): String? {
+    private fun tunTrafficBalancerTag(root: JSONObject, rules: JSONArray): String? {
+        val safeBalancers = safeBalancerTags(root)
         var catchAll: String? = null
         var any: String? = null
         for (i in 0 until rules.length()) {
             val rule = rules.optJSONObject(i) ?: continue
             val balancer = rule.optString("balancerTag")
-            if (balancer.isBlank()) continue
+            if (balancer.isBlank() || balancer !in safeBalancers) continue
             if (!inboundTagMatchesTun(rule)) continue
             any = any ?: balancer
             if (!ruleHasDestinationFilter(rule)) catchAll = catchAll ?: balancer
@@ -955,7 +1013,11 @@ object ConfigBuilder {
             rule.has("user") || rule.has("attrs")
 
     /** DoH-guard: route the dns block's own resolver endpoints to the proxy (mode-3 direct default). */
-    private fun dohGuardRules(root: JSONObject, proxyTag: String): List<JSONObject> {
+    private fun dohGuardRules(
+        root: JSONObject,
+        proxyTag: String,
+        balancerTag: String?,
+    ): List<JSONObject> {
         val dnsObj = root.optJSONObject("dns") ?: return emptyList()
         val servers = dnsObj.optJSONArray("servers") ?: return emptyList()
         val ips = mutableListOf<String>()
@@ -981,8 +1043,12 @@ object ConfigBuilder {
             }
         }
         val rules = mutableListOf<JSONObject>()
-        if (ips.isNotEmpty()) rules.add(fieldRule("ip", ips.distinct(), proxyTag))
-        if (domains.isNotEmpty()) rules.add(fieldRule("domain", domains.distinct(), proxyTag))
+        if (ips.isNotEmpty()) {
+            rules.add(healthProbeFieldRule("ip", ips.distinct(), proxyTag, balancerTag))
+        }
+        if (domains.isNotEmpty()) {
+            rules.add(healthProbeFieldRule("domain", domains.distinct(), proxyTag, balancerTag))
+        }
         return rules
     }
 

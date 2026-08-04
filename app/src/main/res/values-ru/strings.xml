@@ -242,6 +242,7 @@
     <string name="main_cd_subscriptions">Подписки</string>
     <string name="main_cd_settings">Настройки</string>
     <string name="main_cd_add_profile">Добавить профиль</string>
+    <string name="main_cd_dismiss_error">Закрыть ошибку</string>
     <string name="main_state_label">Состояние: %1$s</string>
     <string name="main_state_disconnected">Отключено</string>
     <string name="main_state_connecting">Подключение</string>

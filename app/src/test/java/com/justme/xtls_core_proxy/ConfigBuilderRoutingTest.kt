@@ -572,4 +572,49 @@ class ConfigBuilderRoutingTest {
             domainCarveOutIndex(items) < balancerIdx && ipCarveOutIndex(items) < balancerIdx,
         )
     }
+
+    @Test fun direct_balancer_fallback_is_removed_so_a_dead_balancer_cannot_route_probe_direct() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancerOverN,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val root = JSONObject(out)
+        val balancer = root.getJSONObject("routing")
+            .getJSONArray("balancers")
+            .getJSONObject(0)
+        assertFalse(
+            "a proxy balancer must not retain a direct/helper fallback",
+            balancer.has("fallbackTag"),
+        )
+        val items = ruleItems(out)
+        for (index in listOf(domainCarveOutIndex(items), ipCarveOutIndex(items))) {
+            val rule = JSONObject(items[index])
+            assertEquals("proxy-balancer", rule.getString("balancerTag"))
+            assertFalse("probe carve-outs must not route direct", rule.has("outboundTag"))
+        }
+    }
+
+    @Test fun blocked_only_doh_guard_uses_the_same_validated_balancer_as_user_traffic() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancerOverN,
+            tuning = TuningSettings(
+                routing = RoutingSettings(
+                    mode = RoutingMode.BLOCKED_ONLY,
+                    country = RoutingCountry.RU,
+                    bypassLan = true,
+                    blockAds = false,
+                )
+            ),
+        )
+        val root = JSONObject(out)
+        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        assertEquals("dns-out", rules.getJSONObject(0).getString("outboundTag"))
+        val dohGuard = (0 until rules.length())
+            .map { rules.getJSONObject(it) }
+            .first {
+                it.optJSONArray("ip")?.toString()?.contains("1.1.1.1") == true
+            }
+        assertEquals("proxy-balancer", dohGuard.getString("balancerTag"))
+        assertFalse("DoH guard must not pin the first proxy", dohGuard.has("outboundTag"))
+    }
 }
