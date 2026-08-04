@@ -782,8 +782,10 @@ described above. `VpnViewModel.cancelReconnect` is wired to the in-app Disconnec
 deliberately NOT called from `disconnect()` — that method is the flow's own first step, so cancelling
 there would make every reconnect cancel itself and silently degrade Reconnect into Disconnect.
 
-**Two limits are recorded rather than closed** — the QS tile / notification Stop override, and
-`viewModelScope` lifetime. Both are in [Known limitations](#known-limitations-and-accepted-trade-offs).
+**External Stop vs this flow's own stop.** Tile and notification Stops set `EXTRA_USER_INITIATED_STOP`
+and bump `LogRepository.userStopGeneration`; the in-flight sequence abandons without starting. The
+flow's own stop does not set the extra. The remaining recorded limit is `viewModelScope` lifetime
+(Test 22) — see [Known limitations](#known-limitations-and-accepted-trade-offs).
 
 ## "Disconnect now, stop if the re-arm fails"
 
@@ -1238,23 +1240,18 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   concurrent group ping back to `Idle`. **Self-healing and accepted:** the other run writes its own
   terminal state when it finishes. Narrowing it would mean tracking which ids this run actually
   admitted, i.e. modifying `PingCoordinator`, which was out of scope.
-- **A Stop from the QS tile or the ongoing notification overrides a Reconnect in flight** — up to
-  ~10 s (`STOP_TIMEOUT_MS` + `START_VERIFY_MS`), and reachable whenever `MainActivity` is merely
-  **backgrounded**, since the ViewModel and its `ReconnectFlow` are still alive. `ReconnectFlow`
-  watches `LogRepository.connectionState`, which is **source-blind**: it cannot tell its own stop from
-  anyone else's, so it reads the user's `DISCONNECTED` as its own teardown completing and starts the
-  VPN back up. The in-app Disconnect **is** handled — it calls `VpnViewModel.cancelReconnect()` — but
-  the tile (`XrayVpnTileService`) and the 1101 Stop action both dispatch `ACTION_STOP` straight to the
-  service and never reach that call. Closing it properly needs the service to publish a *stop was
-  requested* signal the flow can distinguish from its own, which means changing human-review-gated
-  `vpn/`; it was recorded rather than half-done. **If you are working in the tile or the notification
-  Stop path, this is your marker: your stop can invert a reconnect.** QA covers it as Test 21.
+- **A Stop from the QS tile or the ongoing notification abandons a Reconnect in flight.** Those
+  surfaces set `EXTRA_USER_INITIATED_STOP` on `ACTION_STOP`; `onStartCommand` bumps
+  `LogRepository.userStopGeneration` (no await — RISK-1 safe) before launching `stopVpn`.
+  `ReconnectFlow` snapshots the generation before its own stop and aborts without starting if it
+  bumps during settle or start-verify. The flow's own stop (and in-app Disconnect after
+  `cancelReconnect`) does **not** set the extra, so ordinary reconnect settle is unchanged. Process-
+  global StateFlow so a backgrounded `MainActivity` still sees it. QA covers it as Test 21.
 - **A reconnect in flight dies if the Activity is *finished*.** `ReconnectFlow.run` is launched on
   `viewModelScope`, so the `finally` clears the guard and nothing restarts the VPN — the user is left
   disconnected. Rotation and backgrounding are **not** affected (the ViewModel survives both); only a
   genuine finish (back-out, swipe from recents, process death) is. Fail-safe and honest — it fails to
-  "VPN off", never to a silently unprotected tunnel — and moving the sequence to the service would
-  mean building the same stop-source signal the limitation above needs. QA covers it as Test 22.
+  "VPN off", never to a silently unprotected tunnel. QA covers it as Test 22.
 > **Note on `failover_hint`.** An earlier draft of this string read "the tunnel is kept up so your
 > traffic is never exposed" — true for both *contained* outcomes but **false for `UNPROTECTED`**,
 > where `establish()` itself failed. It was rewritten (commit `4091571`) to promise a pause rather
@@ -1300,7 +1297,7 @@ is itself the argument for doing it.
 | `vpn/SessionLifecycleRotationTest` (17) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. Also the sole home of `deferredKillToWithdraw`: withdraws for the current session, silent with nothing deferred, refused for a stale epoch and a stopped session, `everyStateThatCanDeferAKillCanAlsoWithdrawIt` (whole-enum implication, so a new deferral state cannot open a hole) and `withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt`. |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
-| `state/ReconnectFlowTest` (9) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process). |
+| `state/ReconnectFlowTest` (12) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process); a `userStopGeneration` bump during settle or start-verify abandons without (re)starting; the flow's own stop does not count as that bump. |
 | `tile/TileClickDecisionTest` (16) | `BLACKHOLED` → `Stop`, with and without a profile; `everyLiveStateDecidesStop` pins the whole live set in one place; `everyStateIsClassifiedExplicitly` enumerates **the full enum**, so widening `VpnConnectionState` fails a test rather than silently falling through to `Start`. That last one is the grep sweep, automated. Both guards assert against `shouldStopOnTileClick` as well as `decideTileClick`, so they now cover `XrayVpnTileService.handleClick`'s fast path too (see below). |
 | `MainActivityStateTest` (4) | `isActive` — every live state keeps the active row highlighted (incl. `BLACKHOLED`), dead states highlight nothing, another/`null` profile is never highlighted, and the same full-enum classification guard. `isActive` is `internal` (not `private`) purely so this test can reach it; it was **not** moved. |
 

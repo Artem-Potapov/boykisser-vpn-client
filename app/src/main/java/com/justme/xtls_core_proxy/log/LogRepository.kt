@@ -58,6 +58,24 @@ object LogRepository {
     private val _connectionState = MutableStateFlow(VpnConnectionState.DISCONNECTED)
     val connectionState: StateFlow<VpnConnectionState> = _connectionState
 
+    private val _userStopGeneration = MutableStateFlow(0L)
+
+    /**
+     * Bumped by [signalUserStopRequested] when a **user-initiated** Stop arrives from the QS tile
+     * or the ongoing notification. [com.justme.xtls_core_proxy.state.ReconnectFlow] watches this to
+     * abandon an in-flight reconnect instead of treating the resulting `DISCONNECTED` as its own
+     * settle. The flow's own stop (and in-app Disconnect after [cancel]) does **not** bump it —
+     * that is the source distinction `connectionState` alone cannot provide.
+     *
+     * A generation counter rather than a one-shot event so a backgrounded collector that arms
+     * after the bump still sees it (StateFlow), and so two Stops in one session remain ordered.
+     */
+    val userStopGeneration: StateFlow<Long> = _userStopGeneration
+
+    fun signalUserStopRequested() {
+        _userStopGeneration.update { it + 1 }
+    }
+
     private val _errorEvents = MutableSharedFlow<Int>(
         replay = 1,
         extraBufferCapacity = 0,

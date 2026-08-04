@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.state
 
+import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -8,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -55,9 +58,11 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    teardown and kills the session the user just asked for. So the first request **wins** and the
  *    contender is refused and reported — see [reconnectingProfileId].
  *
- * A third override is **not** closed here and is documented on [cancel]: a stop dispatched from the
- * QS tile or the ongoing notification is indistinguishable, from this class's vantage point, from
- * its own.
+ * ### External Stop vs this flow's own stop
+ * `LogRepository.connectionState` alone is source-blind: a QS-tile or notification Stop also lands
+ * as `DISCONNECTED`. The service bumps [LogRepository.userStopGeneration] only for those
+ * user-initiated surfaces (via `EXTRA_USER_INITIATED_STOP`); this flow's own stop does not, so a
+ * generation bump mid-sequence is always an external Off and aborts without starting.
  */
 internal class ReconnectFlow(
     private val connectionState: StateFlow<VpnConnectionState>,
@@ -66,6 +71,13 @@ internal class ReconnectFlow(
     private val onTimeout: () -> Unit,
     private val onSuperseded: () -> Unit,
     private val dispatcher: CoroutineDispatcher,
+    /**
+     * Monotonically increasing counter published when a **user-initiated** Stop arrives from the
+     * QS tile or the ongoing notification. The flow's own `ACTION_STOP` does not bump it. Defaults
+     * to the process-global [LogRepository.userStopGeneration] so a backgrounded `MainActivity`
+     * still sees tile/notification Stops without ViewModel rewiring.
+     */
+    private val userStopGeneration: StateFlow<Long> = LogRepository.userStopGeneration,
 ) {
     private val _reconnectingProfileId = MutableStateFlow<Long?>(null)
 
@@ -95,18 +107,9 @@ internal class ReconnectFlow(
      * Abandons a reconnect in flight without starting anything, and releases the guard so a later
      * one is admitted.
      *
-     * **Scope — read this before assuming it is the whole fix.** This covers the **in-app Disconnect
-     * only**, because that is the one stop this class can be TOLD about. The flow's settle signal is
-     * `LogRepository.connectionState`, which is source-blind: it cannot tell whose stop it just
-     * observed. So the **QS tile** (`XrayVpnTileService`) and the **ongoing notification's Stop
-     * action** (`XrayVpnService`) both still override a reconnect in flight — they dispatch
-     * `ACTION_STOP` straight to the service, the state reaches `DISCONNECTED`, and this flow reads
-     * that as its own teardown completing and starts the VPN back up. That is reachable whenever
-     * `MainActivity` is merely backgrounded, since the ViewModel and this flow are still alive.
-     *
-     * Closing it completely needs the service to publish a *stop was requested* signal the flow can
-     * distinguish from its own, which means changing human-review-gated `vpn/`. Recorded for the
-     * maintainer rather than half-done here.
+     * Covers the **in-app Disconnect** path (the caller tells this class about the stop). QS tile
+     * and notification Stops are covered separately: they bump [userStopGeneration], which the
+     * in-flight sequence observes and treats as the same abandon.
      */
     fun cancel() {
         job?.cancel()
@@ -139,16 +142,22 @@ internal class ReconnectFlow(
         _reconnectingProfileId.value = profileId
         val newJob = scope.launch(dispatcher) {
             try {
+                // Snapshot BEFORE dispatching stop: only a bump after this point is an external Off.
+                val stopGenAtArm = userStopGeneration.value
                 stop()
-                val settled = withTimeoutOrNull(STOP_TIMEOUT_MS) {
-                    connectionState.first { it == VpnConnectionState.DISCONNECTED }
+                val settle = withTimeoutOrNull(STOP_TIMEOUT_MS) {
+                    awaitSettleOrUserStop(stopGenAtArm)
                 }
-                if (settled == null) {
-                    // Never dispatch a start we could not sequence: it would hit "VPN already
-                    // running" and leave ActiveProfileRepository naming a server the tunnel never
-                    // carried.
-                    onTimeout()
-                    return@launch
+                when (settle) {
+                    null -> {
+                        // Never dispatch a start we could not sequence: it would hit "VPN already
+                        // running" and leave ActiveProfileRepository naming a server the tunnel never
+                        // carried.
+                        onTimeout()
+                        return@launch
+                    }
+                    SettleWatch.UserAborted -> return@launch
+                    SettleWatch.Settled -> Unit
                 }
                 start(profileId)
                 // See "The two races this survives" (1). If the state never leaves DISCONNECTED the
@@ -158,10 +167,19 @@ internal class ReconnectFlow(
                 // redundant second start is harmless — startVpn refuses it with "VPN already
                 // running", and activeProfileIdToRestoreOnRefusedStart returns null for equal ids,
                 // so it writes nothing.
+                //
+                // A user Stop during this window must NOT re-dispatch: that would turn Off into On.
                 val started = withTimeoutOrNull(START_VERIFY_MS) {
-                    connectionState.first { it != VpnConnectionState.DISCONNECTED }
+                    awaitStartedOrUserStop(stopGenAtArm)
                 }
-                if (started == null) start(profileId)
+                when (started) {
+                    null -> {
+                        if (userStopGeneration.value > stopGenAtArm) return@launch
+                        start(profileId)
+                    }
+                    SettleWatch.UserAborted -> return@launch
+                    SettleWatch.Settled -> Unit
+                }
             } finally {
                 // Also runs on cancellation (the ViewModel being cleared, or [cancel]), so the
                 // guard can never wedge shut and make Reconnect work exactly once per ViewModel.
@@ -171,6 +189,31 @@ internal class ReconnectFlow(
         }
         job = newJob
         return newJob
+    }
+
+    private suspend fun awaitSettleOrUserStop(stopGenAtArm: Long): SettleWatch =
+        merge(
+            connectionState.map { state ->
+                if (state == VpnConnectionState.DISCONNECTED) SettleWatch.Settled else null
+            },
+            userStopGeneration.map { gen ->
+                if (gen > stopGenAtArm) SettleWatch.UserAborted else null
+            },
+        ).first { it != null }!!
+
+    private suspend fun awaitStartedOrUserStop(stopGenAtArm: Long): SettleWatch =
+        merge(
+            connectionState.map { state ->
+                if (state != VpnConnectionState.DISCONNECTED) SettleWatch.Settled else null
+            },
+            userStopGeneration.map { gen ->
+                if (gen > stopGenAtArm) SettleWatch.UserAborted else null
+            },
+        ).first { it != null }!!
+
+    private enum class SettleWatch {
+        Settled,
+        UserAborted,
     }
 
     companion object {

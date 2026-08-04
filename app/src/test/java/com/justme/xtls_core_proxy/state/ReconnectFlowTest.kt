@@ -30,6 +30,7 @@ class ReconnectFlowTest {
         state: MutableStateFlow<VpnConnectionState>,
         calls: MutableList<String>,
         scheduler: TestCoroutineScheduler,
+        userStopGeneration: MutableStateFlow<Long> = MutableStateFlow(0L),
     ) = ReconnectFlow(
         connectionState = state,
         stop = { calls += "stop" },
@@ -37,6 +38,7 @@ class ReconnectFlowTest {
         onTimeout = { calls += "timeout" },
         onSuperseded = { calls += "superseded" },
         dispatcher = StandardTestDispatcher(scheduler),
+        userStopGeneration = userStopGeneration,
     )
 
     @Test
@@ -268,5 +270,79 @@ class ReconnectFlowTest {
         )
         runCurrent()
         assertEquals(listOf("stop", "start:7", "stop"), calls)
+    }
+
+    @Test
+    fun aUserInitiatedStopDuringSettleAbandonsWithoutStarting() = runTest {
+        // QS tile / notification Stop must outrank an in-flight reconnect the same way in-app
+        // Disconnect does via cancel(). The flow's own stop does NOT bump userStopGeneration —
+        // only those surfaces do — so a generation bump mid-settle is never "our" teardown.
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val userStops = MutableStateFlow(0L)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler, userStops)
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        assertEquals(listOf("stop"), calls)
+
+        userStops.value = 1L
+        runCurrent()
+        // The external stop also publishes DISCONNECTED; if the flow only watched connectionState
+        // it would treat that as settle and start. Watching the generation is what keeps Off off.
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        advanceTimeBy(ReconnectFlow.START_VERIFY_MS + 1); runCurrent()
+        assertEquals(
+            "a tile/notification Stop must abandon the reconnect, not complete it",
+            listOf("stop"),
+            calls,
+        )
+        assertNull(flow.reconnectingProfileId.value)
+    }
+
+    @Test
+    fun aUserInitiatedStopDuringStartVerifyDoesNotReDispatchStart() = runTest {
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val userStops = MutableStateFlow(0L)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler, userStops)
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        assertEquals(listOf("stop", "start:7"), calls)
+
+        // User Stop after the first start was dispatched: the verify await would otherwise time
+        // out on DISCONNECTED and re-dispatch start — inverting Off into On a second time.
+        userStops.value = 1L
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        advanceTimeBy(ReconnectFlow.START_VERIFY_MS + 1); runCurrent()
+        assertEquals(
+            "a user Stop during start-verify must not re-dispatch start",
+            listOf("stop", "start:7"),
+            calls,
+        )
+    }
+
+    @Test
+    fun theFlowsOwnStopDoesNotCountAsAUserInitiatedAbort() = runTest {
+        // Regression: if the flow aborted on every stop signal, its own ACTION_STOP would cancel
+        // every reconnect before start. Only a generation bump AFTER arming aborts.
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val userStops = MutableStateFlow(0L)
+        val calls = mutableListOf<String>()
+        val flow = flowFor(state, calls, testScheduler, userStops)
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        state.value = VpnConnectionState.DISCONNECTED
+        runCurrent()
+        state.value = VpnConnectionState.CONNECTING
+        runCurrent()
+        assertEquals(listOf("stop", "start:7"), calls)
+        assertEquals(0L, userStops.value)
     }
 }

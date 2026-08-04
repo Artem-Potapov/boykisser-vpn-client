@@ -746,14 +746,13 @@ connecting. (A single flag here previously made thirty unrelated servers all cla
 
 ---
 
-## Test 21 — A tile / notification Stop overrides a Reconnect in flight ⚠ KNOWN LIMITATION
+## Test 21 — A tile / notification Stop abandons a Reconnect in flight
 
-**Why:** this is a **ledgered limitation, not a defect to file** — the point of the test is to confirm
-the blast radius is what the docs claim, and to keep it visible to whoever next edits the tile or the
-notification Stop path. `ReconnectFlow` watches `LogRepository.connectionState`, which is
-**source-blind**: it cannot tell its own stop from anyone else's. The in-app Disconnect is handled (it
-calls `cancelReconnect()`); the QS tile and the ongoing notification's Stop action are **not** — both
-dispatch `ACTION_STOP` straight to the service.
+**Why:** an in-flight Reconnect sequences stop → settle → start. Without a source signal, a QS-tile
+or notification Stop looked identical to the flow's own teardown and the VPN came back up. The
+service now bumps `LogRepository.userStopGeneration` when those surfaces send
+`EXTRA_USER_INITIATED_STOP`; `ReconnectFlow` abandons without starting. The in-app Disconnect still
+wins via `cancelReconnect()`.
 
 **Steps:**
 1. Reach 19a's state with a working server available.
@@ -761,15 +760,14 @@ dispatch `ACTION_STOP` straight to the service.
 3. Within the next few seconds, pull down the shade and tap **Stop** on the ongoing notification (and
    separately, on another run, tap the **QS tile**).
 
-**EXPECTED (the known limitation):** the VPN **comes back up** rather than staying off — the flow read
-your `DISCONNECTED` as its own teardown completing and dispatched its start. Window is up to ~10 s
-(`STOP_TIMEOUT_MS` 8 s + `START_VERIFY_MS` 2 s).
-**Record which surface you used and how long it took.** Then stop the VPN again — the second Stop must
-work normally, since no reconnect is in flight by then.
+**EXPECTED:** the VPN goes **off and stays off** — the flow abandoned the reconnect rather than
+treating your Stop as its own settle. Window under test is up to ~10 s (`STOP_TIMEOUT_MS` 8 s +
+`START_VERIFY_MS` 2 s). **FAIL:** the VPN comes back up.
+**Record which surface you used.**
 
-**Contrast — the in-app Disconnect MUST win.** Repeat from step 2 but stay in the app and tap
+**Contrast — the in-app Disconnect MUST still win.** Repeat from step 2 but stay in the app and tap
 **Disconnect**. **PASS:** the VPN goes off and **stays** off. **FAIL:** it comes back up — that would
-mean `cancelReconnect()` is no longer wired to the in-app Disconnect, which *is* a real defect.
+mean `cancelReconnect()` is no longer wired to the in-app Disconnect.
 
 ---
 

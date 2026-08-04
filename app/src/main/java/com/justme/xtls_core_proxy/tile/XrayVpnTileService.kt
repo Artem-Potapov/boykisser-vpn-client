@@ -139,6 +139,9 @@ class XrayVpnTileService : TileService() {
         // foreground grant has already elapsed by the time we dispatch.
         val intent = Intent(this, XrayVpnService::class.java).apply {
             action = XrayVpnService.ACTION_STOP
+            // Distinguishes this Off from ReconnectFlow's own settle stop — see
+            // EXTRA_USER_INITIATED_STOP / LogRepository.signalUserStopRequested.
+            putExtra(XrayVpnService.EXTRA_USER_INITIATED_STOP, true)
         }
         startForegroundService(intent)
     }

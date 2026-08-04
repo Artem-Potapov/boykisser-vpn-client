@@ -75,6 +75,13 @@ class XrayVpnService : VpnService() {
         // no opt-out flag, so we re-post to keep the status persistent while the VPN runs.
         const val ACTION_NOTIFICATION_DISMISSED = "com.justme.xtls_core_proxy.action.NOTIFICATION_DISMISSED"
         const val EXTRA_PROFILE_ID = "extra_profile_id"
+        /**
+         * Set by the QS tile and the ongoing notification's Stop action. Absent on the in-app /
+         * ReconnectFlow `ACTION_STOP`, so [LogRepository.signalUserStopRequested] can tell a
+         * user Off from the flow's own settle teardown without giving `stopVpn` anything that
+         * awaits (RISK-1).
+         */
+        const val EXTRA_USER_INITIATED_STOP = "extra_user_initiated_stop"
 
         private const val CHANNEL_ID = "xray_vpn_channel"
         private const val ERROR_CHANNEL_ID = "xray_vpn_error_channel"
@@ -280,15 +287,22 @@ class XrayVpnService : VpnService() {
         when (val decision = StartCommandDecision.decide(intent?.action, profileId)) {
             is StartCommandDecision.StartProfile -> startVpn(decision.profileId)
             StartCommandDecision.StartActiveProfile -> resolveActiveAndStart()
-            StartCommandDecision.Stop ->
-                // User-initiated stop. Route through tunnelOpScope instead of running the blocking
-                // stopVpn (Xray/TUN teardown, plus contention on the lock a connect holds across the
-                // seconds-long XrayBridge.startXray) on the main thread — a Disconnect during a connect
-                // would otherwise freeze the UI / risk an ANR. limitedParallelism(1) serializes this
-                // behind any in-flight kill/revive; stopVpn (no expected epoch) then tears down whatever
-                // session is current, so a stop landing mid-start still reliably stops the tunnel.
-                // onDestroy/onRevoke keep the SYNCHRONOUS stopVpn where teardown must complete inline.
+            StartCommandDecision.Stop -> {
+                // Publish BEFORE launching stopVpn so a second Stop that early-returns still
+                // aborts an in-flight ReconnectFlow. No await (RISK-1): tryEmit-style StateFlow bump.
+                if (intent?.getBooleanExtra(EXTRA_USER_INITIATED_STOP, false) == true) {
+                    LogRepository.signalUserStopRequested()
+                }
+                // Route through tunnelOpScope instead of running the blocking stopVpn (Xray/TUN
+                // teardown, plus contention on the lock a connect holds across the seconds-long
+                // XrayBridge.startXray) on the main thread — a Disconnect during a connect would
+                // otherwise freeze the UI / risk an ANR. limitedParallelism(1) serializes this
+                // behind any in-flight kill/revive; stopVpn (no expected epoch) then tears down
+                // whatever session is current, so a stop landing mid-start still reliably stops
+                // the tunnel. onDestroy/onRevoke keep the SYNCHRONOUS stopVpn where teardown must
+                // complete inline.
                 tunnelOpScope.launch { stopVpn() }
+            }
             StartCommandDecision.RepostNotification -> {
                 // User swiped the ongoing notification (allowed on Android 14+). Re-post it
                 // so the connected/exposed status stays visible while the VPN runs; if we are
@@ -2501,7 +2515,9 @@ class XrayVpnService : VpnService() {
      * even if one of these Intents ever loses its action.
      */
     private fun notificationStopIntent(): PendingIntent {
-        val intent = Intent(this, XrayVpnService::class.java).setAction(ACTION_STOP)
+        val intent = Intent(this, XrayVpnService::class.java)
+            .setAction(ACTION_STOP)
+            .putExtra(EXTRA_USER_INITIATED_STOP, true)
         return PendingIntent.getService(
             this,
             1,
