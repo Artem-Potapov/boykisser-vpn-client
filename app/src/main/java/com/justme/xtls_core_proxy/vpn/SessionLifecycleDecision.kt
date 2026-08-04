@@ -349,6 +349,44 @@ internal fun connectionStateForGiveUp(outcome: FailoverGiveUpOutcome): VpnConnec
     }
 
 /**
+ * Which persistent ongoing-notification (1101) line is TRUE for a session showing
+ * [VpnConnectionState.BLACKHOLED]. The two contained outcomes have OPPOSITE packet truths, so they
+ * must never share one — see [blackholedOngoingLine].
+ */
+internal enum class BlackholedOngoingLine {
+    /** `CONTAINED_BY_LIVE_TUNNEL`: the tunnel is up and still proxying; nothing is being dropped. */
+    STILL_PROXYING,
+
+    /** `CONTAINED_BY_BLACKHOLE`: packets enter an fd nobody reads and are deliberately dropped. */
+    TRAFFIC_HELD,
+}
+
+/**
+ * The 1101 line a BLACKHOLED session must show, from the give-up that produced that state — or null
+ * when no BLACKHOLED line is true.
+ *
+ * The service records the ANSWER, not the input: `repostOngoingNotification` used to re-derive this
+ * from the live `giveUpOutcome` field, and the disable branch clears that field while
+ * DELIBERATELY leaving the connection state BLACKHOLED. A user swipe plus repost after such a
+ * release therefore fell through to the blackhole copy and relabelled a still-proxying tunnel
+ * "your traffic is being held" — or, in the other direction, would tell a user behind a blackhole
+ * that their server merely stopped responding. Restoring `giveUpOutcome` is not the fix: that field
+ * is the "an automatic recovery is still owed" marker `shouldRestartForRecovery` keys off, and its
+ * release is load-bearing.
+ *
+ * Null for [FailoverGiveUpOutcome.UNPROTECTED] because that outcome renders as `ERROR`, not
+ * BLACKHOLED — [connectionStateForGiveUp] is the authority, and `SessionLifecycleDecisionTest`
+ * pins the correspondence over the whole enum so the two cannot drift apart.
+ */
+internal fun blackholedOngoingLine(
+    containment: FailoverGiveUpOutcome?,
+): BlackholedOngoingLine? = when (containment) {
+    FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> BlackholedOngoingLine.STILL_PROXYING
+    FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE -> BlackholedOngoingLine.TRAFFIC_HELD
+    FailoverGiveUpOutcome.UNPROTECTED, null -> null
+}
+
+/**
  * "Disconnect now, stop if the re-arm fails": whether a give-up should switch the service off
  * rather than schedule another re-arm.
  *

@@ -179,6 +179,27 @@ class XrayVpnService : VpnService() {
     @Volatile private var giveUpOutcome: FailoverGiveUpOutcome? = null
 
     /**
+     * Which ongoing-notification (1101) line is TRUE for the BLACKHOLED state currently on screen,
+     * or null when no give-up has published one.
+     *
+     * NOT a duplicate of [giveUpOutcome], and deliberately not derived from it at read time. That
+     * field is the "an automatic recovery is still owed" marker — `shouldRestartForRecovery` keys
+     * off it, and `applyFailoverPreferences`' disable branch CLEARS it while deliberately leaving
+     * the connection state BLACKHOLED. Re-deriving the line from it therefore relabelled a
+     * still-proxying tunnel with the blackhole copy after a release: the two contained outcomes have
+     * OPPOSITE packet truths, so that told a user with a working connection that their traffic was
+     * being held. Restoring the marker instead is not available — its release is load-bearing.
+     *
+     * Written under `lock` by the ONE producer of BLACKHOLED ([giveUpRotationLocked]) and cleared on
+     * full teardown. It deliberately gets no other clear sites: the only reader is
+     * [repostOngoingNotification]'s BLACKHOLED arm, which is unreachable unless a give-up has
+     * published that state and written this in the same locked block, so a stale value cannot be
+     * read. Adding paired clears would recreate exactly the multi-site coupling this field exists
+     * to escape.
+     */
+    @Volatile private var blackholedLine: BlackholedOngoingLine? = null
+
+    /**
      * Whether the single automatic recovery attempt granted to an UNPROTECTED give-up has been
      * spent. "Disconnect now, stop if the re-arm fails": the first unprotected give-up re-arms, and
      * if the re-armed rotation also fails to bring anything up we stop the service rather than
@@ -1457,6 +1478,10 @@ class XrayVpnService : VpnService() {
         }
 
         giveUpOutcome = outcome
+        // Recorded HERE, beside the state it describes, because it must outlive giveUpOutcome: the
+        // disable branch releases that marker while leaving the state BLACKHOLED, and a repost
+        // after that must not fall back to a line describing the other outcome's packet truth.
+        blackholedLine = blackholedOngoingLine(outcome)
         // State first, then the notifications — same ordering discipline as killTunnel.
         LogRepository.setConnectionState(connectionStateForGiveUp(outcome))
         when (outcome) {
@@ -2202,6 +2227,9 @@ class XrayVpnService : VpnService() {
             episodeFailedIds = emptySet()
             giveUpOutcome = null
             unprotectedRetryConsumed = false
+            // The session is over, so no BLACKHOLED line is true any more. This is the field's ONLY
+            // clear site by design — see its declaration.
+            blackholedLine = null
             // Every OTHER exit from the rotation gap is a rotation that keeps going; this one ends
             // the session under it. Placed here, above the early return below, so it covers that
             // path too — and it is what covers ALL the stale-session exits, since losing ownership
@@ -2384,19 +2412,28 @@ class XrayVpnService : VpnService() {
                 updateNotification(localizedString(R.string.vpn_status_connecting))
             VpnConnectionState.CONNECTED ->
                 updateNotification(localizedString(R.string.vpn_status_connected))
-            VpnConnectionState.BLACKHOLED ->
+            VpnConnectionState.BLACKHOLED -> {
                 // The give-up alert (id 1105) is setAutoCancel, so once the user dismisses it this
                 // persistent line is their only remaining indication. Only 1101 is restored — 1105
                 // was dismissed deliberately and re-posting it would fight the user.
-                updateNotification(
-                    localizedString(
-                        if (giveUpOutcome == FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL) {
-                            R.string.vpn_status_no_response
-                        } else {
-                            R.string.vpn_status_blackholed
-                        }
-                    )
-                )
+                //
+                // Read from blackholedLine, NOT re-derived from giveUpOutcome. The disable branch
+                // clears that marker while deliberately keeping this state, and the old derivation
+                // fell through to the blackhole copy after such a release — relabelling a
+                // still-proxying tunnel as one holding the user's traffic. The two contained
+                // outcomes have opposite packet truths and must never share a line.
+                //
+                // Null is unreachable (this state has exactly one producer, and it writes the
+                // field in the same locked block), so it restores nothing rather than guessing a
+                // line that could be the wrong one.
+                when (blackholedLine) {
+                    BlackholedOngoingLine.STILL_PROXYING ->
+                        updateNotification(localizedString(R.string.vpn_status_no_response))
+                    BlackholedOngoingLine.TRAFFIC_HELD ->
+                        updateNotification(localizedString(R.string.vpn_status_blackholed))
+                    null -> Unit
+                }
+            }
             VpnConnectionState.ERROR -> {
                 // ERROR normally means the session is dying, with nothing ongoing to restore. The
                 // uncontained give-up is the exception: the service is still RUNNING, and the line

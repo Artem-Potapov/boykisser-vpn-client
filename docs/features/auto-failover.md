@@ -598,7 +598,20 @@ session live?" and "what connect affordance does it offer?" are two different qu
 | `state/connectAction` | `BLACKHOLED` → `RECONNECT` (**not** `UNAVAILABLE`) — see [Reconnect](#reconnect-the-affordance-a-give-up-actually-offers) |
 | `MainActivity.isActive` | `BLACKHOLED` is **active** — the row stays highlighted and its menu offers Disconnect, not a connect row |
 | `MainActivity` Disconnect gate | `BLACKHOLED` **and** `ERROR` both show Disconnect |
-| `XrayVpnService.repostOngoingNotification` | `BLACKHOLED` restores 1101 only (1105 is `setAutoCancel` — re-posting it would fight a deliberate dismissal); `ERROR` restores 1101 **only when** `giveUpOutcome == UNPROTECTED` |
+| `XrayVpnService.repostOngoingNotification` | `BLACKHOLED` restores 1101 only (1105 is `setAutoCancel` — re-posting it would fight a deliberate dismissal), and picks its line from the recorded `blackholedLine`, **never** by re-deriving it from `giveUpOutcome` (see below); `ERROR` restores 1101 **only when** `giveUpOutcome == UNPROTECTED` |
+
+**The BLACKHOLED line is a RECORDED answer, not a re-derived one.** `repostOngoingNotification` used
+to read `giveUpOutcome` and treat "not `CONTAINED_BY_LIVE_TUNNEL`" as the blackhole line. The disable
+branch clears `giveUpOutcome` while **deliberately leaving the state `BLACKHOLED`**, so after a
+disable-release of a *live-tunnel* give-up a user swipe plus repost relabelled a still-proxying tunnel
+with the blackhole copy — and the two contained outcomes have **opposite packet truths**, so that told
+a user with a working connection that their traffic was being held. `giveUpRotationLocked` now records
+`blackholedLine = blackholedOngoingLine(outcome)` (pure, `null` for `UNPROTECTED`, which renders as
+`ERROR`) in the same locked block that publishes the state. Restoring `giveUpOutcome` instead was not
+available: that field is the "a recovery is still owed" marker `shouldRestartForRecovery` keys off, and
+its release is load-bearing. The field has exactly **one** clear site (`stopVpn`), on purpose — its only
+reader is unreachable unless a give-up wrote it, so paired clears would rebuild the multi-site coupling
+it exists to escape.
 
 Three deliberate **non**-changes: `MainActivity.isConnecting`, `VpnViewModel`'s
 `filter { CONNECTING }` error gate (widening it would erase the very error the user needs), and
