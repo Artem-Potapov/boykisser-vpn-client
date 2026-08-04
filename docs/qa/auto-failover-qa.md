@@ -733,6 +733,9 @@ start would kill the very session the user asked for.
 **PASS:** every control is disabled the moment the first tap lands, so the second tap cannot be
 delivered at all. If your device is fast enough to land one anyway, it must be **refused with the
 "request superseded" message** — and the session that comes up is the one from the **first** tap.
+The message must **still be on screen** once the first tap's session reaches CONNECTING: that
+transition used to wipe it, so the refusal was reported and erased within milliseconds and this step
+could not actually be observed. `state/ConnectErrorRetention` now gives it a one-transition reprieve.
 **FAIL:** the second tap tears down the session the first one started (VPN ends up off); or a
 *different* server ends up connected than the one first tapped; or a second tap is silently swallowed
 with no message.

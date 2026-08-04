@@ -605,6 +605,16 @@ Three deliberate **non**-changes: `MainActivity.isConnecting`, `VpnViewModel`'s
 `XrayVpnService`'s `wasPaused` check (`BLACKHOLED` is not the kill-switch's paused state, and
 `reviveTunnel` would no-op at `canReserveRevive` anyway).
 
+The error gate's *filter* is unchanged, but what it **does** no longer is. It used to clear
+`VpnViewModel.error` unconditionally, which erased a **refusal** — the message telling the user that
+the request they just made did nothing — as soon as the request that BEAT it announced `CONNECTING`.
+`state/ConnectErrorRetention` now gives a refusal a reprieve of exactly one `CONNECTING` (the
+winner's) and no more, so it cannot become the stale banner the auto-clear exists to remove. The
+contended Reconnect in [Test 22](../qa/auto-failover-qa.md) is the path that reaches it: the state
+reads `BLACKHOLED` for the whole teardown, so the affordance keeps rendering and a re-tap is the
+natural response. Only the message was ever lost — `activeProfileIdToRestoreOnRefusedStart` covers
+the correctness half separately, so nothing ever pointed at the wrong server.
+
 ## Reconnect: the affordance a give-up actually offers
 
 A give-up used to leave every connect control **disabled**, on the reasoning that the service was

@@ -197,6 +197,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    /**
+     * Owns the one rule about when [error] is wiped. Stateful, so it is a field rather than a call —
+     * a per-call instance would forget which message is on screen and lose the rule entirely. See
+     * [ConnectErrorRetention] for why a refusal must outlive the winning request's CONNECTING.
+     */
+    private val errorRetention = ConnectErrorRetention()
+
     data class DnsWarning(val name: String, val rawConfig: String)
 
     private val _dnsWarning = MutableStateFlow<DnsWarning?>(null)
@@ -313,15 +320,21 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             LogRepository.errorEvents.collect { resId ->
                 _error.value = SupportedLanguage.localize(getApplication())
                     .getString(resId)
+                errorRetention.onErrorShown(resId)
             }
         }
         // Clear the latest error on every transition to CONNECTING. This is
         // the "user (or tile) tried to start again" signal. Mirrors the
         // semantics of the deleted `_error.value = null` in connect().
+        //
+        // Not unconditional: a REFUSAL survives the winning request's own CONNECTING, or the user
+        // is told nothing about the request they just made. ConnectErrorRetention owns that rule
+        // and its exactly-one-transition bound; both collectors run on Dispatchers.Main.immediate,
+        // so its field needs no synchronization.
         viewModelScope.launch {
             LogRepository.connectionState
                 .filter { it == VpnConnectionState.CONNECTING }
-                .collect { _error.value = null }
+                .collect { if (errorRetention.onConnectingTransition()) _error.value = null }
         }
         // Prune ephemeral ping results when the profile set changes (e.g. a subscription refresh
         // replaces rows with new ids) so stale id -> PingState entries don't accumulate for ids
@@ -336,6 +349,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() {
         _error.value = null
+        errorRetention.onErrorCleared()
     }
 
     fun addProfile(name: String, config: String) {
