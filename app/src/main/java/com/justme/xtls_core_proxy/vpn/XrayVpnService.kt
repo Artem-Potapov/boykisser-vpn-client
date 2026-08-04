@@ -185,13 +185,19 @@ class XrayVpnService : VpnService() {
      * leaving it running-but-unprotected forever. Cleared wherever [giveUpOutcome] is — successful
      * rotation, successful revive, the recovery callback, and full teardown.
      *
-     * Two carry-over cases are known and ACCEPTED rather than fixed, because both err towards
-     * stopping a service that cannot protect anything:
-     *  - a retry whose give-up classifies CONTAINED_BY_BLACKHOLE leaves the flag set (traffic is
-     *    contained, so nothing clears it), so a later UNPROTECTED stops immediately with no retry
-     *    of its own;
-     *  - a kill-switch pause landing before the timer fires makes [rotateTunnel] bail at
-     *    `canReserveRotation`, silently spending the retry without attempting anything.
+     * **Set by an ATTEMPT, never by the decision to schedule one.** It is written inside
+     * [rotateTunnel]'s reservation, once `canReserveRotation` has actually admitted the transition
+     * — not at schedule time in [giveUpRotationLocked]. Writing it at schedule time meant a
+     * kill-switch pause landing before the timer fired spent the retry with nothing attempted:
+     * [rotateTunnel] bailed at `canReserveRotation`, no second give-up ever happened, so
+     * [shouldStopServiceOnGiveUp] could never fire, and the foreground service went on running with
+     * NO TUN until the user intervened. A recovery that cannot be attempted is now re-armed instead
+     * (see [unprotectedRetryAction]), and the re-arming is itself bounded so the bound survives.
+     *
+     * One carry-over case is known and ACCEPTED rather than fixed, because it errs towards stopping
+     * a service that cannot protect anything: a retry whose give-up classifies
+     * CONTAINED_BY_BLACKHOLE leaves the flag set (traffic is contained, so nothing clears it), so a
+     * later UNPROTECTED stops immediately with no retry of its own.
      *
      * Guarded by `lock`.
      */
@@ -1027,8 +1033,13 @@ class XrayVpnService : VpnService() {
      * session epoch. Sibling of [killTunnel]/[reviveTunnel] and keeps their locking discipline —
      * reserve the transition under `lock` before any async work, re-check ownership before every
      * mutation, and route every escape through a single fail path.
+     *
+     * [unprotectedRecoverySinceMs] marks this as THE single automatic recovery an UNPROTECTED
+     * give-up is granted, carrying the instant that give-up happened. Only the re-arm timer passes
+     * it; ordinary rotations (the health monitor, and this method's own recursive retry through the
+     * candidate list) pass null because they are not spending that budget.
      */
-    private fun rotateTunnel(sessionEpoch: Long) {
+    private fun rotateTunnel(sessionEpoch: Long, unprotectedRecoverySinceMs: Long? = null) {
         tunnelOpScope.launch {
             try {
                 val session = synchronized(lock) {
@@ -1038,7 +1049,35 @@ class XrayVpnService : VpnService() {
                             callbackSessionEpoch = sessionEpoch,
                             tunnelState = sessionTunnelState,
                         )
-                    ) return@launch
+                    ) {
+                        // Nothing was attempted — the transition could not even be reserved,
+                        // overwhelmingly because a kill-switch pause landed on this serialized
+                        // scope first. A recovery that never happened must not spend the single
+                        // retry, and it must not silently drop the bound that stops a service
+                        // protecting nothing either, so re-arm with the ORIGINAL give-up instant:
+                        // the deferral deadline in unprotectedRetryAction keeps running from
+                        // there, and terminates this loop even if the session never becomes
+                        // rotatable again.
+                        if (unprotectedRecoverySinceMs != null && isCurrentSessionLocked(sessionEpoch)) {
+                            LogRepository.append(
+                                "Failover: recovery rotation could not reserve the transition " +
+                                    "(tunnel is $sessionTunnelState); re-arming without spending " +
+                                    "the retry"
+                            )
+                            scheduleFailoverRearmLocked(
+                                sessionEpoch,
+                                retryByRotation = true,
+                                unprotectedSinceMs = unprotectedRecoverySinceMs,
+                            )
+                        }
+                        return@launch
+                    }
+                    // ---- THE ATTEMPT ----
+                    // Written here, and deliberately BEFORE the thrash-cap admission below: the
+                    // reservation is what makes this a real attempt, and a denied admission still
+                    // funnels into giveUpRotationLocked, which must see the budget as spent or a
+                    // second UNPROTECTED outcome would re-arm instead of stopping.
+                    if (unprotectedRecoverySinceMs != null) unprotectedRetryConsumed = true
                     when (val admission = FailoverDecision.admitRotation(
                         attempts = rotationAttempts,
                         now = System.currentTimeMillis(),
@@ -1449,10 +1488,17 @@ class XrayVpnService : VpnService() {
         }
 
         // Scheduled LAST, and only on the paths that keep the service alive. An unprotected give-up
-        // spends its single recovery attempt here; a second one lands in the stop branch above.
+        // arms its single recovery attempt here but does NOT spend it: unprotectedRetryConsumed is
+        // written by rotateTunnel's reservation, i.e. by an attempt that actually happened. Marking
+        // it here spent the retry for a session that was merely paused when the timer fired, which
+        // left shouldStopServiceOnGiveUp unable to ever fire. The instant below is the start of the
+        // deferral deadline that bounds the re-arming that replaces it.
         val retryByRotation = outcome == FailoverGiveUpOutcome.UNPROTECTED
-        if (retryByRotation) unprotectedRetryConsumed = true
-        scheduleFailoverRearmLocked(sessionEpoch, retryByRotation = retryByRotation)
+        scheduleFailoverRearmLocked(
+            sessionEpoch,
+            retryByRotation = retryByRotation,
+            unprotectedSinceMs = System.currentTimeMillis(),
+        )
         announceDroppedDeferredKillLocked(deferredKillLabel)
     }
 
@@ -1526,9 +1572,18 @@ class XrayVpnService : VpnService() {
      * to be a rotation driven directly from here. Every other give-up leaves a tunnel in place, so
      * the monitor is the right thing to re-arm.
      *
+     * [unprotectedSinceMs] is meaningful only when [retryByRotation] is set: it is the instant the
+     * UNPROTECTED episode began, and it is carried unchanged through every re-arm so
+     * [unprotectedRetryAction]'s deferral deadline measures the whole episode rather than restarting
+     * with each timer.
+     *
      * Caller must hold `lock`.
      */
-    private fun scheduleFailoverRearmLocked(sessionEpoch: Long, retryByRotation: Boolean) {
+    private fun scheduleFailoverRearmLocked(
+        sessionEpoch: Long,
+        retryByRotation: Boolean,
+        unprotectedSinceMs: Long = System.currentTimeMillis(),
+    ) {
         val windowMs = failoverSettings.rotationWindowMs
         failoverRearmJob?.cancel()
         failoverRearmJob = serviceScope.launch {
@@ -1551,14 +1606,64 @@ class XrayVpnService : VpnService() {
                 )
                 return@launch
             }
-            if (retryByRotation) {
-                // rotateTunnel re-checks epoch + CONNECTED under the lock itself, so a stale timer
-                // is a no-op here too.
-                rotateTunnel(sessionEpoch)
+            if (!retryByRotation) {
+                // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
+                applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
                 return@launch
             }
-            // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
-            applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
+            // ---- The UNPROTECTED recovery ----
+            // Dispatching rotateTunnel unconditionally is what broke the bound: from any state but
+            // CONNECTED it silently bails, and with the retry already marked spent nothing was left
+            // to end a service that owns no TUN. Decide instead, under the lock, from the state
+            // that actually determines whether an attempt is possible.
+            val action = synchronized(lock) {
+                if (!isCurrentSessionLocked(sessionEpoch)) return@launch
+                val decided = unprotectedRetryAction(
+                    tunnelState = sessionTunnelState,
+                    unprotectedSinceMs = unprotectedSinceMs,
+                    now = System.currentTimeMillis(),
+                    rotationWindowMs = failoverSettings.rotationWindowMs,
+                )
+                if (decided == UnprotectedRetryAction.DEFER) {
+                    LogRepository.append(
+                        "Failover: recovery rotation cannot be attempted yet (tunnel is " +
+                            "$sessionTunnelState); re-arming without spending the retry"
+                    )
+                    // Re-armed from inside the job this call cancels. Safe: nothing suspends
+                    // between here and the end of this coroutine, and the replacement job is a
+                    // fresh child of serviceScope rather than of this one.
+                    scheduleFailoverRearmLocked(
+                        sessionEpoch,
+                        retryByRotation = true,
+                        unprotectedSinceMs = unprotectedSinceMs,
+                    )
+                }
+                decided
+            }
+            when (action) {
+                // rotateTunnel re-checks epoch + CONNECTED under the lock itself and spends the
+                // retry only once it has reserved the transition, so a state change in this gap
+                // costs another re-arm rather than the recovery.
+                UnprotectedRetryAction.ATTEMPT ->
+                    rotateTunnel(sessionEpoch, unprotectedRecoverySinceMs = unprotectedSinceMs)
+                UnprotectedRetryAction.DEFER -> Unit
+                UnprotectedRetryAction.STOP_SERVICE -> {
+                    // The episode has outlasted its deferral deadline without ever becoming
+                    // rotatable. A foreground service that owns no TUN, protects nothing and
+                    // cannot even try must land in an honest OFF state rather than persist. Both
+                    // surfaces, as in giveUpRotationLocked's stop branch: stopVpn clears the
+                    // foreground notification, so the 1102 error notification is what reaches a
+                    // user who is not looking at the app.
+                    LogRepository.append(
+                        "Failover: no tunnel, and no chance to retry for " +
+                            "$UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS rotation windows; " +
+                            "stopping the VPN"
+                    )
+                    LogRepository.emitError(R.string.vpn_failover_stopped_error)
+                    postErrorNotification(R.string.vpn_failover_stopped_error)
+                    stopVpn(expectedSessionEpoch = sessionEpoch)
+                }
+            }
         }
     }
 
@@ -1835,6 +1940,20 @@ class XrayVpnService : VpnService() {
                 // `enabled` specifically, NOT on the shouldRun check below: shouldRun is also false
                 // in PAUSED/ROTATING, and an unrelated settings save during a kill-switch pause
                 // must not silently drop a legitimate pending retry. Disabling the feature must.
+                //
+                // UNCONDITIONAL, and that is CHOSEN rather than overlooked — including for the
+                // UNPROTECTED retry, where this timer is now the only thing that can end a service
+                // that owns no TUN (see unprotectedRetryAction). Two reasons, both settled
+                // elsewhere on this branch:
+                //   * a user who switches auto-failover OFF must not be handed an automatic server
+                //     rotation, and least of all an automatic VPN shutdown — that is exactly what
+                //     shouldFireFailoverRetry exists to veto;
+                //   * because it vetoes at the firing point too, keeping the job alive here would
+                //     buy nothing: it would fire, stand down, and leave the same state behind.
+                // The give-up marker and its 1105 alert DO survive the disable (see
+                // shouldReleaseGiveUpOnDisable), so the user is still told they are unprotected and
+                // still has both Connect (via shouldRestartForRecovery) and Disconnect. The bound
+                // is handed back to them by their own explicit action, not silently dropped.
                 failoverRearmJob?.cancel()
                 failoverRearmJob = null
                 // Unconditional, for the same reason the cancel above is: the re-arm job is the

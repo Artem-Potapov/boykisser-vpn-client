@@ -419,6 +419,110 @@ class SessionLifecycleDecisionTest {
         }
     }
 
+    // --- The single automatic recovery is spent by an ATTEMPT, never by scheduling one ---
+
+    @Test
+    fun unprotectedRetry_attemptsFromTheOneStateARotationCanReserve() {
+        // CONNECTED is exactly canReserveRotation's requirement, so this is the only state in
+        // which dispatching a rotation can actually do anything.
+        assertEquals(
+            UnprotectedRetryAction.ATTEMPT,
+            unprotectedRetryAction(
+                tunnelState = SessionTunnelState.CONNECTED,
+                unprotectedSinceMs = 0L,
+                now = 1_000L,
+                rotationWindowMs = 600_000L,
+            )
+        )
+    }
+
+    @Test
+    fun unprotectedRetry_thatCannotBeAttempted_isDeferredNotForfeited() {
+        // THE defect this rule exists for. The retry used to be marked consumed at SCHEDULE time,
+        // so a kill-switch pause landing before the timer fired spent it with no attempt at all:
+        // rotateTunnel bailed at canReserveRotation, no second give-up ever happened, and
+        // shouldStopServiceOnGiveUp could therefore never fire. The service then ran with NO TUN
+        // until the user intervened.
+        for (state in SessionTunnelState.entries) {
+            if (state == SessionTunnelState.CONNECTED) continue
+            assertEquals(
+                "a retry that cannot be attempted in $state must be re-armed, not forfeited",
+                UnprotectedRetryAction.DEFER,
+                unprotectedRetryAction(
+                    tunnelState = state,
+                    unprotectedSinceMs = 0L,
+                    now = 600_000L,
+                    rotationWindowMs = 600_000L,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun unprotectedRetry_stopsTheServiceOnceDeferringHasRunOutOfTime() {
+        // The other half of the bound, and the reason DEFER is safe: re-arming cannot go on
+        // forever. A service that is running, owns no TUN and cannot even attempt a recovery must
+        // land in an honest OFF state rather than persist indefinitely while protecting nothing.
+        for (state in SessionTunnelState.entries) {
+            if (state == SessionTunnelState.CONNECTED) continue
+            assertEquals(
+                "deferring in $state must terminate, not repeat forever",
+                UnprotectedRetryAction.STOP_SERVICE,
+                unprotectedRetryAction(
+                    tunnelState = state,
+                    unprotectedSinceMs = 0L,
+                    now = 10_000_000L,
+                    rotationWindowMs = 600_000L,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun unprotectedRetry_deferralDeadlineIsExactAndScalesWithTheWindow() {
+        // The deadline is expressed in rotation windows, so a user who asked for hour-long windows
+        // is not stopped before their first window has even elapsed. `now` is a parameter, so this
+        // is checked without waiting on a clock.
+        val window = 600_000L
+        val deadline = window * UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS
+        assertEquals(
+            "one millisecond inside the deadline still re-arms",
+            UnprotectedRetryAction.DEFER,
+            unprotectedRetryAction(
+                tunnelState = SessionTunnelState.PAUSED,
+                unprotectedSinceMs = 0L,
+                now = deadline - 1,
+                rotationWindowMs = window,
+            )
+        )
+        assertEquals(
+            "reaching the deadline stops the service",
+            UnprotectedRetryAction.STOP_SERVICE,
+            unprotectedRetryAction(
+                tunnelState = SessionTunnelState.PAUSED,
+                unprotectedSinceMs = 0L,
+                now = deadline,
+                rotationWindowMs = window,
+            )
+        )
+    }
+
+    @Test
+    fun unprotectedRetry_stillAttemptsWhenTheSessionRecoversAfterTheDeadline() {
+        // Being able to act beats the deadline: the attempt is itself a terminating path (it either
+        // restores a tunnel or produces the second give-up that stops the service), so stopping
+        // instead would throw away the recovery the user is owed.
+        assertEquals(
+            UnprotectedRetryAction.ATTEMPT,
+            unprotectedRetryAction(
+                tunnelState = SessionTunnelState.CONNECTED,
+                unprotectedSinceMs = 0L,
+                now = 10_000_000L,
+                rotationWindowMs = 600_000L,
+            )
+        )
+    }
+
     // --- A scheduled retry must not outlive the setting that authorised it ---
 
     @Test

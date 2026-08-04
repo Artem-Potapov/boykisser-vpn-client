@@ -364,6 +364,63 @@ internal fun shouldStopServiceOnGiveUp(
 ): Boolean = outcome == FailoverGiveUpOutcome.UNPROTECTED && unprotectedRetryConsumed
 
 /**
+ * What the re-arm timer of an UNPROTECTED give-up must do when it fires. See
+ * [unprotectedRetryAction].
+ */
+internal enum class UnprotectedRetryAction {
+    /** Reserve a rotation now. This is what SPENDS the single automatic recovery. */
+    ATTEMPT,
+
+    /** Nothing can be attempted yet; re-arm the timer WITHOUT spending the recovery. */
+    DEFER,
+
+    /** Deferring has run out of time: stop a service that is running and protecting nothing. */
+    STOP_SERVICE,
+}
+
+/**
+ * How long deferring may go on, expressed in rotation windows rather than as a fixed duration, so
+ * a user who asked for hour-long windows is never stopped before their first window has elapsed.
+ */
+internal const val UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS = 3
+
+/**
+ * What an UNPROTECTED give-up's re-arm timer must do at the moment it fires.
+ *
+ * The single automatic recovery an UNPROTECTED give-up is granted must be spent by an ATTEMPT, not
+ * by the decision to schedule one. It used to be marked consumed at SCHEDULE time, which broke the
+ * feature's absolute bound in one specific, entirely reachable way: a kill-switch pause landing
+ * before the timer fired left `rotateTunnel` bailing at `canReserveRotation`, so no second give-up
+ * ever happened, so [shouldStopServiceOnGiveUp] could never fire — and the foreground service went
+ * on running with NO TUN until the user intervened.
+ *
+ * The three arms are the three halves of that bound:
+ *  - `CONNECTED` is exactly [canReserveRotation]'s requirement, so it is the ONLY state in which a
+ *    dispatched rotation can do anything. Acting beats the deadline: the attempt is itself a
+ *    terminating path (it restores a tunnel, or produces the second give-up that stops the
+ *    service), so an over-deadline session that has become actionable must still attempt.
+ *  - Any other state has another owner mid-transition, or is the kill-switch's deliberate `PAUSED`.
+ *    A recovery that could not even be attempted must NOT silently forfeit the bound, so re-arm.
+ *  - Deferring cannot repeat forever, or the bound is gone again by a different route. Once the
+ *    unprotected episode has outlasted [UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS] windows without
+ *    once becoming actionable, land in an honest OFF state.
+ *
+ * [now] is a parameter, never read from a clock here, so every one of those thresholds is testable
+ * without waiting — the same discipline `FailoverDecision.admitRotation` follows.
+ */
+internal fun unprotectedRetryAction(
+    tunnelState: SessionTunnelState,
+    unprotectedSinceMs: Long,
+    now: Long,
+    rotationWindowMs: Long,
+): UnprotectedRetryAction = when {
+    tunnelState == SessionTunnelState.CONNECTED -> UnprotectedRetryAction.ATTEMPT
+    now - unprotectedSinceMs < rotationWindowMs * UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS ->
+        UnprotectedRetryAction.DEFER
+    else -> UnprotectedRetryAction.STOP_SERVICE
+}
+
+/**
  * Whether a give-up's re-arm timer may still act when it finally fires.
  *
  * The timer is scheduled under one set of preferences and fires up to an hour later under another,

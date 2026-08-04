@@ -716,15 +716,41 @@ preserved:
    then `stopVpn`. An honest off state beats a service that is running, protecting nothing, and telling
    the user to reconnect.
 
+### The retry is spent by an ATTEMPT, and a retry that cannot be attempted is re-armed
+
+`unprotectedRetryConsumed` is written **inside `rotateTunnel`'s reservation**, once
+`canReserveRotation` has actually admitted the transition — not at schedule time in
+`giveUpRotationLocked`. Marking it at schedule time broke the whole bound in one entirely reachable
+way: a kill-switch pause landing before the timer fired left `rotateTunnel` bailing at
+`canReserveRotation`, so **no second give-up ever happened**, so `shouldStopServiceOnGiveUp` could
+never fire — and the foreground service went on running with **no TUN** until the user intervened.
+
+The timer therefore no longer dispatches `rotateTunnel` blindly. `unprotectedRetryAction(tunnelState,
+unprotectedSinceMs, now, rotationWindowMs)` (pure, `now` passed in) decides at the firing point:
+
+| Arm | When | What it does |
+|---|---|---|
+| `ATTEMPT` | `sessionTunnelState == CONNECTED` — exactly `canReserveRotation`'s requirement, so the only state in which a dispatched rotation can do anything | `rotateTunnel(..., unprotectedRecoverySinceMs)`, which spends the retry as it reserves |
+| `DEFER` | any other state (another owner mid-transition, or the kill-switch's deliberate `PAUSED`) while the episode is inside its deadline | re-arms the timer with the **same** `unprotectedSinceMs`, spending nothing |
+| `STOP_SERVICE` | the episode has outlasted `UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS` (**3**) rotation windows without once becoming rotatable | `emitError` + the 1102 notification + `stopVpn` — the same honest off state the second give-up produces |
+
+Being able to act beats the deadline: an over-deadline session that has become `CONNECTED` still
+attempts, because the attempt is itself a terminating path. The deadline is expressed in rotation
+windows rather than as a flat duration so a user who chose hour-long windows is never stopped before
+their first window has even elapsed.
+
+`rotateTunnel` closes the same hole from its own side. The gap between the timer's decision and the
+rotation reserving the transition sits on `tunnelOpScope`, where a `killTunnel` can already be queued
+ahead of it — so a recovery rotation that finds it cannot reserve **re-arms with the original
+`unprotectedSinceMs`** instead of vanishing. The deadline keeps running from the original give-up, so
+that loop terminates even if the session never becomes rotatable again.
+
 `unprotectedRetryConsumed` is cleared exactly where `giveUpOutcome` is: a successful rotation, a
 successful revive, the recovery callback, full teardown — i.e. the events where *a tunnel demonstrably
-worked* — and the **contained** half of the disable release below. **Two carry-over cases are known and
-ACCEPTED**, both because they err towards stopping a service that cannot protect anything:
-
-- a retry whose give-up classifies `CONTAINED_BY_BLACKHOLE` leaves the flag set (traffic is contained,
-  so nothing clears it), so a later `UNPROTECTED` stops immediately with no retry of its own;
-- a kill-switch pause landing before the timer fires makes `rotateTunnel` bail at `canReserveRotation`,
-  silently spending the retry without attempting anything.
+worked* — and the **contained** half of the disable release below. **One carry-over case is known and
+ACCEPTED**, because it errs towards stopping a service that cannot protect anything: a retry whose
+give-up classifies `CONTAINED_BY_BLACKHOLE` leaves the flag set (traffic is contained, so nothing
+clears it), so a later `UNPROTECTED` stops immediately with no retry of its own.
 
 ### Disabling failover releases a give-up — but never the uncontained one
 
@@ -762,6 +788,18 @@ backstop is `shouldFireFailoverRetry(failoverEnabled, isCurrentSession)`, re-rea
 firing point, because the timer is scheduled under one set of preferences and fires up to an hour
 later. Without both, a user who turned auto-failover **off** could still be handed an automatic server
 rotation — and, on the unprotected retry path, an automatic VPN shutdown.
+
+**The cancel stays unconditional even for `UNPROTECTED`, where this timer is now the only thing that
+can end a service owning no TUN.** That is a deliberate, separate answer from the one the *firing*
+path gets above, and the two must not be generalised into one rule. The firing path fixes a bound the
+user never asked to lose; the disable path is the user explicitly asking this feature to stop acting,
+and "no automatic VPN shutdown after a disable" is the rule `shouldFireFailoverRetry` already exists
+to enforce — so keeping the job alive here would only let it fire, stand down and leave the same state
+behind. What survives instead is everything the user needs to act themselves: the `UNPROTECTED` marker
+and its 1105 alert are excluded from the release (`shouldReleaseGiveUpOnDisable`), Connect works
+through `shouldRestartForRecovery`, and Disconnect works. The residual — a service running unprotected
+after an explicit disable, until the user touches one of those two controls — is accepted, and it is
+bounded by their own action rather than dropped silently.
 
 ### Connect from `UNPROTECTED` restarts the session
 
