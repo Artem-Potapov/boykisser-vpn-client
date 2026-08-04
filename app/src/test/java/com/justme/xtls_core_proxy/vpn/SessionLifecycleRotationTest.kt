@@ -14,6 +14,7 @@ class SessionLifecycleRotationTest {
             canReserveRotation(
                 running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
                 tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = true,
             )
         )
         assertFalse(
@@ -21,6 +22,7 @@ class SessionLifecycleRotationTest {
             canReserveRotation(
                 running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
                 tunnelState = SessionTunnelState.PAUSED,
+                failoverEnabled = true,
             )
         )
         assertFalse(
@@ -28,12 +30,28 @@ class SessionLifecycleRotationTest {
             canReserveRotation(
                 running = true, activeSessionEpoch = 6L, callbackSessionEpoch = 5L,
                 tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = true,
             )
         )
         assertFalse(
             canReserveRotation(
                 running = false, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
                 tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = true,
+            )
+        )
+    }
+
+    @Test
+    fun canReserveRotation_refusesWhenFailoverDisabled() {
+        // Queued rotateTunnel (mid-episode recursive dispatch, or a monitor callback already on
+        // tunnelOpScope) must not reserve after the user switched the feature off — otherwise the
+        // disable branch's thrash-window reset hands it a fresh budget and it keeps switching.
+        assertFalse(
+            canReserveRotation(
+                running = true, activeSessionEpoch = 5L, callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+                failoverEnabled = false,
             )
         )
     }

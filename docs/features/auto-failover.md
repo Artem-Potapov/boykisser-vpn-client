@@ -406,12 +406,12 @@ Two things the table above depends on that are **not visible from it**:
   case a covered exit rather than a leak. `tunnelOpScope.cancel()` has exactly one call site
   (`onDestroy`), so this is a single ordering to preserve, not a pattern. It is load-bearing for the
   bridge and reads as unrelated cleanup.
-- **Disabling auto-failover mid-episode deliberately leaves the bridge up.** The disable branch does
-  not release it, and `canReserveRotation` has no `enabled` term, so the already-dispatched retry runs
-  to completion and terminates in one of the handled exits above (release on success, re-open on
-  failure, adopt on give-up). This is correct — releasing on a settings change would drop the user
-  onto the clear network as a side effect of turning a feature off — but it means a tester who
-  disables failover mid-switch will see the bridge outlive the setting. That is expected, not a leak.
+- **Disabling auto-failover mid-episode does not leave a stranded bridge.** The disable branch does
+  not release a bridge mid-`ROTATING` (releasing on a settings change would drop the user onto the
+  clear network), but `canReserveRotation` now requires `failoverEnabled`, so a recursive retry already
+  queued on `tunnelOpScope` refuses reservation and **releases** any between-candidates bridge there.
+  A rotation that already holds `ROTATING` still runs to a handled exit (release / re-open / adopt /
+  abort-to-give-up).
 
 ### One builder body, two users
 
@@ -1171,12 +1171,13 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   visible residue is that disabling failover *during* a kill-switch pause emits the contained-give-up
   message, whose "tap Reconnect" refers to a button `PAUSED` does not offer. Cosmetic: it does not
   misstate the protection posture.
-- **`rotateTunnel` has no stale-callback guard**, unlike `killTunnel` (which drops a queued event whose
-  feature was disabled while it sat on `tunnelOpScope`). A monitor callback already queued when the user
-  disables failover still performs one rotation — a one-dispatch window, versus the up-to-an-hour timer
-  window that *is* closed. **A naive port of `killTunnel`'s guard would break the `UNPROTECTED` retry
-  path**, which legitimately rotates with `failoverMonitor == null`: the check must be on `enabled`, not
-  on the monitor.
+- **`rotateTunnel` refuses reservation when failover is disabled.** `canReserveRotation` takes
+  `failoverEnabled` (same veto shape as `shouldFireFailoverRetry` at the timer). A monitor callback or
+  mid-episode recursive dispatch already queued on `tunnelOpScope` when the user disables therefore
+  bails without admitting — and releases any between-candidates bridge. A rotation that already holds
+  `ROTATING` is unaffected and still exits via release / adopt / give-up. The check is on `enabled`,
+  not on the monitor, so the `UNPROTECTED` retry (which legitimately rotates with
+  `failoverMonitor == null`) still works while the feature is on.
 - **The single automatic recovery rotation excludes the last-known-good server**, because
   `nextCandidate` filters out `currentId` and `currentProfileId` was rolled back to it.
 - **`UNPROTECTED` can briefly coexist with a live tunnel and a running core** — `bringUpTunnel` releases

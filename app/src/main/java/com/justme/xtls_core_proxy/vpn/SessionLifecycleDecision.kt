@@ -55,13 +55,19 @@ internal fun canReserveRevive(
  * Deliberately NOT expressed via [canReserveRevive]: revive reserves from PAUSED, rotation from
  * CONNECTED. Sharing one state would let a kill-switch revive and a failover rotation each believe
  * they own the same transition.
+ *
+ * [failoverEnabled] is the same shape as [shouldFireFailoverRetry]'s veto: the disable branch clears
+ * the re-arm timer and thrash window, but work already queued on `tunnelOpScope` still reaches this
+ * reservation. Without the enabled check it would admit with a fresh budget after the user switched
+ * the feature off. The timer vetoes at fire; queued rotations veto here.
  */
 internal fun canReserveRotation(
     running: Boolean,
     activeSessionEpoch: Long?,
     callbackSessionEpoch: Long,
     tunnelState: SessionTunnelState,
-): Boolean = ownsTunnelTransition(
+    failoverEnabled: Boolean,
+): Boolean = failoverEnabled && ownsTunnelTransition(
     running = running,
     activeSessionEpoch = activeSessionEpoch,
     callbackSessionEpoch = callbackSessionEpoch,

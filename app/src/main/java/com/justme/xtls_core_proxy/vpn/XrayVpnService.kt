@@ -1078,17 +1078,22 @@ class XrayVpnService : VpnService() {
                             activeSessionEpoch = activeSessionEpoch,
                             callbackSessionEpoch = sessionEpoch,
                             tunnelState = sessionTunnelState,
+                            failoverEnabled = failoverSettings.enabled,
                         )
                     ) {
-                        // Nothing was attempted — the transition could not even be reserved,
-                        // overwhelmingly because a kill-switch pause landed on this serialized
-                        // scope first. A recovery that never happened must not spend the single
-                        // retry, and it must not silently drop the bound that stops a service
-                        // protecting nothing either, so re-arm with the ORIGINAL give-up instant:
-                        // the deferral deadline in unprotectedRetryAction keeps running from
-                        // there, and terminates this loop even if the session never becomes
-                        // rotatable again.
-                        if (unprotectedRecoverySinceMs != null && isCurrentSessionLocked(sessionEpoch)) {
+                        // Nothing was attempted — the transition could not even be reserved
+                        // (kill-switch pause, disable, stale epoch, …). A bridge held between
+                        // candidates would otherwise leak until stopVpn if disable vetoed here —
+                        // release is idempotent when none is held.
+                        releaseRotationBridgeLocked("rotation reservation refused")
+                        // A recovery that never happened must not spend the single retry, and it
+                        // must not silently drop the bound that stops a service protecting nothing
+                        // either, so re-arm with the ORIGINAL give-up instant — but only while the
+                        // feature is still enabled (same veto shape as shouldFireFailoverRetry).
+                        if (unprotectedRecoverySinceMs != null &&
+                            isCurrentSessionLocked(sessionEpoch) &&
+                            failoverSettings.enabled
+                        ) {
                             LogRepository.append(
                                 "Failover: recovery rotation could not reserve the transition " +
                                     "(tunnel is $sessionTunnelState); re-arming without spending " +
