@@ -893,9 +893,15 @@ and "no automatic VPN shutdown after a disable" is the rule `shouldFireFailoverR
 to enforce — so keeping the job alive here would only let it fire, stand down and leave the same state
 behind. What survives instead is everything the user needs to act themselves: the `UNPROTECTED` marker
 and its 1105 alert are excluded from the release (`shouldReleaseGiveUpOnDisable`), Connect works
-through `shouldRestartForRecovery`, and Disconnect works. The residual — a service running unprotected
-after an explicit disable, until the user touches one of those two controls — is accepted, and it is
-bounded by their own action rather than dropped silently.
+through `shouldRestartForRecovery`, and Disconnect works. The residual while disabled — a service
+running unprotected until the user touches one of those two controls — is accepted.
+
+**Re-enable restores the UNPROTECTED re-arm.** The disable reasoning above does **not** cover turning
+the feature back on: without a restore the health monitor starts (it does not require a TUN), probes
+the clear network, never asks for a rotation, and `clearGiveUpStateOnRecovery` refuses to clear
+without a TUN — so no automatic recovery or stop would ever occur. `shouldRestoreUnprotectedRearm`
+reschedules the rotation retry with the original `unprotectedEpisodeSinceMs` so the deferral deadline
+keeps running across the toggle.
 
 ### Connect from `UNPROTECTED` restarts the session
 

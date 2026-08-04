@@ -521,6 +521,24 @@ internal fun shouldFireFailoverRetry(
 ): Boolean = failoverEnabled && isCurrentSession
 
 /**
+ * Whether re-enabling auto-failover must reschedule the UNPROTECTED recovery re-arm.
+ *
+ * Disable cancels the pending re-arm job — correct for the disable half (see
+ * [shouldFireFailoverRetry]). That reasoning does **not** cover re-enable: without a restore, the
+ * health monitor may start and probe the clear network forever while no automatic recovery or stop
+ * ever runs.
+ */
+internal fun shouldRestoreUnprotectedRearm(
+    failoverEnabled: Boolean,
+    giveUpOutcome: FailoverGiveUpOutcome?,
+    hasTunnel: Boolean,
+    rearmJobActive: Boolean,
+): Boolean = failoverEnabled &&
+    giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED &&
+    !hasTunnel &&
+    !rearmJobActive
+
+/**
  * Whether an incoming start request should RESTART the running session instead of taking
  * `startVpn`'s "VPN already running" early return.
  *

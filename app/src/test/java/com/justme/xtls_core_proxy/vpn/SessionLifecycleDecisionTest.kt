@@ -623,6 +623,57 @@ class SessionLifecycleDecisionTest {
         assertFalse(shouldFireFailoverRetry(failoverEnabled = false, isCurrentSession = false))
     }
 
+    @Test
+    fun reEnableDuringUnprotected_restoresTheRecoveryRearm() {
+        // Disable cancels failoverRearmJob — the only automatic recovery/stop for a no-TUN session.
+        // Re-enable must reschedule it; otherwise the monitor probes the clear network, never
+        // rotates, and the service runs forever while protecting nothing.
+        assertTrue(
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                hasTunnel = false,
+                rearmJobActive = false,
+            )
+        )
+        assertFalse(
+            "still disabled — disable half correctly leaves no re-arm",
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = false,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                hasTunnel = false,
+                rearmJobActive = false,
+            )
+        )
+        assertFalse(
+            "re-arm already alive — do not stack a second timer",
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                hasTunnel = false,
+                rearmJobActive = true,
+            )
+        )
+        assertFalse(
+            "contained give-ups are not the UNPROTECTED recovery path",
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+                hasTunnel = true,
+                rearmJobActive = false,
+            )
+        )
+        assertFalse(
+            "a live tunnel means clearGiveUpStateOnRecovery can clear — not this restore",
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                hasTunnel = true,
+                rearmJobActive = false,
+            )
+        )
+    }
+
     // --- Connect-from-UNPROTECTED must actually recover, not no-op ---
 
     @Test

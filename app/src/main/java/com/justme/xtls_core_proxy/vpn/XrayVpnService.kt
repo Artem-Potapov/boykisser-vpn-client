@@ -231,6 +231,13 @@ class XrayVpnService : VpnService() {
      */
     private var unprotectedRetryConsumed: Boolean = false
 
+    /**
+     * Instant the current UNPROTECTED episode began, for [unprotectedRetryAction]'s deferral
+     * deadline. Survives a disable/re-enable so restoring the re-arm does not restart the bound.
+     * Cleared wherever [giveUpOutcome] is cleared. Guarded by `lock`.
+     */
+    private var unprotectedEpisodeSinceMs: Long? = null
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -995,6 +1002,7 @@ class XrayVpnService : VpnService() {
                             // actively misleading — it claims the internet is off while it works.
                             giveUpOutcome = null
                             unprotectedRetryConsumed = false
+                            unprotectedEpisodeSinceMs = null
                             afterReviveCommitted("retracting the give-up alert") {
                                 VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             }
@@ -1281,6 +1289,7 @@ class XrayVpnService : VpnService() {
                             // also covers a rotation kicked off by the re-arm timer.
                             giveUpOutcome = null
                             unprotectedRetryConsumed = false
+                            unprotectedEpisodeSinceMs = null
                             afterRotationCommitted("retracting the give-up alert") {
                                 VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
                             }
@@ -1530,6 +1539,7 @@ class XrayVpnService : VpnService() {
             )
             giveUpOutcome = null
             unprotectedRetryConsumed = false
+            unprotectedEpisodeSinceMs = null
             // Both surfaces, because stopVpn clears the foreground notification: the in-app error
             // for a user who is looking, the 1102 error notification (its own id, survives
             // stopForeground) for one who is not.
@@ -1584,10 +1594,12 @@ class XrayVpnService : VpnService() {
         // left shouldStopServiceOnGiveUp unable to ever fire. The instant below is the start of the
         // deferral deadline that bounds the re-arming that replaces it.
         val retryByRotation = outcome == FailoverGiveUpOutcome.UNPROTECTED
+        val sinceMs = System.currentTimeMillis()
+        if (retryByRotation) unprotectedEpisodeSinceMs = sinceMs
         scheduleFailoverRearmLocked(
             sessionEpoch,
             retryByRotation = retryByRotation,
-            unprotectedSinceMs = System.currentTimeMillis(),
+            unprotectedSinceMs = sinceMs,
         )
         announceDroppedDeferredKillLocked(deferredKillLabel)
     }
@@ -1640,6 +1652,7 @@ class XrayVpnService : VpnService() {
             LogRepository.append("Failover: tunnel is passing traffic again; clearing the give-up state")
             giveUpOutcome = null
             unprotectedRetryConsumed = false
+            unprotectedEpisodeSinceMs = null
             // The episode is demonstrably over, so the sliding thrash window starts clean too.
             //
             // KNOWN CONSEQUENCE, accepted rather than overlooked: after a THRASH-CAP give-up this
@@ -2120,6 +2133,7 @@ class XrayVpnService : VpnService() {
                     // Reconnect (VpnViewModel.reconnect) is the way back to a live tunnel.
                     giveUpOutcome = null
                     unprotectedRetryConsumed = false
+                    unprotectedEpisodeSinceMs = null
                     VpnNotifications.cancelFailoverBlackholed(this)
                     // Two outcomes share the BLACKHOLED state but not the truth: the blackhole
                     // really is holding traffic, while a live tunnel is still proxying and merely
@@ -2134,6 +2148,30 @@ class XrayVpnService : VpnService() {
                         FailoverGiveUpOutcome.UNPROTECTED, null -> Unit
                     }
                 }
+            }
+
+            // Re-enable after an UNPROTECTED disable: the cancel above dropped the only automatic
+            // recovery/stop for a no-TUN session. Restore the re-arm with the original episode
+            // instant so unprotectedRetryAction's deferral deadline keeps running. The disable
+            // half's reasoning (shouldFireFailoverRetry vetoes a kept-alive job) does not cover
+            // this — see shouldRestoreUnprotectedRearm.
+            if (shouldRestoreUnprotectedRearm(
+                    failoverEnabled = settings.enabled,
+                    giveUpOutcome = giveUpOutcome,
+                    hasTunnel = tunInterface != null,
+                    rearmJobActive = failoverRearmJob?.isActive == true,
+                )
+            ) {
+                val since = unprotectedEpisodeSinceMs ?: System.currentTimeMillis()
+                unprotectedEpisodeSinceMs = since
+                LogRepository.append(
+                    "Failover: restoring UNPROTECTED recovery re-arm after re-enable"
+                )
+                scheduleFailoverRearmLocked(
+                    sessionEpoch,
+                    retryByRotation = true,
+                    unprotectedSinceMs = since,
+                )
             }
 
             if (!shouldRunFailoverMonitor(
@@ -2299,6 +2337,7 @@ class XrayVpnService : VpnService() {
             episodeFailedIds = emptySet()
             giveUpOutcome = null
             unprotectedRetryConsumed = false
+            unprotectedEpisodeSinceMs = null
             // The session is over, so no BLACKHOLED line is true any more. This is the field's ONLY
             // clear site by design — see its declaration.
             blackholedLine = null
