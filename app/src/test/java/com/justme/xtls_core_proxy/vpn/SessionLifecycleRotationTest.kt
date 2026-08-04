@@ -304,4 +304,22 @@ class SessionLifecycleRotationTest {
             )
         }
     }
+
+    @Test
+    fun missingRequiredBridge_abortsTheUncoveredRebuild() {
+        // After tearDown the live TUN is gone. If the bridge could not be established, continuing
+        // the off-lock rebuild reopens the clear-network window the bridge exists to close.
+        // Aborting into give-up (which tries blackhole containment) is the fail-closed answer.
+        assertTrue(
+            shouldAbortRotationForMissingBridge(bridgeRequired = true, bridgeHeld = false)
+        )
+        assertFalse(
+            "bridge held — continue the rebuild under cover",
+            shouldAbortRotationForMissingBridge(bridgeRequired = true, bridgeHeld = true)
+        )
+        assertFalse(
+            "bridge was not required (already held / not ROTATING) — no abort from this rule",
+            shouldAbortRotationForMissingBridge(bridgeRequired = false, bridgeHeld = false)
+        )
+    }
 }

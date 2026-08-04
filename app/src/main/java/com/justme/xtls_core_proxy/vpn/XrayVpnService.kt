@@ -1177,13 +1177,25 @@ class XrayVpnService : VpnService() {
                     //
                     // Not folded into tearDownTunnelLocked: that function is also what the
                     // kill-switch and stopVpn use to reach a genuinely tunnel-less state.
-                    if (shouldEstablishRotationBridge(
-                            hasTunnel = tunInterface != null,
-                            hasRotationBridge = rotationBridgeInterface != null,
-                            tunnelState = sessionTunnelState,
+                    val bridgeRequired = shouldEstablishRotationBridge(
+                        hasTunnel = tunInterface != null,
+                        hasRotationBridge = rotationBridgeInterface != null,
+                        tunnelState = sessionTunnelState,
+                    )
+                    if (bridgeRequired) {
+                        establishRotationBridgeLocked()
+                    }
+                    if (shouldAbortRotationForMissingBridge(
+                            bridgeRequired = bridgeRequired,
+                            bridgeHeld = rotationBridgeInterface != null,
                         )
                     ) {
-                        establishRotationBridgeLocked()
+                        LogRepository.append(
+                            "Failover: rotation bridge could not be established after teardown; " +
+                                "aborting the uncovered rebuild into give-up"
+                        )
+                        giveUpRotationLocked(session.epoch, "rotation bridge could not be established")
+                        return@launch
                     }
                     currentProfileId = next.id
                     // ANNOUNCE THE SWITCH. The bridge holds traffic but does not carry it, so
@@ -1368,13 +1380,31 @@ class XrayVpnService : VpnService() {
                                 // ROTATING-only, which is what confines the bridge to a reserved
                                 // rotation. The two writes have no reader between them under this
                                 // lock, so the swap is behaviour-preserving for everything else.
-                                if (shouldEstablishRotationBridge(
-                                        hasTunnel = tunInterface != null,
-                                        hasRotationBridge = rotationBridgeInterface != null,
-                                        tunnelState = sessionTunnelState,
+                                // If the bridge cannot be established, abort into give-up HERE —
+                                // still ROTATING — rather than returning to CONNECTED and recursing
+                                // through an uncovered rebuild.
+                                val bridgeRequired = shouldEstablishRotationBridge(
+                                    hasTunnel = tunInterface != null,
+                                    hasRotationBridge = rotationBridgeInterface != null,
+                                    tunnelState = sessionTunnelState,
+                                )
+                                if (bridgeRequired) {
+                                    establishRotationBridgeLocked()
+                                }
+                                if (shouldAbortRotationForMissingBridge(
+                                        bridgeRequired = bridgeRequired,
+                                        bridgeHeld = rotationBridgeInterface != null,
                                     )
                                 ) {
-                                    establishRotationBridgeLocked()
+                                    LogRepository.append(
+                                        "Failover: rotation bridge could not be re-established; " +
+                                            "aborting the uncovered rebuild into give-up"
+                                    )
+                                    giveUpRotationLocked(
+                                        session.epoch,
+                                        "rotation bridge could not be established",
+                                    )
+                                    return@launch
                                 }
                                 // Return to CONNECTED so the next attempt can reserve the transition.
                                 sessionTunnelState = SessionTunnelState.CONNECTED
@@ -1888,15 +1918,19 @@ class XrayVpnService : VpnService() {
 
     /**
      * Opens the rotation bridge so no packet sees the clear network while a rotation rebuilds the
-     * tunnel. Best-effort by design: on failure the session simply falls back to the uncovered gap
-     * this bridge exists to close, which is where the code was before it existed — never to a crash
-     * inside a rotation's `catch (Throwable)`.
+     * tunnel. Returns whether a bridge fd is now held.
+     *
+     * On failure the caller must NOT continue the uncovered rebuild — see
+     * [shouldAbortRotationForMissingBridge]. That aborts into give-up (blackhole / UNPROTECTED)
+     * rather than reopening the clear-network window for seconds. Never strands an fd: a null
+     * return leaves [rotationBridgeInterface] untouched.
      *
      * Caller must hold `lock`, and must have checked [shouldEstablishRotationBridge].
      */
-    private fun establishRotationBridgeLocked() {
-        val pfd = establishUnreadTunnelLocked("rotation bridge") ?: return
+    private fun establishRotationBridgeLocked(): Boolean {
+        val pfd = establishUnreadTunnelLocked("rotation bridge") ?: return false
         rotationBridgeInterface = pfd
+        return true
     }
 
     /**

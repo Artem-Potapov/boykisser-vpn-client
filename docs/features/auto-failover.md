@@ -423,8 +423,9 @@ and stays **inside** the `try` for the reason it always did — both callers are
 `rotateTunnel`'s `catch (Throwable)`, and a throw raised inside a catch block escapes that try/catch
 entirely, landing uncaught on a `SupervisorJob` with no handler.
 
-Bridge establishment is **best-effort**: on failure the session simply falls back to the uncovered gap
-this bridge exists to close, which is where the code was before it existed.
+Bridge establishment is **required once the live TUN is torn down**. On failure,
+`shouldAbortRotationForMissingBridge` aborts into give-up rather than rebuilding uncovered — see
+Known residuals / the bridge section's failure path.
 
 ### Handover ordering: release-then-establish, and the follow-up it defers
 
@@ -1207,11 +1208,13 @@ Everything here was found, reasoned about, and **deliberately kept**. Please rea
   the code and this document, not asserted anywhere. QA Test 24 is the device check. Note what would
   silently un-fix it: giving `tunnelOpScope` more than one thread, or making `bringUpTunnel` a
   `suspend` function, both change which coroutine observes what and neither breaks a test.
-- **Bridge establishment is best-effort.** If `establish()` returns null or throws while opening the
-  bridge, the rotation proceeds through the *uncovered* gap — the pre-bridge behaviour — rather than
-  failing. It is logged — `Failover: rotation bridge establish() returned null` for the null return,
-  `Failover: rotation bridge TUN could not be established` for a throw — and nothing else
-  reports it, because a rotation that refused to proceed would be strictly worse.
+- **Bridge establishment failure aborts into give-up.** If `establish()` returns null or throws while
+  opening the bridge after the live TUN is already torn down, the rotation does **not** proceed through
+  the uncovered gap. `shouldAbortRotationForMissingBridge` funnels into `giveUpRotationLocked`, which
+  tries blackhole containment (or reports `UNPROTECTED` if that also fails). Logged as
+  `Failover: rotation bridge could not be established… aborting the uncovered rebuild into give-up`.
+  Deliberately not "retry the next candidate uncovered" — that reopens the clear-network window the
+  bridge exists to close.
 - **`stopVpn`'s `!shouldStop && tunInterface == null` early return skips `failoverRearmJob?.cancel()`**,
   so an up-to-an-hour timer can idle past it. Harmless: the job re-checks `isCurrentSessionLocked`.
 - **The blackhole builder omits `bringUpTunnel`'s "allow-only mode with no selected apps" warning** —

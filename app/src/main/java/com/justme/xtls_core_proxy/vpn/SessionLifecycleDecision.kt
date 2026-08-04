@@ -299,6 +299,21 @@ internal fun shouldEstablishRotationBridge(
     tunnelState == SessionTunnelState.ROTATING
 
 /**
+ * Whether a rotation that needed a bridge must abort rather than rebuild with no VPN interface.
+ *
+ * The caller has already torn the live TUN down under `lock`. Proceeding without a bridge reopens
+ * the clear-network window for the whole off-lock rebuild. Aborting funnels into give-up, which
+ * tries blackhole containment (or reports UNPROTECTED honestly if that also fails).
+ *
+ * [bridgeRequired] is the value of [shouldEstablishRotationBridge] just checked; [bridgeHeld] is
+ * whether [establishRotationBridge] actually left an fd in `rotationBridgeInterface`.
+ */
+internal fun shouldAbortRotationForMissingBridge(
+    bridgeRequired: Boolean,
+    bridgeHeld: Boolean,
+): Boolean = bridgeRequired && !bridgeHeld
+
+/**
  * What a failover give-up actually left behind. Three physically different situations that must
  * never share one message to the user.
  */
