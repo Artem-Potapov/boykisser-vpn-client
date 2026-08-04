@@ -567,8 +567,14 @@ class SessionLifecycleDecisionTest {
 
     @Test
     fun startWhileContained_doesNotRestart() {
-        // Both contained give-ups still hold a TUN, so traffic is not leaking and there is nothing
-        // for a restart to rescue.
+        // Both are excluded, for DIFFERENT reasons — do not collapse them into the shared, weaker
+        // one, which is the rationale a maintainer would feel safe widening on:
+        //   * CONTAINED_BY_LIVE_TUNNEL holds a RUNNING Xray core, and this predicate unlocks a
+        //     stopVpn on the MAIN THREAD, where that becomes a real instance.Close(). That is
+        //     RISK-1, and it is the reason this must never widen.
+        //   * CONTAINED_BY_BLACKHOLE holds no running core (hadTunnel == false, so stopXray()
+        //     already ran); it is excluded because it still holds a TUN, so a restart has nothing
+        //     to rescue.
         for (outcome in listOf(
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,

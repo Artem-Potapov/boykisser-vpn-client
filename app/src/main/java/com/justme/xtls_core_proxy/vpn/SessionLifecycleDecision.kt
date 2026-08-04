@@ -444,8 +444,31 @@ internal fun shouldFireFailoverRetry(
  * the VPN off and on again or pick another server. Everything else keeps the early return, because
  * the tile, `START_REDELIVER_INTENT` crash recovery and stray/duplicated intents all depend on
  * "start while running" being idempotent — a general restart would let a stray intent bounce a
- * perfectly healthy tunnel. The two contained outcomes are excluded for the same reason: they still
- * hold a TUN, so there is nothing for a restart to rescue.
+ * perfectly healthy tunnel.
+ *
+ * ## NEVER widen this beyond UNPROTECTED — and the two contained outcomes are excluded for
+ * DIFFERENT reasons
+ *
+ * They are stated separately on purpose. Collapsing them into the weaker, shared one ("they still
+ * hold a TUN") is precisely the rationale a maintainer would feel safe widening, and widening it
+ * deadlocks a VPN service on the main thread.
+ *
+ * - **`CONTAINED_BY_LIVE_TUNNEL` holds a RUNNING XRAY CORE.** This predicate unlocks a
+ *   `stopVpn(stopService = false)` that runs on the **main thread**, inside `onStartCommand`'s held
+ *   admission block. That call is a fast no-op today only because UNPROTECTED implies an
+ *   already-stopped core (`StopXray` returns immediately when `instance == nil`). Admitting this
+ *   outcome turns it into a real `instance.Close()` plus an fd close on the main thread. **That is
+ *   RISK-1**, documented in `AGENTS.md` and in `docs/features/auto-failover.md`. It is also why the
+ *   sibling rule holds: never add anything that awaits to `stopVpn`.
+ * - **`CONTAINED_BY_BLACKHOLE` holds no running core** — it is classified with `hadTunnel == false`,
+ *   i.e. after `tearDownTunnelLocked()` has already called `stopXray()`, and the blackhole builder
+ *   starts none. RISK-1 therefore does not apply to it. It is excluded for the *other* reason: it
+ *   **still holds a TUN, so there is nothing for a restart to rescue** — plus the general one above
+ *   that keeps "start while running" idempotent.
+ *
+ * Both contained outcomes reach a live tunnel again through `state/ReconnectFlow` instead, which
+ * stops via `ACTION_STOP` — already marshalled onto the service's `tunnelOpScope`, so no blocking
+ * call lands on the main thread and `stopVpn` needs no change at all.
  */
 internal fun shouldRestartForRecovery(
     running: Boolean,

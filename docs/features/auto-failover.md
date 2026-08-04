@@ -807,8 +807,23 @@ bounded by their own action rather than dropped silently.
 bypasses `startVpn`'s "VPN already running" early return. Everything else keeps the early return,
 because the tile, `START_REDELIVER_INTENT` crash recovery and stray/duplicated intents all depend on
 "start while running" being idempotent — a general restart would let a stray intent bounce a perfectly
-healthy tunnel. The two contained outcomes are excluded for the same reason: they still hold a TUN, so
-there is nothing for a restart to rescue.
+healthy tunnel.
+
+**The two contained outcomes are excluded for DIFFERENT reasons, and stating one reason for both is
+forbidden** — the shared, weaker one is exactly the rationale a maintainer would feel safe widening
+on, and widening this predicate deadlocks a VPN service on the main thread:
+
+- `CONTAINED_BY_LIVE_TUNNEL` holds a **running Xray core**, so admitting it turns the main-thread
+  `stopVpn` below into a real `instance.Close()`. **That is RISK 1**, and it is the reason the
+  companion rule — never add anything that awaits to `stopVpn` — has to hold too.
+- `CONTAINED_BY_BLACKHOLE` holds **no running core**: it is classified with `hadTunnel == false`,
+  i.e. after `tearDownTunnelLocked()` already called `stopXray()`, and the blackhole builder starts
+  none. RISK 1 does not apply to it. It is excluded because it **still holds a TUN, so there is
+  nothing for a restart to rescue**, plus the general idempotence reason above.
+
+Both reach a live tunnel again through [`ReconnectFlow`](#reconnectflow--stop-settle-start-verify),
+which stops via `ACTION_STOP` — already marshalled onto `tunnelOpScope`, so nothing blocking lands on
+the main thread.
 
 The restart calls `stopVpn(stopService = false)` and **falls through** to the normal start path for a
 fresh epoch. `stopService = false` keeps this service instance alive: a real `stopSelf()` there would
