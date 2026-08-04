@@ -210,6 +210,16 @@ Key properties:
   Guarded **per step**, not as one block: skipping `applyFailoverPreferences` leaves the watchdog dead
   for the rest of the session and skipping the replay silently drops a kill-switch event, so a shared
   guard would let a throw in the trivial first step take both out.
+- **A committed REVIVE is guarded the same way, for a different consequence.** `reviveTunnel` does
+  the same class of post-commit work (publish `CONNECTED`, retract 1103/1105, refresh 1101, restart
+  the watchdog, replay a deferred kill) with its own `catch (Throwable) → failRevive` funnel still
+  armed. Rotation's escape *reclassifies* a success; revive's escapes into **silence** — `failRevive`
+  demands `REVIVING`, the commit has already left it, so it logs nothing, reports nothing and stops
+  nothing, and the session is left with a live tunnel, a dead watchdog and a dropped kill-switch
+  event with no trace of why. `afterReviveCommitted` wraps each step. Both wrappers share one body
+  (`afterTransitionCommitted`), which keeps the try/catch and the `CancellationException` rule in one
+  place while keeping the **per-step** granularity that is the whole point; the two named wrappers
+  exist so each transition's distinct consequence stays written down at the code.
 - **The thrash cap is a sliding window.** `FailoverDecision.admitRotation` prunes attempts older than
   `rotationWindowMs` before counting, so a burst long ago cannot permanently lock failover out.
 - **Candidate order is list order, not latency order** (`FailoverDecision.nextCandidate`). Deliberate
@@ -364,7 +374,7 @@ mutually-exclusive claims on the fd. The rules:
 | Kill-switch event arrives during `ROTATING` | **Deferred**, not dropped (`shouldDeferKillDuringTransition`), recorded in `pendingKillLabel`, and replayed if the rotation commits `CONNECTED`. If the rotation instead **gives up**, the funnel **drops** it and says so — see below | The foreground monitor is edge-triggered and would never re-fire the event, leaving the tunnel CONNECTED with a kill-listed app foregrounded |
 | The listed app **leaves** before the rotation commits | The deferral is **withdrawn** (`deferredKillToWithdraw`), so nothing is replayed — see below | Same edge-triggered monitor: the leave fires once and, if dropped, the replayed kill parks the session `PAUSED` for an app that has gone, with no automatic recovery |
 | Tunnel is `PAUSED` (kill-switch) | The health monitor is **stopped**, not paused (`shouldRunFailoverMonitor` is `CONNECTED`-only) | There is no tunnel, so every probe would fail and the engine would "rotate" a tunnel the kill-switch deliberately tore down. `stop()` (not `pausePolling()`) because pausing preserves the failure count, which would trip instantly on revive |
-| Revive commits `CONNECTED` | `reviveTunnel` calls `applyFailoverPreferences` **outside** the locked block | Nothing else restarts the monitor; without this, failover is dead for the rest of the session after the first kill-switch pause. It must run after `CONNECTED` is committed or it reads `REVIVING` and no-ops |
+| Revive commits `CONNECTED` | `reviveTunnel` calls `applyFailoverPreferences` **outside** the locked block, wrapped in `afterReviveCommitted` like every other post-commit step | Nothing else restarts the monitor; without this, failover is dead for the rest of the session after the first kill-switch pause. It must run after `CONNECTED` is committed or it reads `REVIVING` and no-ops — and an unguarded throw on the way there would silently take both it and the deferred-kill replay out |
 | Give-up lands while the state is not `CONNECTED` | Stand down: log, re-arm the monitor timer, touch nothing | `PAUSED`'s compliance contract is literally "no tunnel must exist"; establishing a blackhole (or overwriting the PAUSED connection state) would break it outright |
 | Screen off / on | One shared `BroadcastReceiver` pauses/resumes **both** monitors | Registration used to belong entirely to the kill-switch, which failed failover two ways: with failover on and the kill-switch off (the **default** pairing) no receiver existed at all, and turning the kill-switch off mid-session tore the receiver out from under a running failover monitor. `shouldHoldScreenReceiver(killSwitchLive, failoverLive)` now owns it — hold while EITHER is live, release only when NEITHER is |
 

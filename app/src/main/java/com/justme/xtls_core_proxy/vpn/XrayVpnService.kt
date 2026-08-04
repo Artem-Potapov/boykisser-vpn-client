@@ -916,17 +916,55 @@ class XrayVpnService : VpnService() {
                             if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.REVIVING)) {
                                 return@onSuccess
                             }
+                            // ---- COMMIT ----
+                            // From here the revive has succeeded, and nothing that follows may
+                            // reach the outer `catch (error: Throwable)`. Rotation guards its own
+                            // post-commit work because an escape there RECLASSIFIES a healthy
+                            // tunnel; this one is guarded because an escape here vanishes into
+                            // SILENCE. failRotation's counterpart, failRevive, demands REVIVING —
+                            // which the line below has just left — so it logs nothing, reports
+                            // nothing and stops nothing. The session would simply be left with a
+                            // live tunnel, a dead watchdog and a dropped kill-switch event, and
+                            // the log would not say so.
                             sessionTunnelState = SessionTunnelState.CONNECTED
-                            LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            // ---- POST-COMMIT, still under `lock` ----
+                            // Guarded PER STEP, never as one shared block, for the reason recorded
+                            // at rotation's commit: the steps below have INDEPENDENT consequences,
+                            // so one guard would let a throw in the first take out the rest. The
+                            // bare field writes between them are unguarded because they cannot
+                            // throw, and the last expression is the block's return value.
+                            //
+                            // The three guarded calls here reach a subsystem: notify/cancel are
+                            // binder calls and localizedString builds a configuration context and
+                            // resolves a resource. setConnectionState is a bare StateFlow write
+                            // that realistically cannot throw; it is guarded anyway so no single
+                            // post-commit step is left as the one path back to the outer catch.
+                            //
+                            // Guarded IN PLACE rather than moved off the lock: publishing
+                            // CONNECTED under the same lock as the state transition it describes
+                            // is what stops a concurrent kill-switch pause or stop — both of which
+                            // write LogRepository state while holding `lock` — from being
+                            // overwritten by a late CONNECTED from here.
+                            afterReviveCommitted("publishing the connected state") {
+                                LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
+                            }
                             // Dismiss the separate exposed heads-up; restore the connected status.
-                            VpnNotifications.cancelExposed(this@XrayVpnService)
+                            // Its own guard: dropping it would leave 1103's "the VPN is OFF and
+                            // you're exposed" heads-up standing over a tunnel that is back up.
+                            afterReviveCommitted("retracting the exposure alert") {
+                                VpnNotifications.cancelExposed(this@XrayVpnService)
+                            }
                             // A revive that lands on a blackholed session replaces the unread fd
                             // with a real Xray-backed tunnel, so the give-up alert would now be
                             // actively misleading — it claims the internet is off while it works.
                             giveUpOutcome = null
                             unprotectedRetryConsumed = false
-                            VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
-                            updateNotification(localizedString(R.string.vpn_status_connected))
+                            afterReviveCommitted("retracting the give-up alert") {
+                                VpnNotifications.cancelFailoverBlackholed(this@XrayVpnService)
+                            }
+                            afterReviveCommitted("refreshing the ongoing notification") {
+                                updateNotification(localizedString(R.string.vpn_status_connected))
+                            }
                             // A kill-switch event deferred during this revive must now be replayed
                             // so the tunnel does not stay CONNECTED with the kill-listed app in the
                             // foreground. The marker is deliberately left ARMED and only observed
@@ -935,17 +973,25 @@ class XrayVpnService : VpnService() {
                             // something to withdraw. See replayDeferredKill.
                             pendingKillLabel != null
                         }
+                        // ---- POST-COMMIT, off the lock ----
                         // Restart failover for the restored tunnel — nothing else does, so without
                         // this the feature would stay dead for the rest of the session after the
                         // first kill-switch pause. Reads the current settings flow value (the
                         // observer keeps it fresh) and re-checks epoch + CONNECTED internally.
                         // MUST run outside the lock block above: it takes the lock itself, and
                         // running it before CONNECTED is committed would read REVIVING and no-op.
-                        applyFailoverPreferences(FailoverPreferences.state.value, session.epoch)
+                        // Guarded separately from the replay below because skipping it leaves the
+                        // watchdog dead for the rest of the session.
+                        afterReviveCommitted("restarting the health monitor") {
+                            applyFailoverPreferences(FailoverPreferences.state.value, session.epoch)
+                        }
                         // Ordered before the replay so a replayed kill correctly stops the monitor
-                        // again through killTunnel's pause path.
+                        // again through killTunnel's pause path. Its own guard because skipping it
+                        // silently drops a kill-switch event the user asked for.
                         if (hasDeferredKill) {
-                            replayDeferredKill(session.epoch)
+                            afterReviveCommitted("replaying the deferred kill") {
+                                replayDeferredKill(session.epoch)
+                            }
                         }
                     }
                     .onFailure { error ->
@@ -1517,28 +1563,56 @@ class XrayVpnService : VpnService() {
     }
 
     /**
-     * Runs one settle-up [step] that follows a COMMITTED rotation, converting a throw into a log
-     * line instead of letting it escape.
+     * Runs one settle-up [step] that follows a COMMITTED tunnel transition ([transition] names it
+     * in the log), converting a throw into a log line instead of letting it escape.
      *
-     * The escape is the whole point. `rotateTunnel`'s body is wrapped in `catch (Throwable) ->
-     * failRotation`, which funnels into `giveUpRotationLocked`; after the commit that runs with
-     * `sessionTunnelState == CONNECTED` and a live fd, so it classifies `CONTAINED_BY_LIVE_TUNNEL`
-     * and writes `BLACKHOLED` over the healthy tunnel the rotation just restored. A committed
-     * success must never be reclassifiable by follow-up work.
+     * ONE body, TWO transitions — see [afterRotationCommitted] and [afterReviveCommitted] for the
+     * distinct consequence each of them is protecting against. What both share is the shape: the
+     * transition's own `catch (Throwable)` funnel is still armed while its follow-up work runs, and
+     * that funnel was written for a transition that has NOT committed. Both callers must therefore
+     * wrap every post-commit step, and both must do it PER STEP: the steps have independent
+     * consequences, so a single shared guard would let a throw in the first, most trivial one take
+     * out the rest.
      *
      * `CancellationException` still propagates — structured-concurrency cancellation
      * (`tunnelOpScope.cancel()` in `onDestroy`) is not a step failure and must not be swallowed,
-     * the same rule the surrounding handler follows.
+     * the same rule both surrounding handlers follow.
+     *
+     * Safe to call while holding `lock`: a plain try/catch whose only side effect is
+     * `LogRepository.append`, taken under this lock in a dozen places here. It never suspends and
+     * never takes a lock of its own.
      */
-    private fun afterRotationCommitted(step: String, block: () -> Unit) {
+    private fun afterTransitionCommitted(transition: String, step: String, block: () -> Unit) {
         try {
             block()
         } catch (ce: CancellationException) {
             throw ce
         } catch (error: Throwable) {
-            LogRepository.append("Failover: $step failed after the rotation committed: ${error.message}")
+            LogRepository.append(
+                "$transition: $step failed after the transition committed: ${error.message}"
+            )
         }
     }
+
+    /**
+     * Post-commit guard for [rotateTunnel]. An escape here would RECLASSIFY a success:
+     * `rotateTunnel`'s body is wrapped in `catch (Throwable) -> failRotation`, which funnels into
+     * `giveUpRotationLocked`; after the commit that runs with `sessionTunnelState == CONNECTED` and
+     * a live fd, so it classifies `CONTAINED_BY_LIVE_TUNNEL` and writes `BLACKHOLED` over the
+     * healthy tunnel the rotation just restored.
+     */
+    private fun afterRotationCommitted(step: String, block: () -> Unit) =
+        afterTransitionCommitted("Failover rotation", step, block)
+
+    /**
+     * Post-commit guard for [reviveTunnel]. An escape here would SILENCE a failure rather than
+     * reclassify a success: the counterpart funnel, `failRevive`, demands `REVIVING`, and the
+     * commit has already left it — so it logs nothing, reports nothing and stops nothing, and the
+     * session is left with a live tunnel, a dead watchdog and a dropped kill-switch event with no
+     * trace of why.
+     */
+    private fun afterReviveCommitted(step: String, block: () -> Unit) =
+        afterTransitionCommitted("Kill-switch revive", step, block)
 
     private fun failRotation(sessionEpoch: Long, logMessage: String) {
         synchronized(lock) {
