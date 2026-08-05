@@ -222,8 +222,27 @@ object ConfigBuilder {
      * expanded against the actual outbound tags and rewritten as exact safe members. A
      * direct/helper selector or fallback would let a dead proxy answer the health probe
      * successfully on the clear network, and would move user traffic away from the fail-closed
-     * runtime path. Unsupported members are removed; a balancer with no proxy members is removed
-     * together with its now-invalid inboundTag rules.
+     * runtime path.
+     *
+     * **Only balancers that can carry proxy traffic are rewritten.** A balancer whose selectors
+     * expand to no proxy outbound at all — the "balanced direct egress" a metered
+     * everything-except-my-country config uses — is left **exactly as the user wrote it**, for two
+     * reasons that point the same way:
+     * - It can never become a proxy path anyway. [safeBalancerTags] admits a balancer only when a
+     *   selector names a proxy outbound exactly, which is true of the members written back here and
+     *   false of an untouched one, so the probe carve-outs, the DoH guard and inbound-tag revival
+     *   all skip it by construction.
+     * - Deleting it would **strand every rule that names it**. xray-core resolves `balancerTag`
+     *   while *building* the router and returns `errors.New("balancer ", btag, " not found")` for an
+     *   unknown tag (`app/router/router.go`), so one dangling reference stops the core from starting
+     *   and the profile cannot connect at all. [reconcileInboundTagRules] would not catch it: that
+     *   pass only inspects rules whose `inboundTag` died in the tun rewrite, and the archetype here
+     *   (a `geosite:` country rule) carries no `inboundTag`.
+     *
+     * Dropping those rules instead would keep the config valid but silently reroute traffic the user
+     * deliberately sent direct onto the proxy — on a metered link a real cost, not a preference.
+     * Leaving the balancer alone preserves the policy *and* the validity, and gives up nothing:
+     * that traffic was already going direct before this chokepoint ran.
      */
     private fun sanitizeProxyBalancers(root: JSONObject) {
         val routing = root.optJSONObject("routing") ?: return
@@ -232,14 +251,18 @@ object ConfigBuilder {
         val cleaned = JSONArray()
         for (i in 0 until balancers.length()) {
             val balancer = balancers.optJSONObject(i) ?: continue
-            val tag = balancer.optString("tag").takeIf { it.isNotBlank() } ?: continue
-            val selectors = balancer.optJSONArray("selector") ?: continue
-            val safeSelectors = (0 until selectors.length())
-                .map { selectors.optString(it) }
+            val selectors = balancer.optJSONArray("selector")
+            val safeSelectors = (0 until (selectors?.length() ?: 0))
+                .map { selectors!!.optString(it) }
                 .filter { it.isNotBlank() }
                 .flatMap { selector -> proxyTags.filter { proxyTag -> proxyTag.startsWith(selector) } }
                 .distinct()
-            if (safeSelectors.isEmpty()) continue
+            if (safeSelectors.isEmpty()) {
+                // Not a proxy path — carried through untouched. NEVER `continue` without putting it
+                // back: that is the dangling-reference bug, and it costs the whole connection.
+                cleaned.put(balancer)
+                continue
+            }
 
             val safe = JSONObject(balancer.toString())
             safe.put("selector", JSONArray(safeSelectors))

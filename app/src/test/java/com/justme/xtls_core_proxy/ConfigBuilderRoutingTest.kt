@@ -668,4 +668,112 @@ class ConfigBuilderRoutingTest {
         assertEquals("proxy-balancer", dohGuard.getString("balancerTag"))
         assertFalse("DoH guard must not pin the first proxy", dohGuard.has("outboundTag"))
     }
+
+    // C-D — a panel config that balances its DIRECT egress as well as its proxy egress. Sanitization
+    // removes `ru-direct-balancer` (no proxy member), but the rule naming it carries no inboundTag,
+    // so the inboundTag pass never looked at it and it survived as a DANGLING reference.
+    //
+    // That is not a cosmetic leftover: xray-core's `Router.Init` returns
+    // `errors.New("balancer ", btag, " not found")` (app/router/router.go:78-86) and refuses to
+    // build, so the core never starts and the profile cannot connect AT ALL — a config that works
+    // today becomes permanently unusable behind an opaque core error.
+    private val balancedDirectEgress = """
+        {"inbounds":[{"tag":"socks","protocol":"socks"}],
+         "outbounds":[
+          {"tag":"proxy-0","protocol":"vless","settings":{"vnext":[{"address":"1.1.1.1","port":443,
+            "users":[{"id":"u0"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"direct-a","protocol":"freedom"},
+          {"tag":"direct-b","protocol":"freedom"}],
+         "routing":{"balancers":[
+            {"tag":"ru-direct-balancer","selector":["direct-"],"strategy":{"type":"random"}},
+            {"tag":"proxy-balancer","selector":["proxy-"],"strategy":{"type":"leastLoad"}}],
+           "rules":[
+            {"type":"field","domain":["geosite:category-ru"],"balancerTag":"ru-direct-balancer"},
+            {"type":"field","inboundTag":["socks"],"balancerTag":"proxy-balancer"}]}}
+    """.trimIndent()
+
+    @Test fun a_removed_balancer_leaves_no_rule_naming_it() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancedDirectEgress,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val routing = JSONObject(out).getJSONObject("routing")
+        val declared = routing.optJSONArray("balancers").let { arr ->
+            (0 until (arr?.length() ?: 0)).map { arr!!.getJSONObject(it).optString("tag") }.toSet()
+        }
+        val referenced = ruleItems(out)
+            .map { JSONObject(it).optString("balancerTag") }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        assertTrue(
+            "fixture: the proxy balancer must survive sanitization; declared=$declared",
+            "proxy-balancer" in declared,
+        )
+        assertEquals(
+            "every balancerTag a rule names must still be declared — xray-core hard-fails " +
+                "Router.Init on an unknown balancer and refuses to start the core at all. " +
+                "declared=$declared referenced=$referenced",
+            emptyList<String>(),
+            referenced - declared,
+        )
+    }
+
+    @Test fun a_non_proxy_balancer_is_carried_through_untouched() {
+        // The way the dangling reference is avoided matters. Deleting the rules that name the
+        // balancer would also keep the config valid — but it would silently reroute the country the
+        // user deliberately sent direct onto the proxy, which on a metered link is a real cost. A
+        // balancer that cannot become a proxy path is therefore left exactly as written: it was
+        // already carrying that traffic direct before this chokepoint ran, and `safeBalancerTags`
+        // refuses it as a probe/DoH target regardless.
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancedDirectEgress,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val root = JSONObject(out)
+        val balancers = root.getJSONObject("routing").getJSONArray("balancers")
+        val direct = (0 until balancers.length())
+            .map { balancers.getJSONObject(it) }
+            .firstOrNull { it.optString("tag") == "ru-direct-balancer" }
+        assertTrue("a non-proxy balancer must survive, or its rules dangle", direct != null)
+        assertEquals(
+            "its selector must NOT be rewritten — the expansion is proxy-only and would empty it",
+            listOf("direct-"),
+            (0 until direct!!.getJSONArray("selector").length())
+                .map { direct.getJSONArray("selector").getString(it) },
+        )
+
+        val items = ruleItems(out)
+        assertTrue(
+            "the user's country-direct policy must survive; rules=$items",
+            items.map { JSONObject(it) }.any {
+                it.optString("balancerTag") == "ru-direct-balancer"
+            },
+        )
+        assertTrue(
+            "the proxy balancer's retargeted traffic rule must still be there; rules=$items",
+            items.map { JSONObject(it) }.any {
+                it.optString("balancerTag") == "proxy-balancer" &&
+                    it.optJSONArray("inboundTag")?.optString(0) == ConfigBuilder.TUN_INBOUND_TAG
+            },
+        )
+    }
+
+    @Test fun a_non_proxy_balancer_is_never_chosen_as_the_probe_or_user_traffic_target() {
+        // The half that makes carrying it through safe: it must not be selectable as a proxy path.
+        val out = ConfigBuilder.buildRuntimeConfig(
+            balancedDirectEgress,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val items = ruleItems(out)
+        for (index in listOf(domainCarveOutIndex(items), ipCarveOutIndex(items))) {
+            assertTrue("fixture: both carve-out halves must be emitted; rules=$items", index >= 0)
+            val rule = JSONObject(items[index])
+            assertEquals(
+                "the health probe must ride the validated proxy balancer, never the direct one",
+                "proxy-balancer",
+                rule.getString("balancerTag"),
+            )
+        }
+    }
 }

@@ -70,14 +70,56 @@ the user's country-direct policy for that one hostname** — the probe is the ap
 and is meaningless unless it traverses the proxy. It only ever moves traffic toward the proxy, so it
 costs nothing where it is not needed.
 
-### InboundTag reconciliation (tun-only rewrite)
+### Balancer validation (tun-only rewrite, first half)
+
+`replaceJsonInboundsWithTun` runs two passes in a fixed order — `sanitizeProxyBalancers`, then
+`reconcileInboundTagRules`. The order is load-bearing: reconciliation asks `safeBalancerTags` which
+balancers survived, so it must see the sanitized array.
+
+`sanitizeProxyBalancers` keeps imported balancers **proxy-only**:
+
+- **Selectors are prefixes, not exact tags.** Xray matches them with `strings.HasPrefix`
+  (`outbound.Manager.Select`), so a real-world `selector: ["proxy-"]` covers `proxy-0`, `proxy-1`, ….
+  Each selector is expanded against the actual non-helper proxy outbounds and rewritten as those
+  exact members. An earlier revision compared selectors to tags exactly and deleted every
+  prefix-style balancer — a correct config treated as invalid.
+- **`fallbackTag` is exact** and is stripped when it names a helper (`freedom`/`blackhole`/`dns`) or
+  an unknown outbound. `fallbackTag: "direct"` is the dangerous one: with every proxy member dead the
+  balancer falls back to direct, the health probe returns 204 over the clear network, and the
+  watchdog reads *healthy* with the proxy down.
+- **A balancer whose selectors expand to no proxy outbound is left exactly as written.** Only
+  balancers that can carry proxy traffic are rewritten.
+
+That last rule is the subtle one, and it is load-bearing in two independent ways.
+
+**It cannot be deleted, because deleting a definition strands its references.** xray-core resolves
+every `balancerTag` while *building* the router and returns
+`errors.New("balancer ", btag, " not found")` for an unknown tag, so one dangling reference makes
+`Router.Init` fail and **the core never starts** — the profile simply cannot connect, behind an opaque
+error. InboundTag reconciliation does not catch it: that pass only looks at rules whose `inboundTag`
+died in the tun rewrite, while the archetype here — a `geosite:` country rule pointing at a balanced
+*direct* egress, the "everything except my country because traffic is metered" shape — carries no
+`inboundTag` at all.
+
+**Nor should its rules be deleted instead.** That would also keep the config valid, but it would
+silently reroute the country the user deliberately sent direct onto the proxy. On a metered link that
+is a real cost, not a preference. Carrying the balancer through preserves the policy *and* the
+validity and gives up nothing: that traffic was already going direct before this chokepoint ran.
+
+**And carrying it through is safe**, because such a balancer can never become a proxy path.
+`safeBalancerTags` admits a balancer only when a selector names a proxy outbound *exactly* — true of
+the members written back for a validated balancer, false of an untouched one — so the health-probe
+carve-outs, the DoH guard and inbound-tag revival all skip it by construction. A rule that tried to
+put *tun* traffic on it is still dropped by reconciliation below, since it is not toward-proxy.
+
+### InboundTag reconciliation (tun-only rewrite, second half)
 
 `replaceJsonInboundsWithTun` replaces every inbound with a single `tun-in`. Provider configs of the
 "balancer over N servers" shape key ordinary traffic on `inboundTag: ["socks","http"]`, which can
 never match after that rewrite. Leaving those rules in the runtime config is worse than dropping them:
 they look healthy, match nothing, and traffic falls to Xray's default outbound (first in the array).
 
-`reconcileInboundTagRules` runs as part of that rewrite:
+`reconcileInboundTagRules` runs as the second pass:
 
 - Rules that move traffic **toward** the proxy (`balancerTag`, or `outboundTag` naming a non-helper
   outbound) have their `inboundTag` rewritten to `["tun-in"]` so the balancer (or proxy outbound)
@@ -130,6 +172,10 @@ DoH guards (including pinned and bracketed-IPv6 resolvers), both halves of the h
 stripping, and position ahead of every rule that could divert it — including the imported config's own
 direct rules, which its fixture now actually carries), the default posture matching without sniffing,
 inboundTag reconciliation (toward-proxy rules retargeted to `tun-in`, direct inboundTag rules dropped),
+balancer validation (prefix selectors expanded to exact proxy members, a direct `fallbackTag`
+stripped, a non-proxy balancer carried through so no rule dangles — asserted as *no rule names an
+undeclared balancer*, since that is the shape xray-core refuses to start on — and that such a
+balancer is never chosen as the probe target),
 balancer-aware carve-out targeting, the unsupported-country degrade emitting the `PROXY_ALL` rule set,
 helper-outbound safety, and probe stripping.
 
