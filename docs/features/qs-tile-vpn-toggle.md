@@ -211,7 +211,8 @@ one binary action, so it cannot offer both Stop and Reconnect — Stop is the co
 is the exit that always works and needs no server pick. **Consequence, and it is a real one:** a tile
 Stop dispatched *while a Reconnect is in flight* overrides that reconnect for up to ~10 s, because
 `ReconnectFlow` watches a source-blind state signal and reads the resulting `DISCONNECTED` as its own
-teardown completing. `VpnViewModel.cancelReconnect()` covers the **in-app** Disconnect only; the tile
+teardown completing. `VpnViewModel.cancelReconnect()` covers the **in-app** teardowns only (the
+Disconnect button and a subscription delete, both via `disconnectAbandoningReconnect`); the tile
 never reaches it. **If you touch `sendStopIntent` or the Stop gate, this is your marker.** Ledgered in
 auto-failover.md's Known limitations and QA'd as Test 21.
 

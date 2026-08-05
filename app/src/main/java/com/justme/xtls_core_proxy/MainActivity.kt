@@ -242,13 +242,17 @@ class MainActivity : LocalizedComponentActivity() {
                         // stoppable on every surface, so a Disconnect that stays enabled while
                         // ceasing to work is the worse failure shape.
                         //
-                        // Cancelling HERE, at the user's Disconnect surface, rather than inside
+                        // Cancelling at the user's Disconnect surface, rather than inside
                         // viewModel.disconnect(): that method is the reconnect flow's own first
                         // step, so cancelling there would make every reconnect cancel itself and
                         // silently degrade Reconnect into Disconnect. ReconnectFlow.cancel's KDoc
                         // records which stop surfaces this does NOT reach.
-                        viewModel.cancelReconnect()
-                        viewModel.disconnect(this)
+                        //
+                        // The cancel+stop pair lives in ONE place (see that method's KDoc): written
+                        // out by hand at each caller, a caller that forgets the cancel still
+                        // compiles and still stops the VPN, and the defect only shows up as a
+                        // reconnect restarting the session the user just switched off.
+                        viewModel.disconnectAbandoningReconnect(this)
                     },
                     onOpenSettings = {
                         startActivity(Intent(this, SettingsHubActivity::class.java))

@@ -456,14 +456,25 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+    /**
+     * Deletes [sub], stopping the session first when it would otherwise strand it.
+     *
+     * The teardown goes through [disconnectAbandoningReconnect], not [disconnect]: a delete is an
+     * EXTERNAL stop, so a Reconnect in flight must be abandoned rather than left to read the
+     * resulting `DISCONNECTED` as its own settle and start a profile this delete is about to
+     * CASCADE away. Which profiles to examine — including the reconnect target, which is the only
+     * one visible while the flow has already cleared the active id — is
+     * [shouldStopSessionForDeletedSubscription].
+     */
     fun deleteSubscription(context: Context, sub: Subscription): Job = viewModelScope.launch {
         val activeId = ActiveProfileRepository.getActiveProfileId(getApplication())
-        if (activeId != null) {
-            val activeProfile = dao.getById(activeId)
-            if (activeProfile?.subscriptionId == sub.id) {
-                disconnect(context)
-            }
-        }
+        val reconnectTargetId = reconnectingProfileId.value
+        val shouldStop = shouldStopSessionForDeletedSubscription(
+            deletedSubscriptionId = sub.id,
+            activeProfileSubscriptionId = activeId?.let { dao.getById(it)?.subscriptionId },
+            reconnectTargetSubscriptionId = reconnectTargetId?.let { dao.getById(it)?.subscriptionId },
+        )
+        if (shouldStop) disconnectAbandoningReconnect(context)
         subDao.delete(sub)
     }
 
@@ -596,6 +607,27 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun cancelReconnect() {
         reconnectFlow.cancel()
+    }
+
+    /**
+     * **The single home for an EXTERNAL teardown**: abandon any reconnect in flight, then stop.
+     *
+     * Every caller that stops a session for a reason of its own — the in-app Disconnect button, a
+     * subscription delete that would strand the session — belongs here rather than calling
+     * [cancelReconnect] and [disconnect] as a hand-written pair. Getting only half of the pair
+     * right is invisible: the survivor still compiles, still stops the VPN, and the in-flight
+     * [ReconnectFlow] simply reads the resulting `DISCONNECTED` as its own settle and starts the
+     * VPN straight back up, inverting the command it was given. `deleteSubscription` was written
+     * without the cancel exactly that way.
+     *
+     * [disconnect] stays the raw dispatch **and must not gain the cancel**: it is the reconnect
+     * flow's own first step, so cancelling inside it would make every reconnect cancel itself and
+     * silently degrade Reconnect into Disconnect. The ordering here is cancel-then-stop so the flow
+     * is already abandoned before the state it watches can move.
+     */
+    fun disconnectAbandoningReconnect(context: Context) {
+        cancelReconnect()
+        disconnect(context)
     }
 
     /**
