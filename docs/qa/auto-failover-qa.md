@@ -765,6 +765,12 @@ treating your Stop as its own settle. Window under test is up to ~10 s (`STOP_TI
 `START_VERIFY_MS` 2 s). **FAIL:** the VPN comes back up.
 **Record which surface you used.**
 
+**Also try it as fast as you can.** Tap Reconnect and Stop back-to-back, so the Stop and the
+resulting `DISCONNECTED` land together rather than one after the other. Both signals are replaying
+StateFlows, so arriving together used to be a coin flip between "abandon" and "settle"; the abort now
+wins that tie by construction (`aUserStopAlreadyVisibleWhenTheSettleAwaitArmsStillAbandons` pins it
+in JVM). Same **EXPECTED**: off, and stays off.
+
 **Contrast — the in-app Disconnect MUST still win.** Repeat from step 2 but stay in the app and tap
 **Disconnect**. **PASS:** the VPN goes off and **stays** off. **FAIL:** it comes back up — that would
 mean `cancelReconnect()` is no longer wired to the in-app Disconnect.

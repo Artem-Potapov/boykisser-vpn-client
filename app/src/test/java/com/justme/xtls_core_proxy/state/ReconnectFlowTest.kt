@@ -302,6 +302,45 @@ class ReconnectFlowTest {
     }
 
     @Test
+    fun aUserStopAlreadyVisibleWhenTheSettleAwaitArmsStillAbandons() = runTest {
+        // I-M. Both signals are StateFlows, so BOTH replay the instant collection starts. The test
+        // above feeds them one at a time; this one lands them together, which is what happens when
+        // the tile Stop and the resulting DISCONNECTED both arrive in the window between the
+        // generation snapshot and the await arming. The await then sees two terminal values at once
+        // and `merge` decides which one lands first — so the abort must not be able to LOSE that
+        // race, or I-A's own fix completes the reconnect and turns the user's Off back into On.
+        //
+        // The window is modelled inside `stop()` because that is the only code that runs in it.
+        val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
+        val userStops = MutableStateFlow(0L)
+        val calls = mutableListOf<String>()
+        val flow = ReconnectFlow(
+            connectionState = state,
+            stop = {
+                calls += "stop"
+                userStops.value = 1L
+                state.value = VpnConnectionState.DISCONNECTED
+            },
+            start = { calls += "start:$it" },
+            onTimeout = { calls += "timeout" },
+            onSuperseded = { calls += "superseded" },
+            dispatcher = StandardTestDispatcher(testScheduler),
+            userStopGeneration = userStops,
+        )
+
+        flow.run(profileId = 7L, scope = this)
+        runCurrent()
+        advanceTimeBy(ReconnectFlow.START_VERIFY_MS + 1); runCurrent()
+
+        assertEquals(
+            "a Stop already visible when the await arms must abandon, never settle",
+            listOf("stop"),
+            calls,
+        )
+        assertNull(flow.reconnectingProfileId.value)
+    }
+
+    @Test
     fun aUserInitiatedStopDuringStartVerifyDoesNotReDispatchStart() = runTest {
         val state = MutableStateFlow(VpnConnectionState.BLACKHOLED)
         val userStops = MutableStateFlow(0L)

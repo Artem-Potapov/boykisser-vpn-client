@@ -191,10 +191,26 @@ internal class ReconnectFlow(
         return newJob
     }
 
+    /**
+     * Both awaits below watch two **StateFlows**, and a StateFlow replays its current value the
+     * instant collection starts. So when the external Stop and the `DISCONNECTED` it causes both
+     * land in the window between [stopGenAtArm] being snapshotted and the await arming, the merge
+     * sees two terminal values at once — and whichever branch happens to be dispatched first would
+     * decide whether the user's Off becomes On.
+     *
+     * The abort therefore wins every tie **by construction**: the state branch re-reads the
+     * generation itself rather than racing a sibling flow for it. The generation branch stays for
+     * the ordinary case, where the bump arrives while this is already suspended and no new state is
+     * published with it.
+     */
     private suspend fun awaitSettleOrUserStop(stopGenAtArm: Long): SettleWatch =
         merge(
             connectionState.map { state ->
-                if (state == VpnConnectionState.DISCONNECTED) SettleWatch.Settled else null
+                when {
+                    userStopGeneration.value > stopGenAtArm -> SettleWatch.UserAborted
+                    state == VpnConnectionState.DISCONNECTED -> SettleWatch.Settled
+                    else -> null
+                }
             },
             userStopGeneration.map { gen ->
                 if (gen > stopGenAtArm) SettleWatch.UserAborted else null
@@ -204,7 +220,11 @@ internal class ReconnectFlow(
     private suspend fun awaitStartedOrUserStop(stopGenAtArm: Long): SettleWatch =
         merge(
             connectionState.map { state ->
-                if (state != VpnConnectionState.DISCONNECTED) SettleWatch.Settled else null
+                when {
+                    userStopGeneration.value > stopGenAtArm -> SettleWatch.UserAborted
+                    state != VpnConnectionState.DISCONNECTED -> SettleWatch.Settled
+                    else -> null
+                }
             },
             userStopGeneration.map { gen ->
                 if (gen > stopGenAtArm) SettleWatch.UserAborted else null
