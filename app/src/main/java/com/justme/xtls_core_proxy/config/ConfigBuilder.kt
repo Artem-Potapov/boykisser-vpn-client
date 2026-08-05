@@ -218,10 +218,12 @@ object ConfigBuilder {
     }
 
     /**
-     * Keeps imported balancers proxy-only. A direct/helper selector or fallback would let a dead
-     * proxy answer the health probe successfully on the clear network, and would move user traffic
-     * away from the fail-closed runtime path. Unsupported members are removed; a balancer with no
-     * proxy members is removed together with its now-invalid inboundTag rules.
+     * Keeps imported balancers proxy-only. Xray balancer selectors are prefixes, so they are
+     * expanded against the actual outbound tags and rewritten as exact safe members. A
+     * direct/helper selector or fallback would let a dead proxy answer the health probe
+     * successfully on the clear network, and would move user traffic away from the fail-closed
+     * runtime path. Unsupported members are removed; a balancer with no proxy members is removed
+     * together with its now-invalid inboundTag rules.
      */
     private fun sanitizeProxyBalancers(root: JSONObject) {
         val routing = root.optJSONObject("routing") ?: return
@@ -234,7 +236,8 @@ object ConfigBuilder {
             val selectors = balancer.optJSONArray("selector") ?: continue
             val safeSelectors = (0 until selectors.length())
                 .map { selectors.optString(it) }
-                .filter { it in proxyTags }
+                .filter { it.isNotBlank() }
+                .flatMap { selector -> proxyTags.filter { proxyTag -> proxyTag.startsWith(selector) } }
                 .distinct()
             if (safeSelectors.isEmpty()) continue
 

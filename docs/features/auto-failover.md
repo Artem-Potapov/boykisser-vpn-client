@@ -113,11 +113,14 @@ Two halves close it, and they are one change:
   of the imported config's preserved rules. When tun traffic uses a balancer, both rules and the DoH
   guard use that same balancer; otherwise they use the first proxy outbound. Like every rule this
   chokepoint emits, they only ever move traffic **toward** a proxy path.
-- **Imported balancers are sanitized before inbound-tag revival.** Selectors and fallback tags are
-  retained only when they name non-helper proxy outbounds. A `fallbackTag: direct` (or any freedom,
-  blackhole, DNS, or unknown helper) is removed, and a balancer with no proxy selector is removed
-  with its stale inbound-tag rules. A dead proxy balancer therefore cannot make the health probe
-  succeed through `freedom`; it fails closed instead.
+- **Imported balancers are sanitized before inbound-tag revival.** Xray `selector` entries are
+  **prefixes**, not exact outbound tags, so each selector is expanded against the actual
+  non-helper proxy outbounds and rewritten as the exact matching tags. Fallback tags remain exact
+  outbound references; `fallbackTag: direct` (or any freedom, blackhole, DNS, or unknown helper) is
+  removed. A balancer with no proxy member is removed with its stale inbound-tag rules. Every later
+  consumer — `safeBalancerTags`, inbound-tag reconciliation, the health-probe carve-outs, and the
+  BLOCKED_ONLY DoH guards — uses only those validated balancer targets. A dead proxy balancer
+  therefore cannot make the health probe succeed through `freedom`; it fails closed instead.
 - **The target is a fixed constant**, `ConfigBuilder.HEALTH_PROBE_TARGET_URL`, no longer
   `PingPreferences.targetUrl`. This is *forced by* the carve-out, not an extra: a static routing rule
   and a user-editable target cannot both be right. It also closes a second hazard — the Ping Test
@@ -415,8 +418,10 @@ Two things the table above depends on that are **not visible from it**:
   bridge and reads as unrelated cleanup.
 - **Disabling auto-failover mid-episode does not leave a stranded bridge.** The disable branch does
   not release a bridge mid-`ROTATING` (releasing on a settings change would drop the user onto the
-  clear network). Reservation reads `FailoverPreferences.state.value.enabled`, not the asynchronously
-  collected service cache. If a queued retry refuses while the failed candidate's bridge is held,
+  clear network). The reservation boundary is the
+  `canReserveRotationFromAuthoritativeState` seam: it reads `FailoverPreferences.state.value.enabled`
+  at the queued operation's lock-time admission, not the asynchronously collected service cache.
+  If a queued retry refuses while the failed candidate's bridge is held,
   the refusal enters the give-up funnel and **adopts** that bridge as `CONTAINED_BY_BLACKHOLE`; only
   refusals without a sole containment bridge use the ordinary release cleanup. A rotation that
   already holds `ROTATING` still runs to a handled exit (release / re-open / adopt / abort-to-give-up).
@@ -1156,7 +1161,7 @@ half is documented in [`profile-actions-menu.md`](profile-actions-menu.md); the 
 | [`failover/FailoverSettingsPersistDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FailoverSettingsPersistDecision.kt) | Pure `resolveFailoverSettings(...)` — the autosave rule extracted out of the Activity so it is JVM-testable (the codebase's `TileClickDecision`/`StartCommandDecision` shape). |
 | [`failover/FastestConnectRunner.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestConnectRunner.kt) | Framework-free Connect-to-fastest orchestration: generation-counter job replacement, delivery-time re-gate, `FastestConnectOutcome` (NO_RESPONSE / BUSY / STATE_CHANGED), cancellation cleanup. |
 | [`failover/FastestPick.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/failover/FastestPick.kt) | Pure `pickFastest(states, candidates)` and `clearStaleTesting(states, ids)`. |
-| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, **`shouldEstablishRotationBridge`**, **`GiveUpContainment` + `containmentForGiveUp`** (replaced `shouldEstablishBlackholeTunnel`), `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`deferredKillToWithdraw`**, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
+| [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | All the pure service-side rules: `SessionTunnelState.ROTATING`, `canReserveRotation`, and the stateful `canReserveRotationFromAuthoritativeState` admission seam (reads the live `FailoverPreferences.state` before delegating), `shouldDeferKillDuringTransition`, `shouldHoldScreenReceiver`, `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, **`shouldEstablishRotationBridge`**, **`GiveUpContainment` + `containmentForGiveUp`** (replaced `shouldEstablishBlackholeTunnel`), `FailoverGiveUpOutcome` + `classifyGiveUpOutcome`, **`connectionStateForGiveUp`** (outcome → `BLACKHOLED`/`ERROR`, the one place that mapping lives), `shouldStopServiceOnGiveUp`, `shouldFireFailoverRetry`, `shouldRestartForRecovery`, `activeProfileIdToRestoreOnRefusedStart`, `deferredKillNoticeLabel`, **`deferredKillToWithdraw`**, **`shouldReleaseGiveUpOnDisable`**, **`shouldOverwritePendingConnect`**. |
 | [`state/ConnectAction`](../../app/src/main/java/com/justme/xtls_core_proxy/state/VpnViewModel.kt) (in `VpnViewModel.kt`) | The connect gate: `ConnectAction` + `connectAction`/`connectLabelRes`/`connectEnabled`. Replaces the former boolean `canConnect`. |
 | [`state/ReconnectFlow.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ReconnectFlow.kt) | Framework-free stop→settle→start→verify sequencing for Reconnect: `STOP_TIMEOUT_MS`, `START_VERIFY_MS`, the first-wins in-flight guard (`reconnectingProfileId`), `generation` cleanup, `cancel()`. Canonical home for **why** Reconnect is not a `shouldRestartForRecovery` widening. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | The wiring: `applyFailoverPreferences`, `rotateTunnel`, `giveUpRotationLocked`, the `rotationBridgeInterface` field and its four operations (`establishUnreadTunnelLocked` — the shared builder — plus `establishBlackholeTunnelLocked` / `establishRotationBridgeLocked` / `adoptRotationBridgeLocked` / `releaseRotationBridgeLocked`), `clearGiveUpStateOnRecovery`, `scheduleFailoverRearmLocked`, `reconcileScreenReceiverLocked`, the 1101 Stop action, and the recovery restart in `startVpn`. |

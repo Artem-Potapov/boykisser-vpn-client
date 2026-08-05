@@ -1,10 +1,16 @@
 package com.justme.xtls_core_proxy.vpn
 
+import android.content.Context
+import com.justme.xtls_core_proxy.failover.FailoverPreferences
+import com.justme.xtls_core_proxy.testutil.InMemorySharedPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mockito.kotlin.doReturn
+import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 
 class SessionLifecycleRotationTest {
 
@@ -107,6 +113,37 @@ class SessionLifecycleRotationTest {
                 failoverEnabled = authoritativeEnabled,
             )
         )
+    }
+
+    @Test
+    fun queuedRetry_admissionBoundaryReadsTheLiveFailoverPreferencesState() {
+        val prefs = InMemorySharedPreferences()
+        val context = mock<Context> {
+            on { getSharedPreferences(eq("xray_prefs"), eq(Context.MODE_PRIVATE)) } doReturn prefs
+        }
+        val connected = {
+            canReserveRotationFromAuthoritativeState(
+                running = true,
+                activeSessionEpoch = 5L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
+        }
+
+        try {
+            FailoverPreferences.save(context, FailoverPreferences.DEFAULT.copy(enabled = true))
+            assertTrue("enabled state should admit a current connected rotation", connected())
+
+            // This is the queued-retry race: the service's collected cache may still be true, but
+            // the synchronous persistence boundary has already published the disable.
+            FailoverPreferences.save(context, FailoverPreferences.DEFAULT.copy(enabled = false))
+            assertFalse(
+                "reservation must read the live StateFlow after disable, not a stale service cache",
+                connected(),
+            )
+        } finally {
+            FailoverPreferences.save(context, FailoverPreferences.DEFAULT)
+        }
     }
 
     @Test

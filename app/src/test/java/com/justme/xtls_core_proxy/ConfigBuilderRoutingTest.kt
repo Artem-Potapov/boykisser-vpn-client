@@ -496,6 +496,23 @@ class ConfigBuilderRoutingTest {
             {"type":"field","inboundTag":["socks"],"domain":["geosite:cn"],"outboundTag":"direct"}]}}
     """.trimIndent()
 
+    private val prefixBalancerWithDirectCatchAll = """
+        {"inbounds":[
+          {"tag":"socks","protocol":"socks","settings":{"udp":true}},
+          {"tag":"http","protocol":"http"}],
+         "outbounds":[
+          {"tag":"proxy-0","protocol":"vless","settings":{"vnext":[{"address":"1.1.1.1","port":443,
+            "users":[{"id":"u0"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"proxy-1","protocol":"vless","settings":{"vnext":[{"address":"2.2.2.2","port":443,
+            "users":[{"id":"u1"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"direct","protocol":"freedom"}],
+         "routing":{"balancers":[{"tag":"proxy-balancer","selector":["proxy-"],
+            "fallbackTag":"direct","strategy":{"type":"leastLoad"}}],
+           "rules":[
+            {"type":"field","inboundTag":["socks","http"],"balancerTag":"proxy-balancer"},
+            {"type":"field","network":"tcp,udp","outboundTag":"direct"}]}}
+    """.trimIndent()
+
     @Test fun inboundTag_balancer_rule_is_retargeted_to_tun_in() {
         val out = ConfigBuilder.buildRuntimeConfig(
             balancerOverN,
@@ -592,6 +609,40 @@ class ConfigBuilderRoutingTest {
             assertEquals("proxy-balancer", rule.getString("balancerTag"))
             assertFalse("probe carve-outs must not route direct", rule.has("outboundTag"))
         }
+    }
+
+    @Test fun prefix_balancer_selector_expands_and_stays_ahead_of_preserved_direct_catch_all() {
+        val out = ConfigBuilder.buildRuntimeConfig(
+            prefixBalancerWithDirectCatchAll,
+            tuning = TuningSettings(routing = RoutingSettings.USER_DEFAULT),
+        )
+        val root = JSONObject(out)
+        val balancer = root.getJSONObject("routing")
+            .getJSONArray("balancers")
+            .getJSONObject(0)
+        assertEquals(
+            "Xray selectors are prefixes; normalize the valid prefix to exact proxy members",
+            listOf("proxy-0", "proxy-1"),
+            (0 until balancer.getJSONArray("selector").length())
+                .map { balancer.getJSONArray("selector").getString(it) },
+        )
+
+        val items = ruleItems(out)
+        val tunBalancerIndex = items.indexOfFirst {
+            val rule = JSONObject(it)
+            rule.optString("balancerTag") == "proxy-balancer" &&
+                rule.optJSONArray("inboundTag")?.toString()?.contains(ConfigBuilder.TUN_INBOUND_TAG) == true
+        }
+        val preservedDirectCatchAllIndex = items.indexOfFirst {
+            val rule = JSONObject(it)
+            rule.optString("network") == "tcp,udp" && rule.optString("outboundTag") == "direct"
+        }
+        assertTrue("prefix balancer traffic rule must survive; rules=$items", tunBalancerIndex >= 0)
+        assertTrue("the preserved direct catch-all must survive; rules=$items", preservedDirectCatchAllIndex >= 0)
+        assertTrue(
+            "the validated proxy balancer must win before the preserved direct catch-all; rules=$items",
+            tunBalancerIndex < preservedDirectCatchAllIndex,
+        )
     }
 
     @Test fun blocked_only_doh_guard_uses_the_same_validated_balancer_as_user_traffic() {

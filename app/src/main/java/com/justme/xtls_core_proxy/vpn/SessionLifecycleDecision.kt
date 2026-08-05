@@ -1,5 +1,6 @@
 package com.justme.xtls_core_proxy.vpn
 
+import com.justme.xtls_core_proxy.failover.FailoverPreferences
 import com.justme.xtls_core_proxy.failover.FailoverSettings
 import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
@@ -74,6 +75,23 @@ internal fun canReserveRotation(
     callbackSessionEpoch = callbackSessionEpoch,
     tunnelState = tunnelState,
     expectedState = SessionTunnelState.CONNECTED,
+)
+
+/**
+ * Reservation boundary used by [XrayVpnService]. Unlike [canReserveRotation], this seam reads the
+ * process-authoritative settings source at the instant the queued operation reserves its transition.
+ */
+internal fun canReserveRotationFromAuthoritativeState(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+): Boolean = canReserveRotation(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+    tunnelState = tunnelState,
+    failoverEnabled = FailoverPreferences.state.value.enabled,
 )
 
 /**

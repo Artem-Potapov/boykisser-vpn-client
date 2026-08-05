@@ -1094,16 +1094,11 @@ class XrayVpnService : VpnService() {
         tunnelOpScope.launch {
             try {
                 val session = synchronized(lock) {
-                    if (!canReserveRotation(
+                    if (!canReserveRotationFromAuthoritativeState(
                             running = running,
                             activeSessionEpoch = activeSessionEpoch,
                             callbackSessionEpoch = sessionEpoch,
                             tunnelState = sessionTunnelState,
-                            // FailoverPreferences.save updates this process-global StateFlow
-                            // synchronously, while the service collector is asynchronous. Admission
-                            // must use the authoritative value or a queued retry can rotate after
-                            // the user has already disabled the feature.
-                            failoverEnabled = FailoverPreferences.state.value.enabled,
                         )
                     ) {
                         // A failed candidate returns to CONNECTED with no live TUN and its unread
