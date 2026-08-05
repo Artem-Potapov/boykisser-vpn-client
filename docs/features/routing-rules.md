@@ -45,6 +45,26 @@ order is:
 7. preserved config rules;
 8. final direct catch-all, only for supported `BLOCKED_ONLY`.
 
+### The imported config's routing wins, and that is a decision — not an oversight
+
+Slot 7 sits **ahead** of nothing that would override it, and since Xray's router is first-match, an
+imported rule that sends a country direct keeps sending it direct even under `PROXY_ALL`. A real
+config from a provider — "everything except Russia, because that traffic is metered" — therefore
+keeps working exactly as its author wrote it, and the app's routing mode governs only the traffic the
+config did not already claim.
+
+**Maintainer ruling (2026-08-05): leave it that way.** It is the user's app and their config; the
+client does not get to nanny them about what to proxy. Widening a routing mode to override imported
+rules would silently push metered or geo-restricted traffic onto the tunnel, which is a cost decision
+that belongs to the person paying for it.
+
+A settings-override knob is a planned follow-up, and it is explicitly **opt-in**: the user asks for
+"my routing settings beat the config", it is never forced on them. Two things are deliberately
+carved out of that future knob and are **not** up for a vote, because they are correctness rather
+than policy — the mandatory secure-DNS chokepoint (slot 1/2) and the health-probe carve-out (slot 3),
+which overrides an imported direct rule for exactly one hostname so the watchdog measures the proxy
+instead of the clear network. LAN bypass is the third: there, settings win.
+
 The DoH guard keeps the effective resolver on the proxy side despite the mode's direct default. It
 covers resolver IPs, resolver hostnames, and `dns.hosts` pinned IPs. Redirecting `freedom` outbounds
 are not reused as the direct helper.

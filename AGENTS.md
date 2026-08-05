@@ -39,13 +39,13 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
-│       │   │   ├── log/            LogRepository (sanitized state/log surface; VpnConnectionState incl. BLACKHOLED), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
+│       │   │   ├── log/            LogRepository (sanitized state/log surface; VpnConnectionState incl. BLACKHOLED; also publishes `blackholedLine` — which contained give-up a BLACKHOLED session is in — and `userStopGeneration`, the tile/notification Stop signal ReconnectFlow tells apart from its own teardown), VpnConnectionLabels (BlackholedOngoingLine + vpnConnectionStateLabelRes — lives HERE, not in vpn/, so home and tile can share one mapping without a log→vpn import), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
 │       │   │   ├── privacy/        Device identity (HWID): settings repo + pure header/UA/rejection/hint logic + HwidSettingsActivity → docs/features/hwid-device-identity.md
 │       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/ (the Tunnel → Auto-failover row opens failover/FailoverSettingsActivity); DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
 │       │   │   ├── sideload/       Sideloading / "Keep Android Open" warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/          Split-tunnel + SplitTunnelPlanner (whole-app tunneling → docs/features)
-│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel (+ the connect gate: ConnectAction/connectAction/connectLabelRes/connectEnabled — three-valued, replaced the old boolean canConnect), ReconnectFlow (stop→settle→start→verify for RECONNECT; first-request-wins in-flight guard), ConnectErrorRetention (whether a CONNECTING transition wipes `error`: a refusal survives the winning request's own CONNECTING, exactly once), PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
+│       │   │   ├── state/          ActiveProfileRepository, VpnViewModel (+ the connect gate: ConnectAction/connectAction/connectLabelRes/connectEnabled — three-valued, replaced the old boolean canConnect), ReconnectFlow (stop→settle→start→verify for RECONNECT; first-request-wins in-flight guard; abandons on `LogRepository.userStopGeneration` so a tile/notification Stop cannot be mistaken for its own settle — the abort wins every tie by re-reading the generation inside the state branch, since both signals are replaying StateFlows), ConnectErrorRetention (whether a CONNECTING transition wipes `error`: a refusal survives the winning request's own CONNECTING, exactly once), PingState, PingTester (constants + backstopFor holder), PingCoordinator (stable admission owner: cross-run dedup + fixed native-slot ceiling + bounded-orphan probeWithBackstop), AutoPingLatch (process-scoped once-per-launch latch), PingPreferences (fresh per-probe settings)
 │       │   │   ├── subs/           Subscription fetch/parse/refresh; SubscriptionRefreshCoordinator loads device-identity settings and augments fetch errors with HWID/UA guidance; PromoGate + PromoGateRepository (remote-gated promo — see Dormant Features), Boykisser* promo/link activities
 │       │   │   ├── tile/           QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/             Reusable Compose components + theme (theme/: AppearanceRepository, ThemeMode/resolveScheme/useDynamic, Theme.kt brand palette + True Dark → docs/features/app-appearance.md); SettingsComponents (SettingsSectionHeader/SettingsRow → docs/features/settings-hub.md)
@@ -54,7 +54,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │       ├── drawable/, mipmap-*/  (ic_speedometer.xml — ping-test group header icon; ic_bolt.xml — connect-to-fastest)
 │       │       ├── values/         strings.xml (source of truth), colors, themes
 │       │       ├── values-ru/      Russian strings.xml
-│       │       └── xml/            backup_rules, data_extraction_rules, locales_config
+│       │       └── xml/            backup_rules, data_extraction_rules, locales_config, network_security_config (LOAD-BEARING — the one-host cleartext carve-out the health probe needs; see Architecture Notes)
 │       ├── androidTest/java/...    Instrumented tests (mirrors main package structure)
 │       └── test/java/...           JVM unit tests (mirrors main package structure)
 ├── docs/
@@ -398,6 +398,13 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   28.2.13676358), then runs `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug`, and uploads
   the AAR, debug APKs, and test/lint reports as artifacts. Device tests
   (`connectedDebugAndroidTest`) are **not** in CI — run them locally.
+- **A few unit tests read source files off the filesystem, and `app/build.gradle.kts` declares those
+  files as task inputs** (`tasks.withType<Test> { inputs.file(...) }` for `AndroidManifest.xml` and
+  `res/xml/network_security_config.xml`). Gradle cannot infer them: `HealthProbeSchemeTest` parses
+  both to pin the health probe's cleartext exemption, and without the declaration editing either one
+  alone left `testDebugUnitTest` **`UP-TO-DATE`**, so the guard silently did not run. If you add a
+  test that reads a file rather than a class, declare it there too — or it will pass by not
+  executing.
 - **Instrumented tests are welcome for regression checks.** Running
   `:app:connectedDebugAndroidTest` against a connected device/emulator is encouraged whenever a change
   could affect UI, ViewModel/state, the bridge, or lifecycle behavior — prefer running them to skipping
@@ -471,6 +478,36 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   **InboundTag reconciliation** lives in `replaceJsonInboundsWithTun`: toward-proxy
   `inboundTag` rules (balancer/proxy outbound) are rewritten onto `tun-in`; direct/block inboundTag
   rules are dropped (never rewritten — that would move traffic away from the proxy).
+- **Imported balancers are validated before any of that, and the validation can DELETE.**
+  `ConfigBuilder.sanitizeProxyBalancers` runs first inside `replaceJsonInboundsWithTun` and is a
+  third mandatory normalization on the same chokepoint. Xray `selector` entries are **prefixes**
+  (`outbound.Manager.Select` → `strings.HasPrefix`), not exact tags, so each selector is expanded
+  against the real non-helper proxy outbounds and rewritten as exact members; a `fallbackTag` naming
+  a helper (freedom/blackhole/dns) or an unknown outbound is stripped; a balancer left with no proxy
+  member is **left exactly as the user wrote it** — only balancers that can carry proxy traffic are
+  rewritten. Without the fallback strip, a balancer whose live members are all dead falls back to
+  `direct` and the health probe then succeeds on the clear network with the proxy down — a false
+  healthy, the one answer the watchdog must never get.
+  **Do not "clean up" a non-proxy balancer by deleting it.** `Router.Init` in xray-core resolves every
+  `balancerTag` while *building* the router and returns `errors.New("balancer ", btag, " not found")`
+  for an unknown one, so a single dangling reference stops the **core from starting at all** and the
+  profile becomes unconnectable behind an opaque error. InboundTag reconciliation does not cover it:
+  that pass only inspects rules whose `inboundTag` died in the tun rewrite, while the archetype here
+  — a `geosite:` country rule pointing at a balanced *direct* egress — carries no `inboundTag`.
+  Deleting the *rules* instead would keep the config valid but silently reroute traffic the user
+  deliberately sent direct onto the proxy, which on a metered link is a real cost. Carrying the
+  balancer through is safe because `safeBalancerTags` admits only balancers whose selector names a
+  proxy outbound exactly, so the probe carve-outs, the DoH guard and inbound-tag revival skip it by
+  construction. Same maintainer ruling as the one below on preserved rules: the config is the user's.
+- **The imported config's routing WINS over the routing-mode setting, by decision.** Preserved
+  config rules are emitted ahead of nothing that would override them, and Xray is first-match, so an
+  imported "this country goes direct" rule keeps working under `PROXY_ALL`. Do not "fix" this: it is
+  the user's app and their config, and forcing a mode over it would silently push metered or
+  geo-restricted traffic onto the tunnel — a cost decision that is theirs. A settings-override knob
+  is a planned **opt-in** follow-up (the user asks for it; it is never default). Three things stay
+  outside that knob because they are correctness, not policy: the mandatory secure-DNS chokepoint,
+  the health-probe carve-out (one hostname, or the watchdog measures the clear network), and LAN
+  bypass — where settings win. See `docs/features/routing-rules.md`.
 - Auto-failover never releases traffic to the clear network on purpose: **each rotation is bridged by
   an unread TUN** (so a switch stalls apps rather than leaking them), and exhausting the pool
   re-establishes — or adopts that bridge as — a **blackhole TUN** (unread fd, DNS aimed into it, same
@@ -539,7 +576,11 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
   obtains the protocol-specific secure base, then runs `forceLog → applyFragmentation → applyMux →
   applyDns → applyRouting → applyCoreSettings`. `forceLog` overwrites (not merges) the config's log
   object; fragmentation merges beside `ForceIP`; DNS precedes routing so its effective resolver feeds
-  the `BLOCKED_ONLY` guard; core is last so IPv6-off and forced sniffing win. Extend
+  the `BLOCKED_ONLY` guard; core is last so IPv6-off and forced sniffing win. For a pasted JSON
+  config the secure base runs `replaceJsonInboundsWithTun`, itself an ordered pair:
+  `sanitizeProxyBalancers` (validate/rewrite/remove balancers **and drop the rules naming a removed
+  one**) then `reconcileInboundTagRules` — that order is load-bearing, because reconciliation asks
+  `safeBalancerTags` which balancers survived. Extend
   `config/TuningSettings.kt` plus the matching immutable model/preferences and preserve this order.
   See `docs/features/{fragmentation,mux,dns,routing-rules,xray-settings}.md`.
 - Runtime diagnostic extension point:
@@ -581,6 +622,12 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishRotationBridge`,
     `shouldAbortRotationForMissingBridge`,
     `shouldFunnelRotationReservationRefusal`,
+    `canReserveRotationFromAuthoritativeState` (the **one impure function in the file** — it reads
+    `FailoverPreferences.state.value.enabled` and delegates to the pure `canReserveRotation`. It
+    exists because the service's own `failoverSettings` cache is collector-updated *asynchronously*
+    while `save()` updates the process-global StateFlow synchronously, so a queued rotation reserving
+    off the cache could still see "enabled" after the user disabled the feature. The service calls
+    this one; keep new rules pure and put the settings read here),
     `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
     gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
     `shouldStopServiceOnGiveUp`,
