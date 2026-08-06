@@ -60,6 +60,29 @@ class HealthProbeSchemeTest {
         return (0 until nodes.length).map { nodes.item(it) as Element }
     }
 
+    private val manifestRoot: Element by lazy {
+        val candidates = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml")
+        val found = candidates.map(::File).firstOrNull { it.isFile }
+        assertTrue(
+            "AndroidManifest.xml must exist. Looked in: $candidates (cwd=${File(".").absolutePath})",
+            found != null,
+        )
+        // Namespace-UNaware on purpose (the factory default): attributes keep their literal
+        // qualified names, so `android:usesCleartextTraffic` is looked up exactly as written.
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(found!!).documentElement
+    }
+
+    private val allManifestElements: List<Element> by lazy {
+        val nodes = manifestRoot.getElementsByTagName("*")
+        listOf(manifestRoot) + (0 until nodes.length).map { nodes.item(it) as Element }
+    }
+
+    private val manifestApplication: Element by lazy {
+        val application = allManifestElements.filter { it.tagName == "application" }
+        assertEquals("exactly one <application> element is expected", 1, application.size)
+        application.single()
+    }
+
     @Test
     fun theCleartextExemptionNamesExactlyTheProbeHost() {
         val domains = elements("domain").map { it.textContent.trim() }
@@ -97,11 +120,35 @@ class HealthProbeSchemeTest {
     fun theManifestActuallyWiresTheConfigIn() {
         // The file is inert unless <application> references it. Dropping the attribute is a one-line
         // change with the same total, silent consequence as deleting the file.
-        val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml")
-            .map(::File).first { it.isFile }.readText()
+        //
+        // PARSED, like the network_security_config half beside it, and for a second reason that
+        // half does not have: this must also assert the ABSENCE of an attribute, and `contains`
+        // cannot tell an attribute on <application> from the same text in a comment.
+        val application = manifestApplication
+        assertEquals(
+            "AndroidManifest's <application> must set android:networkSecurityConfig, or the " +
+                "carve-out is inert and every probe throws 'Cleartext HTTP traffic not permitted'",
+            "@xml/network_security_config",
+            application.getAttribute("android:networkSecurityConfig"),
+        )
+    }
+
+    @Test
+    fun theManifestGrantsNoAppWideCleartext() {
+        // The OTHER way to break the scoping, and the one the old substring check could not see:
+        // it caught the attribute being deleted, but `android:usesCleartextTraffic="true"` being
+        // ADDED re-permits plaintext for the WHOLE app while leaving the carve-out attribute
+        // present and the test green. That defeats the entire reason the exemption is one host —
+        // the probe would keep working, and every other plaintext request in the app would start
+        // working too, silently. Scanned over every element, not just <application>, so a merged or
+        // relocated declaration cannot slip past.
+        val offenders = allManifestElements
+            .filter { it.getAttribute("android:usesCleartextTraffic").equals("true", true) }
+            .map { it.tagName }
         assertTrue(
-            "AndroidManifest must set android:networkSecurityConfig, or the carve-out is inert",
-            manifest.contains("android:networkSecurityConfig=\"@xml/network_security_config\""),
+            "android:usesCleartextTraffic=\"true\" re-opens plaintext app-wide, which is exactly " +
+                "what the domain-scoped config exists to avoid. Found on: $offenders",
+            offenders.isEmpty(),
         )
     }
 

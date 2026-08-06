@@ -66,6 +66,16 @@ app-wide. The domain-scoped config carves exactly one host and leaves everything
 default; there is deliberately no `<base-config>`, so the file cannot loosen TLS trust as a side
 effect.
 
+**Both manifest halves are asserted, and the second one is why the check is DOM-parsed.**
+`HealthProbeSchemeTest` reads `AndroidManifest.xml` through `DocumentBuilderFactory` (like the
+`network_security_config.xml` half beside it) and asserts (1) `<application>`'s
+`android:networkSecurityConfig` equals `@xml/network_security_config`, and (2) **no** element in the
+manifest carries `android:usesCleartextTraffic="true"`. The manifest half used to be a `contains`
+check, which caught the attribute being *deleted* but not app-wide cleartext being *added* — and the
+added case leaves the carve-out attribute in place, so the probe keeps working while every other
+plaintext request in the app silently starts working too. Verified by adding the attribute: only the
+new assertion fails; the wiring assertion still passes.
+
 **A Go-side probe was considered and rejected.** Go's raw sockets ignore `NetworkSecurityPolicy`
 entirely, so a new bridge entry point would need no manifest change at all — but it lands in
 human-gated `xray-go/` + `bridge/`, needs an `xray.aar` rebuild, a reflection binding and a keep rule,
