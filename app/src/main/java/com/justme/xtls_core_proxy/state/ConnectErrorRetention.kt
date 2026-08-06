@@ -9,9 +9,11 @@ import com.justme.xtls_core_proxy.R
  * [ConnectErrorRetention.onErrorCleared] would stay green if [VpnViewModel.clearError] dropped that
  * half.
  *
- * [VpnViewModel.clearError] currently has no production callers (the banner has no dismiss
- * affordance); this exists so a future dismiss path can call through without inventing a second
- * clear sequence. Until then, the `CONNECTING` auto-clear remains the only live clear path.
+ * [VpnViewModel.clearError] is wired to the banner's dismiss button (`MainActivity`'s error row),
+ * which is why this exists rather than the dismiss calling
+ * [ConnectErrorRetention.onErrorCleared] directly: emptying the banner and revoking the reprieve are
+ * one step, and a dismiss that did only the first would leave a reprieve attached to a message that
+ * is no longer on screen. The `CONNECTING` auto-clear is the other live clear path.
  */
 internal fun clearVpnError(
     clearBanner: () -> Unit,
@@ -26,8 +28,9 @@ internal fun clearVpnError(
  * clears the message in `VpnViewModel.error`.
  *
  * ### Why the auto-clear exists, and must stay
- * `error` has **no dismiss control and no timeout** — [VpnViewModel.clearError] has no production
- * callers yet — so the `CONNECTING` transition is the only thing that ever clears the banner. It is
+ * `error` has **no timeout**, and its only other clear path is the banner's dismiss button, which
+ * requires the user to be looking at the app and to act. So the `CONNECTING` transition is what
+ * clears a stale banner in every other case — including a start the user never watched. It is
  * keyed on the state rather than on `VpnViewModel.connect()` because the QS tile starts the VPN by
  * dispatching `ACTION_START` straight to the service, never through `connect()`; clearing inside
  * `connect()` alone missed every tile-initiated start. Do not move it back.

@@ -10,11 +10,11 @@ import org.junit.Test
  * Pure JVM tests for the rule that decides whether a transition to
  * `VpnConnectionState.CONNECTING` wipes the message in `VpnViewModel.error`.
  *
- * The `error` banner has no dismiss control and no timeout — `clearError()` has no production
- * callers yet — so that transition is the ONLY thing that ever clears it today. That made it wipe
- * the one class of message it must not: a **refusal**, which explains why the request the user just
- * made did nothing. The winning request's own `CONNECTING` landed milliseconds later and erased the
- * explanation.
+ * The `error` banner has no timeout, and its only other clear path is a dismiss button the user has
+ * to be present to press (`MainActivity` → `clearError()` → `clearVpnError`), so that transition is
+ * what clears it in every unattended case. That made it wipe the one class of message it must not:
+ * a **refusal**, which explains why the request the user just made did nothing. The winning
+ * request's own `CONNECTING` landed milliseconds later and erased the explanation.
  */
 class ConnectErrorRetentionTest {
 
