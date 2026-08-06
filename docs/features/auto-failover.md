@@ -188,11 +188,20 @@ analysed and abandoned) — and a broad Cloudflare CIDR, which would survive add
 large share of the web through the proxy and override the user's country-direct policy far beyond one
 diagnostic hostname.
 
-`ConfigSanitizer` deliberately does **not** get a new finding for it. It reports user-selected policy
-plus the enforcements a pasted config could otherwise have overridden; the carve-out is an always-on
-internal mechanism with no user-facing knob — exactly like `dohGuardRules`, which it mirrors and which
-is likewise unreported — and it can only make the effective posture *more* proxied than the summary
-already states.
+**`ConfigSanitizer` DOES report it** — `FindingId.HEALTH_PROBE_CARVEOUT`
+(`ConfigSanitizer.kt:287`, presented via `san_health_probe_carveout`), built from
+`ConfigBuilder.healthProbeCarveOutInfo` so the diagnostic never re-derives the forward rule. The
+detail states the override of country-direct / imported-direct for `HEALTH_PROBE_HOST` and surfaces
+the address-list residual when sniffing is not forced.
+
+> An earlier revision of this paragraph argued the opposite — that the carve-out deliberately gets no
+> finding, "exactly like `dohGuardRules`, which it mirrors and which is likewise unreported". The
+> reasoning was that an always-on internal mechanism with no user-facing knob, which can only make the
+> posture *more* proxied, is not policy the user chose. That argument lost: the carve-out **overrides
+> a rule the user's own config asked for**, and the maintainer ruling on that config is that a silent
+> choice between our normalization and the author's intent is not acceptable. The `dohGuardRules`
+> half is still true — it has no finding — and it is now the odd one out rather than the precedent.
+> Left here because the claim outlived its own change and was quoted as settled by a later review.
 
 The constant lives in `config/` rather than `failover/` because the carve-out owner is `ConfigBuilder`;
 a `config → failover` import for one string would be the wrong direction.
