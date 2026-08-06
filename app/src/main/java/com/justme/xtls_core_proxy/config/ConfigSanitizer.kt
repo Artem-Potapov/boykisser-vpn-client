@@ -75,6 +75,7 @@ object ConfigSanitizer {
         )
 
         findings += forcedLogFinding(original, final, log)
+        importedRoutingFinding(stored)?.let { findings += it }
         findings += Finding(
             FindingCategory.SECURITY_ENFORCEMENT,
             FindingId.PORT53_DNSOUT,
@@ -125,6 +126,50 @@ object ConfigSanitizer {
             "access: none, app-private error log",
         )
     }
+
+    /**
+     * The chokepoint's two mandatory routing normalizations, reported only when they **did**
+     * something to this config.
+     *
+     * `sanitizeProxyBalancers` and `reconcileInboundTagRules` rewrite the user's own routing on
+     * every build, and a dropped `direct` rule changes where their traffic goes. The maintainer
+     * ruling that the imported config's routing wins is precisely what makes a *silent* edit to it
+     * unacceptable, and this screen is the app's only non-silence mechanism.
+     *
+     * The classification is entirely [ConfigBuilder]'s — this reads counters off
+     * [ConfigBuilder.importedRoutingNormalization], which runs the production functions themselves.
+     * Nothing about balancer selectors, fallback tags or inbound-tag direction is re-derived here;
+     * a second copy of a forward rule is how `forceSniffingFor` came to exist.
+     *
+     * Null when nothing changed, so an untouched config produces no row rather than a "we did
+     * nothing" row.
+     */
+    private fun importedRoutingFinding(stored: String): Finding? {
+        val info = ConfigBuilder.importedRoutingNormalization(stored)
+        if (!info.changedAnything) return null
+        val parts = buildList {
+            if (info.balancerSelectorsExpanded > 0) {
+                add("${count(info.balancerSelectorsExpanded, "balancer selector")} expanded to exact proxy members")
+            }
+            if (info.fallbackTagsStripped > 0) {
+                add("${count(info.fallbackTagsStripped, "helper fallbackTag")} stripped")
+            }
+            if (info.rulesRetargetedToTun > 0) {
+                add("${count(info.rulesRetargetedToTun, "rule")} retargeted to tun-in")
+            }
+            if (info.rulesDropped > 0) {
+                add("${count(info.rulesDropped, "direct/block rule")} dropped")
+            }
+        }
+        return Finding(
+            FindingCategory.SECURITY_ENFORCEMENT,
+            FindingId.IMPORTED_ROUTING_NORMALIZED,
+            Status.Rewrote,
+            parts.joinToString("; "),
+        )
+    }
+
+    private fun count(n: Int, noun: String): String = if (n == 1) "$n $noun" else "$n ${noun}s"
 
     private fun originalHasPort53Rule(original: JSONObject): Boolean {
         val rules = original.optJSONObject("routing")?.optJSONArray("rules") ?: return false
@@ -425,6 +470,7 @@ enum class FindingId {
     ROUTING,
     DOMAIN_STRATEGY,
     HEALTH_PROBE_CARVEOUT,
+    IMPORTED_ROUTING_NORMALIZED,
 }
 
 sealed class Status {

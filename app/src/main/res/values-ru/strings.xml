@@ -144,6 +144,7 @@
     <string name="san_routing">Маршрутизация</string>
     <string name="san_domain_strategy">Разрешение доменов</string>
     <string name="san_health_probe_carveout">Исключение для health-probe</string>
+    <string name="san_imported_routing">Импортированные балансировщики и правила</string>
     <string name="sanitization_cd_back">Назад</string>
 
     <!-- Экран настроек DNS -->

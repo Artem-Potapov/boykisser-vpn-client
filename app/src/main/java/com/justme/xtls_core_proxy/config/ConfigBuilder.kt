@@ -154,6 +154,62 @@ object ConfigBuilder {
     }
 
     /**
+     * What [sanitizeProxyBalancers] and [reconcileInboundTagRules] — the two mandatory routing
+     * normalizations on this chokepoint — actually changed. All four counters are per-change, never
+     * "was a balancer present": a rewrite that produced the same selector list is not a change.
+     */
+    data class ImportedRoutingNormalization(
+        /** Balancers whose `selector` list came out different after prefix expansion. */
+        val balancerSelectorsExpanded: Int,
+        /** Balancers whose `fallbackTag` named a helper/unknown outbound and was removed. */
+        val fallbackTagsStripped: Int,
+        /** Toward-proxy rules whose dead `inboundTag` was rewritten onto the tun inbound. */
+        val rulesRetargetedToTun: Int,
+        /** Direct/block `inboundTag` rules removed outright — the change that moves traffic. */
+        val rulesDropped: Int,
+    ) {
+        val changedAnything: Boolean
+            get() = balancerSelectorsExpanded > 0 || fallbackTagsStripped > 0 ||
+                rulesRetargetedToTun > 0 || rulesDropped > 0
+
+        companion object {
+            val NONE = ImportedRoutingNormalization(0, 0, 0, 0)
+        }
+    }
+
+    /**
+     * Read-only inverse view of the chokepoint's balancer / inbound-tag normalizations, for
+     * [ConfigSanitizer]. It runs the **production functions themselves** on a throwaway parse of
+     * [storedConfigJson] rather than restating what they do — a second copy of a forward rule
+     * desynchronises with no compile-time signal, which is how `forceSniffingFor` came to exist.
+     *
+     * It answers "what does the pipeline do to this config **as stored**", which is exactly what
+     * happens on every connect. That is deliberately not "what was once done to the text the user
+     * pasted": `toProfileStorageConfig` already runs this chokepoint at import, so a normally-added
+     * profile reports nothing — correct, because at runtime nothing further changes. A profile
+     * stored raw (the debug adder) or by an older build still carries the un-normalized shape, and
+     * that is where the report has something true to say.
+     *
+     * Returns [ImportedRoutingNormalization.NONE] for input that is not JSON (a `vless://` /
+     * `hysteria2://` profile has no imported balancers or rules to normalize).
+     */
+    internal fun importedRoutingNormalization(storedConfigJson: String): ImportedRoutingNormalization {
+        val root = runCatching { JSONObject(storedConfigJson) }.getOrNull()
+            ?: return ImportedRoutingNormalization.NONE
+        // The tun rewrite comes first for the same reason it does in replaceJsonInboundsWithTun:
+        // reconcileInboundTagRules decides on inbound tags that only die once it has run.
+        root.put("inbounds", JSONArray().put(tunInboundJson()))
+        val balancers = sanitizeProxyBalancers(root)
+        val rules = reconcileInboundTagRules(root)
+        return ImportedRoutingNormalization(
+            balancerSelectorsExpanded = balancers.selectorsExpanded,
+            fallbackTagsStripped = balancers.fallbackTagsStripped,
+            rulesRetargetedToTun = rules.rulesRetargeted,
+            rulesDropped = rules.rulesDropped,
+        )
+    }
+
+    /**
      * After the tun-only inbound rewrite, any routing rule keyed on the removed inbound tags
      * (`socks`/`http`/…) can never match. Leaving those rules in the runtime config is worse than
      * dropping them: they look healthy, match nothing, and traffic falls through to Xray's default
@@ -167,11 +223,19 @@ object ConfigBuilder {
      *   rewritten. Rewriting them onto tun-in would activate a previously-dead direct exception and
      *   move traffic **away** from the proxy — forbidden for this chokepoint.
      */
-    private fun reconcileInboundTagRules(root: JSONObject) {
-        val routing = root.optJSONObject("routing") ?: return
-        val rules = routing.optJSONArray("rules") ?: return
+    private data class InboundTagRewrite(val rulesRetargeted: Int, val rulesDropped: Int) {
+        companion object {
+            val NONE = InboundTagRewrite(0, 0)
+        }
+    }
+
+    private fun reconcileInboundTagRules(root: JSONObject): InboundTagRewrite {
+        val routing = root.optJSONObject("routing") ?: return InboundTagRewrite.NONE
+        val rules = routing.optJSONArray("rules") ?: return InboundTagRewrite.NONE
         val proxyTags = proxyOutboundTags(root)
         val balancerTags = safeBalancerTags(root)
+        var retargeted = 0
+        var dropped = 0
         val cleaned = JSONArray()
         for (i in 0 until rules.length()) {
             val rule = rules.optJSONObject(i) ?: continue
@@ -199,10 +263,14 @@ object ConfigBuilder {
                 val fixed = JSONObject(rule.toString())
                 fixed.put("inboundTag", JSONArray().put(TUN_INBOUND_TAG))
                 cleaned.put(fixed)
+                retargeted++
+            } else {
+                // drop — do not revive a direct/block inboundTag rule
+                dropped++
             }
-            // else: drop — do not revive a direct/block inboundTag rule
         }
         routing.put("rules", cleaned)
+        return InboundTagRewrite(rulesRetargeted = retargeted, rulesDropped = dropped)
     }
 
     /** Tags of every non-helper outbound — the set a toward-proxy `outboundTag` may name. */
@@ -244,17 +312,26 @@ object ConfigBuilder {
      * Leaving the balancer alone preserves the policy *and* the validity, and gives up nothing:
      * that traffic was already going direct before this chokepoint ran.
      */
-    private fun sanitizeProxyBalancers(root: JSONObject) {
-        val routing = root.optJSONObject("routing") ?: return
-        val balancers = routing.optJSONArray("balancers") ?: return
+    private data class BalancerRewrite(val selectorsExpanded: Int, val fallbackTagsStripped: Int) {
+        companion object {
+            val NONE = BalancerRewrite(0, 0)
+        }
+    }
+
+    private fun sanitizeProxyBalancers(root: JSONObject): BalancerRewrite {
+        val routing = root.optJSONObject("routing") ?: return BalancerRewrite.NONE
+        val balancers = routing.optJSONArray("balancers") ?: return BalancerRewrite.NONE
         val proxyTags = proxyOutboundTags(root)
+        var expanded = 0
+        var stripped = 0
         val cleaned = JSONArray()
         for (i in 0 until balancers.length()) {
             val balancer = balancers.optJSONObject(i) ?: continue
             val selectors = balancer.optJSONArray("selector")
-            val safeSelectors = (0 until (selectors?.length() ?: 0))
+            val originalSelectors = (0 until (selectors?.length() ?: 0))
                 .map { selectors!!.optString(it) }
                 .filter { it.isNotBlank() }
+            val safeSelectors = originalSelectors
                 .flatMap { selector -> proxyTags.filter { proxyTag -> proxyTag.startsWith(selector) } }
                 .distinct()
             if (safeSelectors.isEmpty()) {
@@ -266,13 +343,19 @@ object ConfigBuilder {
 
             val safe = JSONObject(balancer.toString())
             safe.put("selector", JSONArray(safeSelectors))
+            // Counted only when the list actually CHANGED. An already-exact selector is rewritten to
+            // itself, and reporting that as an edit would make the sanitizer cry wolf on every
+            // already-normalized profile.
+            if (safeSelectors != originalSelectors) expanded++
             val fallback = safe.optString("fallbackTag")
             if (fallback.isNotBlank() && fallback !in proxyTags) {
                 safe.remove("fallbackTag")
+                stripped++
             }
             cleaned.put(safe)
         }
         routing.put("balancers", cleaned)
+        return BalancerRewrite(selectorsExpanded = expanded, fallbackTagsStripped = stripped)
     }
 
     /** Tags of balancers surviving [sanitizeProxyBalancers]. */

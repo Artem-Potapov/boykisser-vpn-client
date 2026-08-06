@@ -513,6 +513,39 @@ class ConfigBuilderRoutingTest {
             {"type":"field","network":"tcp,udp","outboundTag":"direct"}]}}
     """.trimIndent()
 
+    // N-2 — the two mandatory routing normalizations are invisible to every surface. This is the
+    // read-only inverse view ConfigSanitizer delegates to; it runs the SAME production functions on
+    // a throwaway parse rather than restating what they do.
+    @Test fun importedRoutingNormalization_counts_each_change_the_chokepoint_makes() {
+        val info = ConfigBuilder.importedRoutingNormalization(prefixBalancerWithDirectCatchAll)
+
+        assertEquals("prefix selector expands to the two proxy tags", 1, info.balancerSelectorsExpanded)
+        assertEquals("fallbackTag:direct is stripped", 1, info.fallbackTagsStripped)
+        assertEquals("the balancer rule's dead inboundTag is retargeted", 1, info.rulesRetargetedToTun)
+        assertEquals("nothing is dropped in this fixture", 0, info.rulesDropped)
+        assertTrue(info.changedAnything)
+    }
+
+    @Test fun importedRoutingNormalization_counts_a_dropped_direct_inboundTag_rule() {
+        // The change that actually moves user traffic: a `geosite:cn → direct` rule keyed on a dead
+        // inbound is dropped, never rewritten. balancerOverN's selector is already exact, so the
+        // expansion count stays 0 and the drop is not masked by it.
+        val info = ConfigBuilder.importedRoutingNormalization(balancerOverN)
+
+        assertEquals("selector is already exact", 0, info.balancerSelectorsExpanded)
+        assertEquals(1, info.fallbackTagsStripped)
+        assertEquals(1, info.rulesRetargetedToTun)
+        assertEquals(1, info.rulesDropped)
+    }
+
+    @Test fun importedRoutingNormalization_reports_nothing_for_an_already_normalized_config() {
+        val stored = ConfigBuilder.toProfileStorageConfig(prefixBalancerWithDirectCatchAll)
+
+        val info = ConfigBuilder.importedRoutingNormalization(stored)
+
+        assertFalse("a second pass must be a no-op, or the report would cry wolf", info.changedAnything)
+    }
+
     @Test fun inboundTag_balancer_rule_is_retargeted_to_tun_in() {
         val out = ConfigBuilder.buildRuntimeConfig(
             balancerOverN,

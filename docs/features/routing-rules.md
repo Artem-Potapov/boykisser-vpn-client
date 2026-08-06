@@ -148,6 +148,15 @@ they look healthy, match nothing, and traffic falls to Xray's default outbound (
   `tun-in` would activate a previously-dead direct exception and move traffic **away** from the
   proxy — forbidden for this chokepoint.
 
+**Neither pass is silent any more.** Both return per-change counters, and
+`ConfigBuilder.importedRoutingNormalization(stored)` re-runs them on a throwaway parse so Config
+Sanitization can report what they did to *this* config — a selector expanded, a `fallbackTag`
+stripped, rules retargeted, rules **dropped**. That last one is why the report exists: dropping a
+`geosite:cn → direct` inboundTag rule moves the user's traffic onto the tunnel, and the ruling that
+the imported config's routing wins is exactly what makes doing it silently unacceptable. A config
+neither pass changes produces no finding. See
+[`config-sanitization.md`](config-sanitization.md#findings).
+
 **Why two rules.** The `domain` rule matches only while sniffing is on: with a tun inbound the
 destination is an IP, and nothing supplies a domain unless the inbound sniffs one. `BLOCKED_ONLY`,
 `EXCEPT_COUNTRY` and ad-blocking all force sniffing; `PROXY_ALL` with ads off and the user's XRAY

@@ -80,6 +80,29 @@ a matching level, and an app-private `error` path; a present port-53 → `dns-ou
 a false success. The expected log path is passed to the pipeline as a plain string; the diagnostic
 never creates the log directory or file.
 
+A security finding also covers the chokepoint's **two mandatory routing normalizations**
+(`sanitizeProxyBalancers` and `reconcileInboundTagRules`), and it is the one finding that is
+**conditional on something having happened**: it appears only when this config's balancers or
+inbound-tag rules were actually changed — a selector expanded to exact proxy members, a helper
+`fallbackTag` stripped, rules retargeted onto `tun-in`, rules **dropped**. A config the chokepoint
+leaves alone produces no row at all, because an unconditional "we normalized your routing" row would
+be the silence problem in reverse.
+
+It exists because the maintainer ruling that *the imported config's routing wins* is exactly what
+makes a **silent** edit to that routing unacceptable: a dropped `geosite:cn → direct` inboundTag rule
+moves the user's traffic onto the tunnel, and this screen is the app's only non-silence mechanism.
+The counting is `ConfigBuilder.importedRoutingNormalization(stored)`, which re-runs **the production
+functions themselves** on a throwaway parse — the sanitizer reads counters and never re-derives what
+counts as toward-proxy, a helper fallback, or a prefix expansion.
+
+Two consequences of it reporting *what the pipeline does to the config as stored*, rather than what
+was once done to the text the user pasted. Both are correct, and neither is a gap:
+
+- `toProfileStorageConfig` already runs this chokepoint at **import**, so a normally-added profile
+  reports nothing — at runtime nothing further changes, which is what the row would be claiming.
+- A profile stored raw (the debug adder) or written by an older build still carries the un-normalized
+  shape, and there the row states exactly what every connect does to it.
+
 The diagnostic determines applicability from the selected proxy outbound, not from a stale object
 already present in the stored JSON. Thus an enabled fragmentation setting on QUIC remains
 `NotApplicable` even if the imported config happens to contain a fragment block.
@@ -132,11 +155,17 @@ this is no longer a documented boundary.)
   overlay, including a global resolver override) instead of re-deriving DoH rules. Forced sniffing is
   likewise owned once as `internal forceSniffingFor(core, routing)` — both `buildRuntimeConfig` and the
   sanitizer's `SNIFFING` / health-probe residual findings call it, so `FindingId.SNIFFING` cannot drift
-  from the runtime pipeline. **Gated file** — changes need maintainer review.
+  from the runtime pipeline. The same shape carries the balancer / inbound-tag report:
+  `internal importedRoutingNormalization(storedConfigJson)` calls `sanitizeProxyBalancers` and
+  `reconcileInboundTagRules` on a throwaway parse and returns their per-change counters, so the
+  sanitizer cannot hold a second copy of those forward rules. **Gated file** — changes need maintainer
+  review.
 
 ## Testing and manual gate
 
-`ConfigSanitizerTest` covers rewritten and already-compliant input (including hostname-proxy bootstrap
+`ConfigSanitizerTest` covers the imported-routing finding (reported with every change named;
+**absent** both for a config with no balancers/inbound-tag rules and for an already-normalized one),
+rewritten and already-compliant input (including hostname-proxy bootstrap
 pair present/partial/absent, and a global resolver override — e.g. Quad9 — silently replacing a
 stored-compliant resolver pair), malformed failure, omitted disabled settings, default always-visible
 values, effective DNS/routing/IPv6 summaries, `Added` vs `Applied` from final JSON, credential-safety

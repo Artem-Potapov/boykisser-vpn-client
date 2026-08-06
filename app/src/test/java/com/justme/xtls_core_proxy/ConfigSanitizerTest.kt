@@ -45,6 +45,75 @@ class ConfigSanitizerTest {
         assertEquals(Status.Rewrote, byId(report, FindingId.DNS_DOH)?.status)
     }
 
+    // A provider "balancer over N" config: a prefix selector, a helper fallbackTag, a toward-proxy
+    // inboundTag rule and a direct inboundTag rule — i.e. one instance of every change the
+    // chokepoint's two mandatory routing normalizations can make.
+    private val importedBalancerConfig = """
+        {"inbounds":[
+          {"tag":"socks","protocol":"socks","settings":{"udp":true}},
+          {"tag":"http","protocol":"http"}],
+         "outbounds":[
+          {"tag":"proxy-0","protocol":"vless","settings":{"vnext":[{"address":"1.1.1.1","port":443,
+            "users":[{"id":"u0"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"proxy-1","protocol":"vless","settings":{"vnext":[{"address":"2.2.2.2","port":443,
+            "users":[{"id":"u1"}]}]},"streamSettings":{"network":"tcp","security":"reality"}},
+          {"tag":"direct","protocol":"freedom"}],
+         "routing":{"balancers":[{"tag":"proxy-balancer","selector":["proxy-"],
+            "fallbackTag":"direct","strategy":{"type":"leastLoad"}}],
+           "rules":[
+            {"type":"field","inboundTag":["socks","http"],"balancerTag":"proxy-balancer"},
+            {"type":"field","inboundTag":["socks"],"domain":["geosite:cn"],"outboundTag":"direct"}]}}
+    """.trimIndent()
+
+    @Test
+    fun imported_balancer_and_inbound_rules_the_chokepoint_changed_are_reported() {
+        // The chokepoint rewrites balancers and DROPS direct/block inboundTag rules on every build.
+        // A dropped `geosite:cn → direct` rule changes where the user's traffic goes; the config is
+        // theirs, so the one thing that is not acceptable is changing it silently.
+        val report = ConfigSanitizer.analyze(importedBalancerConfig, log, TuningSettings.NONE)
+        val finding = byId(report, FindingId.IMPORTED_ROUTING_NORMALIZED)
+
+        assertEquals(Status.Rewrote, finding?.status)
+        assertTrue(
+            "must name the balancer rewrite; detail=${finding?.detail}",
+            finding!!.detail.contains("selector"),
+        )
+        assertTrue(
+            "must name the stripped fallbackTag; detail=${finding.detail}",
+            finding.detail.contains("fallbackTag"),
+        )
+        assertTrue(
+            "must name the retargeted rule; detail=${finding.detail}",
+            finding.detail.contains("tun-in"),
+        )
+        assertTrue(
+            "a DROPPED rule is the change that moves traffic; detail=${finding.detail}",
+            finding.detail.contains("dropped"),
+        )
+    }
+
+    @Test
+    fun a_config_the_chokepoint_leaves_alone_produces_no_finding() {
+        // `dirty` has a foreign inbound but no balancers and no inboundTag rules, so these two
+        // normalizations do nothing to it. Reporting an unconditional "we normalized your routing"
+        // would be the same silence problem in reverse — noise that says nothing happened.
+        val report = ConfigSanitizer.analyze(dirty, log, TuningSettings.NONE)
+
+        assertNull(byId(report, FindingId.IMPORTED_ROUTING_NORMALIZED))
+    }
+
+    @Test
+    fun an_already_normalized_config_reports_nothing_because_nothing_happens_to_it() {
+        // The finding reports what the pipeline does to the config AS STORED, not what was once
+        // done to the pasted text. toProfileStorageConfig already runs this chokepoint at import,
+        // so a normally-added profile has nothing left to change and must stay silent.
+        val stored = ConfigBuilder.toProfileStorageConfig(importedBalancerConfig)
+
+        val report = ConfigSanitizer.analyze(stored, log, TuningSettings.NONE)
+
+        assertNull(byId(report, FindingId.IMPORTED_ROUTING_NORMALIZED))
+    }
+
     @Test
     fun malformed_config_is_failure() {
         val report = ConfigSanitizer.analyze("not json at all", log, TuningSettings.NONE)

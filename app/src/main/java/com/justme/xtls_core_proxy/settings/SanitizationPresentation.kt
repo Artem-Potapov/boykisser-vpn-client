@@ -37,6 +37,7 @@ internal fun findingTitleRes(id: FindingId): Int = when (id) {
     FindingId.ROUTING -> R.string.san_routing
     FindingId.DOMAIN_STRATEGY -> R.string.san_domain_strategy
     FindingId.HEALTH_PROBE_CARVEOUT -> R.string.san_health_probe_carveout
+    FindingId.IMPORTED_ROUTING_NORMALIZED -> R.string.san_imported_routing
 }
 
 /** Splits a success report's findings into the two on-screen groups. */
