@@ -622,12 +622,16 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     `shouldRunFailoverMonitor`, `failoverMonitorNeedsRebuild`, `shouldEstablishRotationBridge`,
     `shouldAbortRotationForMissingBridge`,
     `shouldFunnelRotationReservationRefusal`,
-    `canReserveRotationFromAuthoritativeState` (the **one impure function in the file** — it reads
-    `FailoverPreferences.state.value.enabled` and delegates to the pure `canReserveRotation`. It
-    exists because the service's own `failoverSettings` cache is collector-updated *asynchronously*
-    while `save()` updates the process-global StateFlow synchronously, so a queued rotation reserving
-    off the cache could still see "enabled" after the user disabled the feature. The service calls
-    this one; keep new rules pure and put the settings read here),
+    `authoritativeFailoverSettings` + `canReserveRotationFromAuthoritativeState` (the **two impure
+    functions in the file**, and the second delegates to the first. `authoritativeFailoverSettings()`
+    returns `FailoverPreferences.state.value` and is the **single source of failover settings for
+    anything the service decides** — the thrash cap, the rotation-success re-apply, the re-arm delay,
+    the UNPROTECTED stop deadline and the enable veto all read it. It exists because `save()`/`load()`
+    publish into the process-global StateFlow *synchronously* while the service's collector runs
+    *asynchronously*, so the session cache the service used to keep could be a whole tuple stale; that
+    cache field has been **deleted**, since no read justified it. `failoverMonitorSettings` is NOT
+    that cache and stays — it records what the live monitor was *constructed from*, which is what
+    `failoverMonitorNeedsRebuild` needs. Keep new rules pure and put the settings read here),
     `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
     gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
     `shouldStopServiceOnGiveUp`,

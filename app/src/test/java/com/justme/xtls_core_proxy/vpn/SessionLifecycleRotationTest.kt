@@ -147,6 +147,38 @@ class SessionLifecycleRotationTest {
     }
 
     @Test
+    fun theAuthoritativeReadCarriesTheWholeTuple_notJustTheEnabledFlag() {
+        // N-7: the enable veto was the only read routed through the authoritative source, while the
+        // thrash cap, the re-arm delay and the UNPROTECTED stop deadline all read the service's
+        // collected cache — one question with two answers in one file. save() publishes to the
+        // process StateFlow SYNCHRONOUSLY; the service's cache is updated by an asynchronous
+        // collector, so it can be a whole tuple behind. Every field the service acts on must come
+        // from here.
+        val prefs = InMemorySharedPreferences()
+        val context = mock<Context> {
+            on { getSharedPreferences(eq("xray_prefs"), eq(Context.MODE_PRIVATE)) } doReturn prefs
+        }
+        val edited = FailoverPreferences.DEFAULT.copy(
+            enabled = true,
+            maxRotations = 9,
+            rotationWindowMs = 1_800_000L,
+        )
+        try {
+            FailoverPreferences.save(context, edited)
+            val authoritative = authoritativeFailoverSettings()
+            assertEquals("the thrash cap must not read a stale budget", 9, authoritative.maxRotations)
+            assertEquals(
+                "the re-arm delay and the UNPROTECTED stop deadline are both this window",
+                1_800_000L,
+                authoritative.rotationWindowMs,
+            )
+            assertTrue(authoritative.enabled)
+        } finally {
+            FailoverPreferences.save(context, FailoverPreferences.DEFAULT)
+        }
+    }
+
+    @Test
     fun killIsDeferred_duringBothRevivingAndRotating() {
         // A kill landing mid-transition must be recorded and replayed, never dropped: the
         // foreground monitor is edge-triggered and will not re-fire it.

@@ -1089,6 +1089,36 @@ only those three fields qualify (`enabled` is handled by `shouldRunFailoverMonit
 settings `StateFlow` re-emits on every save, and rebuilding on each one would restart the poll cycle
 continuously so the tunnel is never actually observed.
 
+### One question, one answer: `authoritativeFailoverSettings()`
+
+**Every failover-settings read that DECIDES something goes through
+`SessionLifecycleDecision.authoritativeFailoverSettings()`, which returns `FailoverPreferences.state.value`.**
+`save()` and `load()` publish into that process-global flow **synchronously**; the service also
+collects it, but that collector runs **asynchronously** on `serviceScope`, so anything it cached could
+be a whole tuple behind the value the user had just saved.
+
+That asymmetry is why the reservation seam
+(`canReserveRotationFromAuthoritativeState`) was introduced — but only the *enable veto* used it. The
+thrash cap (`maxRotations` / `rotationWindowMs`), the rotation-success `applyFailoverPreferences`, the
+re-arm delay and the `UNPROTECTED` stop deadline all read a session cache field, so one question had
+two answers in one file. The consequence was watchdog **timing**, never exposure — but the last of
+those reads decides whether the service **stops itself**, and the revive path already called
+`applyFailoverPreferences` with the flow while the rotation path next to it passed the cache. The
+cache field was therefore **deleted**, not synchronised: it had no read left that could justify it.
+
+Two things this deliberately does **not** change:
+
+- **`failoverMonitorSettings` stays a cache, and must.** It is a different question — what the live
+  monitor was *constructed from* — and `failoverMonitorNeedsRebuild` needs exactly that record of the
+  past to tell a real timing edit from the settings flow's no-op re-emission.
+- **`applyFailoverPreferences` keeps its `settings` parameter.** The collector's emission is the
+  natural input to a reconciliation, and the seeded `FailoverPreferences.load(...)` below is what
+  makes the parameter and the flow agree on a process-fresh connect.
+
+The thrash cap reads the tuple **once** into a local at the reservation, rather than reading each
+field separately: both describe the same sliding window, and two reads could mix a new `maxRotations`
+with an old `rotationWindowMs`.
+
 The `failoverMonitor != null` early return is what stops the observer stacking duplicate monitors. The
 fix for a stale post-rotation monitor is to **clear the field** (`stopFailoverMonitorLocked()` inside
 `rotateTunnel`'s reservation), **never** to drop that guard: a fired monitor is already terminal but
@@ -1388,7 +1418,7 @@ is itself the argument for doing it.
 | `failover/FastestPickTest` (4), `failover/ClearStaleTestingTest` (3) | Lowest successful latency wins / nothing succeeded → null; stale-`Testing` reset scoped to the run's own ids. |
 | `failover/FastestConnectRunnerTest` (8) | Sequencing against a **real** `PingCoordinator` under `kotlinx-coroutines-test`: supersede (disjoint **and** identical pools), cancel-resets-`Testing`, the delivery-time re-gate discards + reports `STATE_CHANGED`, connectable winner is delivered, `NO_RESPONSE` vs `BUSY`. |
 | `vpn/SessionLifecycleDecisionTest` (58) | Every pure service rule above except the kill-deferral guard, including `shouldReleaseGiveUpOnDisable` (both the contained release **and** the `UNPROTECTED` non-release), `shouldOverwritePendingConnect`, and `containmentForGiveUp` — the live tunnel wins over a held bridge, the bridge wins over building a second TUN, the state arm, and `adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel`, which composes containment with `classifyGiveUpOutcome` the way `giveUpRotationLocked` does — but with `hasTunnel` hard-coded, so it pins the composition and **not** the service's read ordering (see the give-up section). |
-| `vpn/SessionLifecycleRotationTest` (22) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. Also the sole home of `deferredKillToWithdraw`: withdraws for the current session, silent with nothing deferred, refused for a stale epoch and a stopped session, `everyStateThatCanDeferAKillCanAlsoWithdrawIt` (whole-enum implication, so a new deferral state cannot open a hole) and `withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt`. |
+| `vpn/SessionLifecycleRotationTest` (23) | Rotation reservation; `shouldEstablishRotationBridge` (opened once the rotation tore the tunnel down, never twice, never over a live tunnel, `ROTATING` only); the give-up predicates; `deferredKillNoticeLabel` (names the app while a tunnel remains; silent with nothing deferred and silent with no tunnel left); and the **sole** home of the kill-deferral coverage — `shouldDeferKillDuringTransition` across `{REVIVING, ROTATING}` × current/stale-epoch/stopped, plus the four settled states. The five duplicate cases that used to test the production-dead `shouldDeferKillDuringRevive` were checked one by one against the live function (all still held; none involved `ROTATING`, so none inverted), found already covered here, and deleted with it. Also `theAuthoritativeReadCarriesTheWholeTuple_notJustTheEnabledFlag`, which pins that `authoritativeFailoverSettings()` carries `maxRotations`/`rotationWindowMs` and not only `enabled` — the fields the deleted session cache used to answer. Also the sole home of `deferredKillToWithdraw`: withdraws for the current session, silent with nothing deferred, refused for a stale epoch and a stopped session, `everyStateThatCanDeferAKillCanAlsoWithdrawIt` (whole-enum implication, so a new deferral state cannot open a hole) and `withdrawalIsDeliberatelyWIDERThanDeferral_notAMirrorOfIt`. |
 | `vpn/FailoverNotificationIdsTest` (3) | All five ids and three channel ids are **mutually distinct** — the JVM-runnable (therefore CI-runnable) guard against the welded-channel regression. |
 | `state/ConnectActionTest` (7) | The connect gate: the full `VpnConnectionState → ConnectAction` map as one table (so a mapping change is one visible diff), `BLACKHOLED` → `RECONNECT`, `ERROR` → `CONNECT`, the label for each action, and `connectEnabled` false for `UNAVAILABLE` and for every action while `isConnecting`. |
 | `state/ReconnectFlowTest` (13) | Stop → settle → start ordering; the `STOP_TIMEOUT_MS` expiry dispatches **no** start and reports the timeout; the `START_VERIFY_MS` re-dispatch fires once and only once; a second `run` while one is in flight is refused and reported, not queued; `cancel()` abandons without starting; the guard releases so a later reconnect is admitted (per **`ReconnectFlow` instance** — i.e. per ViewModel, not per process); a `userStopGeneration` bump during settle or start-verify abandons without (re)starting; the flow's own stop does not count as that bump; and — the tie case the others cannot see — a Stop *already visible* when the settle await arms still abandons, which is what stops both replaying StateFlows racing for the answer. |

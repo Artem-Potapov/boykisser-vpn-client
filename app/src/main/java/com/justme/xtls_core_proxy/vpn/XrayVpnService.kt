@@ -178,7 +178,6 @@ class XrayVpnService : VpnService() {
     private var failoverSettingsJob: Job? = null
     /** Pending "try again once the thrash window elapsed" timer from a give-up. Guarded by `lock`. */
     private var failoverRearmJob: Job? = null
-    @Volatile private var failoverSettings: FailoverSettings = FailoverPreferences.DEFAULT
     /** Rotation attempt timestamps for the sliding thrash window. Guarded by `lock`. */
     private var rotationAttempts: List<Long> = emptyList()
     /** Candidates that failed bring-up in the CURRENT rotation episode. Guarded by `lock`. */
@@ -1040,7 +1039,7 @@ class XrayVpnService : VpnService() {
                         // Guarded separately from the replay below because skipping it leaves the
                         // watchdog dead for the rest of the session.
                         afterReviveCommitted("restarting the health monitor") {
-                            applyFailoverPreferences(FailoverPreferences.state.value, session.epoch)
+                            applyFailoverPreferences(authoritativeFailoverSettings(), session.epoch)
                         }
                         // Ordered before the replay so a replayed kill correctly stops the monitor
                         // again through killTunnel's pause path. Its own guard because skipping it
@@ -1130,7 +1129,7 @@ class XrayVpnService : VpnService() {
                         // feature is still enabled (same veto shape as shouldFireFailoverRetry).
                         if (unprotectedRecoverySinceMs != null &&
                             isCurrentSessionLocked(sessionEpoch) &&
-                            FailoverPreferences.state.value.enabled
+                            authoritativeFailoverSettings().enabled
                         ) {
                             LogRepository.append(
                                 "Failover: recovery rotation could not reserve the transition " +
@@ -1151,11 +1150,15 @@ class XrayVpnService : VpnService() {
                     // funnels into giveUpRotationLocked, which must see the budget as spent or a
                     // second UNPROTECTED outcome would re-arm instead of stopping.
                     if (unprotectedRecoverySinceMs != null) unprotectedRetryConsumed = true
+                    // ONE tuple, read once. Both fields describe the same sliding window, so taking
+                    // them from two separate reads could mix a new maxRotations with an old
+                    // rotationWindowMs if a save landed between them.
+                    val admissionSettings = authoritativeFailoverSettings()
                     when (val admission = FailoverDecision.admitRotation(
                         attempts = rotationAttempts,
                         now = System.currentTimeMillis(),
-                        maxRotations = failoverSettings.maxRotations,
-                        windowMs = failoverSettings.rotationWindowMs,
+                        maxRotations = admissionSettings.maxRotations,
+                        windowMs = admissionSettings.rotationWindowMs,
                     )) {
                         RotationAdmission.Denied -> {
                             giveUpRotationLocked(sessionEpoch, "thrash cap reached")
@@ -1383,7 +1386,7 @@ class XrayVpnService : VpnService() {
                             VpnNotifications.postFailover(this@XrayVpnService, current.name, next.name)
                         }
                         afterRotationCommitted("restarting the health monitor") {
-                            applyFailoverPreferences(failoverSettings, session.epoch)
+                            applyFailoverPreferences(authoritativeFailoverSettings(), session.epoch)
                         }
                         if (hasDeferredKill) {
                             afterRotationCommitted("replaying the deferred kill") {
@@ -1743,7 +1746,7 @@ class XrayVpnService : VpnService() {
         retryByRotation: Boolean,
         unprotectedSinceMs: Long = System.currentTimeMillis(),
     ) {
-        val windowMs = failoverSettings.rotationWindowMs
+        val windowMs = authoritativeFailoverSettings().rotationWindowMs
         failoverRearmJob?.cancel()
         failoverRearmJob = serviceScope.launch {
             delay(windowMs)
@@ -1753,7 +1756,7 @@ class XrayVpnService : VpnService() {
             // settings — the user may have edited them during the wait.
             val proceed = synchronized(lock) {
                 val ok = shouldFireFailoverRetry(
-                    failoverEnabled = FailoverPreferences.state.value.enabled,
+                    failoverEnabled = authoritativeFailoverSettings().enabled,
                     isCurrentSession = isCurrentSessionLocked(sessionEpoch),
                 )
                 if (ok) rotationAttempts = emptyList()
@@ -1767,7 +1770,7 @@ class XrayVpnService : VpnService() {
             }
             if (!retryByRotation) {
                 // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
-                applyFailoverPreferences(FailoverPreferences.state.value, sessionEpoch)
+                applyFailoverPreferences(authoritativeFailoverSettings(), sessionEpoch)
                 return@launch
             }
             // ---- The UNPROTECTED recovery ----
@@ -1781,7 +1784,7 @@ class XrayVpnService : VpnService() {
                     tunnelState = sessionTunnelState,
                     unprotectedSinceMs = unprotectedSinceMs,
                     now = System.currentTimeMillis(),
-                    rotationWindowMs = failoverSettings.rotationWindowMs,
+                    rotationWindowMs = authoritativeFailoverSettings().rotationWindowMs,
                 )
                 if (decided == UnprotectedRetryAction.DEFER) {
                     LogRepository.append(
@@ -2101,11 +2104,23 @@ class XrayVpnService : VpnService() {
      *
      * The monitor runs ONLY in CONNECTED: in PAUSED there is no tunnel, so every probe would fail
      * and we would "rotate" a tunnel the kill-switch deliberately tore down.
+     *
+     * **This no longer caches [settings] as "the current settings".** It used to, and every other
+     * decision in this file then had a choice between that cache and the flow — one question with
+     * two answers, in a class where the flow is updated synchronously by `save()` and the cache
+     * asynchronously by the collector below. Everything that DECIDES now calls
+     * [authoritativeFailoverSettings]; see its KDoc for the derivation. [settings] stays a parameter
+     * because the collector's emission is the natural input to a reconciliation, and the seeded
+     * `FailoverPreferences.load(...)` in `startVpn` is what makes the two agree on a process-fresh
+     * connect.
+     *
+     * [failoverMonitorSettings] is NOT that cache and must stay: it records what the live monitor
+     * was **constructed from**, which is the past, and is exactly what
+     * [failoverMonitorNeedsRebuild] needs to tell a real timing edit from a no-op re-emission.
      */
     private fun applyFailoverPreferences(settings: FailoverSettings, sessionEpoch: Long) {
         synchronized(lock) {
             if (!isCurrentSessionLocked(sessionEpoch)) return
-            failoverSettings = settings
 
             if (!settings.enabled) {
                 // ROOT FIX for a pending re-arm outliving the setting that authorised it. Gated on

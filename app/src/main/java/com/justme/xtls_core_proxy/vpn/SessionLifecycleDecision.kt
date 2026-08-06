@@ -78,6 +78,32 @@ internal fun canReserveRotation(
 )
 
 /**
+ * **The single source of failover settings for anything the service DECIDES.** Impure by design,
+ * like [canReserveRotationFromAuthoritativeState] below, which now delegates to it.
+ *
+ * ### Why there is a rule here at all
+ * `FailoverPreferences.save()` and `load()` publish into the process-global `state` **synchronously**.
+ * `XrayVpnService` also observes that flow, but its collector runs **asynchronously** on
+ * `serviceScope`, so any field it caches can be a whole tuple behind the value the user just saved.
+ * That asymmetry is why this seam exists.
+ *
+ * The service used to answer "what are the current settings" two ways in one file: the enable veto
+ * read the flow, while the thrash cap (`maxRotations` / `rotationWindowMs`), the rotation-success
+ * `applyFailoverPreferences`, the re-arm delay and the `UNPROTECTED` stop deadline all read the
+ * collected cache. The consequence was never exposure — it is watchdog *timing* — but the last of
+ * those decides whether the service **stops itself**, and one question with two answers in one file
+ * is how a maintainer picks the wrong one. Read everything here.
+ *
+ * ### What may still legitimately be cached
+ * Exactly one thing, and it is a different question: `XrayVpnService.failoverMonitorSettings` — the
+ * settings the live `TunnelHealthMonitor` was **constructed from**. That is a record of the past,
+ * which is precisely what `failoverMonitorNeedsRebuild` needs in order to tell a real timing edit
+ * from the settings flow's no-op re-emission. It must NOT be replaced by this call. The general
+ * "current settings" cache it sat beside had no such justification and no longer exists.
+ */
+internal fun authoritativeFailoverSettings(): FailoverSettings = FailoverPreferences.state.value
+
+/**
  * Reservation boundary used by [XrayVpnService]. Unlike [canReserveRotation], this seam reads the
  * process-authoritative settings source at the instant the queued operation reserves its transition.
  */
@@ -91,7 +117,7 @@ internal fun canReserveRotationFromAuthoritativeState(
     activeSessionEpoch = activeSessionEpoch,
     callbackSessionEpoch = callbackSessionEpoch,
     tunnelState = tunnelState,
-    failoverEnabled = FailoverPreferences.state.value.enabled,
+    failoverEnabled = authoritativeFailoverSettings().enabled,
 )
 
 /**
