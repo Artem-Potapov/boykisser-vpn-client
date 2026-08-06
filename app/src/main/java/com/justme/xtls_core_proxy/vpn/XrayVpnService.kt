@@ -44,7 +44,7 @@ import com.justme.xtls_core_proxy.killswitch.AndroidUsageStatsEventSource
 import com.justme.xtls_core_proxy.killswitch.ForegroundAppMonitor
 import com.justme.xtls_core_proxy.killswitch.KillSwitchRepository
 import com.justme.xtls_core_proxy.killswitch.UsageStatsForegroundAppMonitor
-import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.LogPreferences
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
@@ -206,10 +206,10 @@ class XrayVpnService : VpnService() {
      * being held. Restoring the marker instead is not available — its release is load-bearing.
      *
      * Written under `lock` by the ONE producer of BLACKHOLED ([giveUpRotationLocked]) and cleared on
-     * successful recovery or full teardown. It is paired with [LogRepository.blackholedLine] so a
+     * successful recovery or full teardown. It is paired with [LogRepository.giveUpLine] so a
      * successful transition cannot leave home/tile carrying a line from the previous give-up.
      */
-    @Volatile private var blackholedLine: BlackholedOngoingLine? = null
+    @Volatile private var giveUpLine: GiveUpOngoingLine? = null
 
     /**
      * Whether the single automatic recovery attempt granted to an UNPROTECTED give-up has been
@@ -1000,7 +1000,7 @@ class XrayVpnService : VpnService() {
                             // is what stops a concurrent kill-switch pause or stop — both of which
                             // write LogRepository state while holding `lock` — from being
                             // overwritten by a late CONNECTED from here.
-                            clearBlackholedLineLocked()
+                            clearGiveUpLineLocked()
                             afterReviveCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
@@ -1311,7 +1311,7 @@ class XrayVpnService : VpnService() {
                             // understating a working connection, indefinitely, which is a lie in
                             // the SAFE direction — against letting the throw escape and tear down a
                             // healthy session's monitor while writing BLACKHOLED over it.
-                            clearBlackholedLineLocked()
+                            clearGiveUpLineLocked()
                             afterRotationCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
@@ -1587,11 +1587,11 @@ class XrayVpnService : VpnService() {
         // Recorded HERE, beside the state it describes, because it must outlive giveUpOutcome: the
         // disable branch releases that marker while leaving the state BLACKHOLED, and a repost
         // after that must not fall back to a line describing the other outcome's packet truth.
-        blackholedLine = blackholedOngoingLine(outcome)
+        giveUpLine = giveUpOngoingLine(outcome)
         // Same recorded answer the 1101 line uses — publish BEFORE the state so a collector that
         // reacts to BLACKHOLED already sees the matching line (disable later clears giveUpOutcome
         // but must not clear this).
-        LogRepository.setBlackholedLine(blackholedLine)
+        LogRepository.setGiveUpLine(giveUpLine)
         // State first, then the notifications — same ordering discipline as killTunnel.
         LogRepository.setConnectionState(connectionStateForGiveUp(outcome))
         when (outcome) {
@@ -1710,7 +1710,7 @@ class XrayVpnService : VpnService() {
             //   * the blast radius is maxRotations extra rotations in one window, each bridged by
             //     an unread TUN and each announced. It is a churn cost, never an exposure one.
             rotationAttempts = emptyList()
-            clearBlackholedLineLocked()
+            clearGiveUpLineLocked()
             LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
             updateNotification(localizedString(R.string.vpn_status_connected))
             VpnNotifications.cancelFailoverBlackholed(this)
@@ -2029,9 +2029,9 @@ class XrayVpnService : VpnService() {
     }
 
     /** Clears the paired service/repository line once no BLACKHOLED give-up describes the session. */
-    private fun clearBlackholedLineLocked() {
-        blackholedLine = null
-        LogRepository.clearBlackholedLine()
+    private fun clearGiveUpLineLocked() {
+        giveUpLine = null
+        LogRepository.clearGiveUpLine()
     }
 
     private inner class KillSwitchListener(
@@ -2383,7 +2383,7 @@ class XrayVpnService : VpnService() {
             // The session is over, so no BLACKHOLED line is true any more. Mirror onto
             // LogRepository so home/tile cannot keep showing a contained-outcome string after
             // Disconnect.
-            clearBlackholedLineLocked()
+            clearGiveUpLineLocked()
             // Every OTHER exit from the rotation gap is a rotation that keeps going; this one ends
             // the session under it. Placed here, above the early return below, so it covers that
             // path too — and it is what covers ALL the stale-session exits, since losing ownership
@@ -2573,7 +2573,7 @@ class XrayVpnService : VpnService() {
                 // persistent line is their only remaining indication. Only 1101 is restored — 1105
                 // was dismissed deliberately and re-posting it would fight the user.
                 //
-                // Read from blackholedLine, NOT re-derived from giveUpOutcome. The disable branch
+                // Read from giveUpLine, NOT re-derived from giveUpOutcome. The disable branch
                 // clears that marker while deliberately keeping this state, and the old derivation
                 // fell through to the blackhole copy after such a release — relabelling a
                 // still-proxying tunnel as one holding the user's traffic. The two contained
@@ -2582,19 +2582,28 @@ class XrayVpnService : VpnService() {
                 // Null is unreachable (this state has exactly one producer, and it writes the
                 // field in the same locked block), so it restores nothing rather than guessing a
                 // line that could be the wrong one.
-                when (blackholedLine) {
-                    BlackholedOngoingLine.STILL_PROXYING ->
+                when (giveUpLine) {
+                    GiveUpOngoingLine.STILL_PROXYING ->
                         updateNotification(localizedString(R.string.vpn_status_no_response))
-                    BlackholedOngoingLine.TRAFFIC_HELD ->
+                    GiveUpOngoingLine.TRAFFIC_HELD ->
                         updateNotification(localizedString(R.string.vpn_status_blackholed))
-                    null -> Unit
+                    // UNPROTECTED does not render as BLACKHOLED (connectionStateForGiveUp sends it
+                    // to ERROR), so this arm is unreachable and must restore NOTHING rather than
+                    // pick a containment line for a state whose packets are not contained.
+                    GiveUpOngoingLine.UNPROTECTED, null -> Unit
                 }
             }
             VpnConnectionState.ERROR -> {
                 // ERROR normally means the session is dying, with nothing ongoing to restore. The
                 // uncontained give-up is the exception: the service is still RUNNING, and the line
                 // it needs is the honest "not protected" one, never the containment copy.
-                if (giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED) {
+                //
+                // Keyed on the RECORDED line, the same source home and the tile read, so all three
+                // surfaces cannot disagree about which give-up a session is in. (Reading
+                // giveUpOutcome gives the same answer today — the disable branch that clears it
+                // excludes UNPROTECTED — but it is a second source for one question, which is the
+                // shape that produced the mislabelled-BLACKHOLED defect one arm above.)
+                if (giveUpLine == GiveUpOngoingLine.UNPROTECTED) {
                     updateNotification(localizedString(R.string.vpn_status_unprotected))
                 }
             }

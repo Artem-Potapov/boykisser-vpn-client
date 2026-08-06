@@ -2,7 +2,7 @@ package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
 import com.justme.xtls_core_proxy.failover.FailoverSettings
-import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 
 /**
@@ -440,8 +440,8 @@ internal fun connectionStateForGiveUp(outcome: FailoverGiveUpOutcome): VpnConnec
     }
 
 /**
- * The 1101 / home / tile line a BLACKHOLED session must show, from the give-up that produced that
- * state — or null when no BLACKHOLED line is true.
+ * The 1101 / home / tile line a give-up must show, from the outcome that produced it — or null when
+ * no give-up describes this session.
  *
  * The service records the ANSWER, not the input: `repostOngoingNotification` used to re-derive this
  * from the live `giveUpOutcome` field, and the disable branch clears that field while
@@ -450,19 +450,25 @@ internal fun connectionStateForGiveUp(outcome: FailoverGiveUpOutcome): VpnConnec
  * "your traffic is being held" — or, in the other direction, would tell a user behind a blackhole
  * that their server merely stopped responding. Restoring `giveUpOutcome` is not the fix: that field
  * is the "an automatic recovery is still owed" marker `shouldRestartForRecovery` keys off, and its
- * release is load-bearing. The same recorded answer is published on [LogRepository.blackholedLine]
+ * release is load-bearing. The same recorded answer is published on [LogRepository.giveUpLine]
  * so home/tile cannot share one string across opposite packet truths.
  *
- * Null for [FailoverGiveUpOutcome.UNPROTECTED] because that outcome renders as `ERROR`, not
- * BLACKHOLED — [connectionStateForGiveUp] is the authority, and `SessionLifecycleDecisionTest`
- * pins the correspondence over the whole enum so the two cannot drift apart.
+ * **It covers all three outcomes, including the one that does NOT render as BLACKHOLED.** It was
+ * once null for [FailoverGiveUpOutcome.UNPROTECTED], scoped to the BLACKHOLED state on the grounds
+ * that `connectionStateForGiveUp` sends UNPROTECTED to `ERROR`. The consequence was that home and
+ * the QS tile — the two most-looked-at surfaces — labelled an uncontained give-up with the generic
+ * "Error", the same string an ordinary failed connection shows, while the banner, 1101 and 1105 all
+ * said "not protected". `ERROR` cannot tell the two apart on its own, so the outcome has to reach
+ * the UI, and this is the mechanism that already carries one. Three outcomes, three lines, no two
+ * shared — [connectionStateForGiveUp] decides which STATE hosts each line, never whether one exists.
  */
-internal fun blackholedOngoingLine(
+internal fun giveUpOngoingLine(
     containment: FailoverGiveUpOutcome?,
-): BlackholedOngoingLine? = when (containment) {
-    FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> BlackholedOngoingLine.STILL_PROXYING
-    FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE -> BlackholedOngoingLine.TRAFFIC_HELD
-    FailoverGiveUpOutcome.UNPROTECTED, null -> null
+): GiveUpOngoingLine? = when (containment) {
+    FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL -> GiveUpOngoingLine.STILL_PROXYING
+    FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE -> GiveUpOngoingLine.TRAFFIC_HELD
+    FailoverGiveUpOutcome.UNPROTECTED -> GiveUpOngoingLine.UNPROTECTED
+    null -> null
 }
 
 /**

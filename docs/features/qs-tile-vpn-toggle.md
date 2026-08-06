@@ -225,6 +225,13 @@ working exits from `UNPROTECTED` are the in-app **Disconnect** (the gate include
 action on the ongoing notification**, and Connect-from-`UNPROTECTED`, which restarts the session. **This
 is a ledgered, accepted residual — do not "fix" the tile mapping without revisiting that decision.**
 
+**The tile LABEL is not part of that compromise.** `updateTile`'s `ERROR` arm passes the recorded
+`LogRepository.giveUpLine` into `vpnConnectionStateLabelRes`, so an `UNPROTECTED` give-up reads
+**"Not protected"** while an ordinary failed connection — which has no recorded line — keeps reading
+"Error". Only the `Tile.state` is forced to one answer by the two-value API; the text a user actually
+reads is not, and telling them "Error" while the notification says they are unprotected was
+understating real exposure on the surface they glance at most.
+
 **`STATE_ACTIVE` during `CONNECTING`.** Quick Settings only has `STATE_ACTIVE` / `STATE_INACTIVE` / `STATE_UNAVAILABLE`. The current mapping marks `CONNECTING` as `STATE_ACTIVE` (consistent with the toggle semantics — a tap during CONNECTING means "stop"). A double-tap during the 1–3 s connect window will therefore fire `ACTION_STOP`. Considered acceptable because the alternative (`STATE_UNAVAILABLE`) makes the tile look broken to users in low-bandwidth conditions where CONNECTING is long-lived.
 
 **Tile pre-flight permission check is racy with revocation.** Mitigated by the defensive `VpnService.prepare(this)` re-check at the top of `XrayVpnService.startVpn` (after `startForeground`, before `setConnectionState(CONNECTING)`), which posts an error notification on failure. When permission was revoked in the gap, the tile can jump **DISCONNECTED → ERROR** without ever showing CONNECTING — the defensive check runs before CONNECTING is published. A brief CONNECTING flash is still possible on other failure paths (e.g. profile lookup / tunnel bring-up) that occur after CONNECTING is set.

@@ -15,7 +15,7 @@ import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
 import com.justme.xtls_core_proxy.db.AppDatabase
 import com.justme.xtls_core_proxy.i18n.SupportedLanguage
-import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
@@ -41,7 +41,7 @@ class XrayVpnTileService : TileService() {
         listenJob = serviceScope.launch {
             combine(
                 LogRepository.connectionState,
-                LogRepository.blackholedLine,
+                LogRepository.giveUpLine,
             ) { state, line -> state to line }
                 .collect { (state, line) -> updateTile(state, line) }
         }
@@ -174,7 +174,7 @@ class XrayVpnTileService : TileService() {
 
     private suspend fun updateTile(
         state: VpnConnectionState,
-        blackholedLine: BlackholedOngoingLine? = null,
+        giveUpLine: GiveUpOngoingLine? = null,
     ) {
         val tile = qsTile ?: return
         val ctx = SupportedLanguage.localize(applicationContext)
@@ -200,13 +200,21 @@ class XrayVpnTileService : TileService() {
                 // so the tile must stay a working Stop control. Mapping it to INACTIVE (as ERROR
                 // is) would dispatch ACTION_START on tap, which startVpn no-ops with "VPN already
                 // running" — a dead control in the one state where the user most needs a live one.
-                // Label distinguishes the two contained outcomes via the recorded blackholedLine.
+                // Label distinguishes the two contained outcomes via the recorded giveUpLine.
                 tile.state = Tile.STATE_ACTIVE
-                tile.label = ctx.getString(vpnConnectionStateLabelRes(state, blackholedLine))
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state, giveUpLine))
             }
             VpnConnectionState.ERROR -> {
+                // INACTIVE is unchanged and still an accepted compromise (see
+                // docs/features/qs-tile-vpn-toggle.md): ERROR conflates a dying session with an
+                // UNPROTECTED give-up, and one binary action cannot serve both.
+                //
+                // The LABEL is not forced into that compromise. It takes the recorded give-up line,
+                // so an uncontained give-up reads "Not protected" instead of the same generic
+                // "Error" a failed connection shows — an ordinary error has no line and keeps the
+                // ordinary string.
                 tile.state = Tile.STATE_INACTIVE
-                tile.label = ctx.getString(vpnConnectionStateLabelRes(state))
+                tile.label = ctx.getString(vpnConnectionStateLabelRes(state, giveUpLine))
             }
         }
         // Explicit null clears any subtitle from older builds that wrote state

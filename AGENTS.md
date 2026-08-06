@@ -39,7 +39,7 @@ grepping** for `tile/`, `i18n/`, `killswitch/`, etc.
 │       │   │   ├── geo/            GeoAssetPreparer (.dat files → app private dir)
 │       │   │   ├── i18n/           LocalizedComponentActivity, SupportedLanguage
 │       │   │   ├── killswitch/     Kill-on-foreground feature → docs/features/
-│       │   │   ├── log/            LogRepository (sanitized state/log surface; VpnConnectionState incl. BLACKHOLED; also publishes `blackholedLine` — which contained give-up a BLACKHOLED session is in — and `userStopGeneration`, the tile/notification Stop signal ReconnectFlow tells apart from its own teardown), VpnConnectionLabels (BlackholedOngoingLine + vpnConnectionStateLabelRes — lives HERE, not in vpn/, so home and tile can share one mapping without a log→vpn import), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
+│       │   │   ├── log/            LogRepository (sanitized state/log surface; VpnConnectionState incl. BLACKHOLED; also publishes `giveUpLine` — which of the THREE give-up outcomes a session is in, incl. the UNPROTECTED one that rides ERROR — and `userStopGeneration`, the tile/notification Stop signal ReconnectFlow tells apart from its own teardown), VpnConnectionLabels (GiveUpOngoingLine + vpnConnectionStateLabelRes — lives HERE, not in vpn/, so home and tile can share one mapping without a log→vpn import), LogsActivity (screen → docs/features), XrayCoreLogTailer (file-tail → LogRepository), LogPreferences (level + buffer prefs)
 │       │   │   ├── nametheft/      Name-theft warning, remote-gated "time bomb" → docs/features/
 │       │   │   ├── privacy/        Device identity (HWID): settings repo + pure header/UA/rejection/hint logic + HwidSettingsActivity → docs/features/hwid-device-identity.md
 │       │   │   ├── settings/       Per-server + settings hub screens, including Fragmentation, Mux, DNS, Routing, XRAY, Config Sanitization, and Ping Test destinations → docs/features/ (the Tunnel → Auto-failover row opens failover/FailoverSettingsActivity); DebugUnrestrictedAddProfileActivity (debug-only unrestricted profile adder → docs/features/debug-tools.md)
@@ -631,10 +631,12 @@ warning's status probe (`nametheft/NameTheftWarning.kt`) and the promo gate's `/
     `containmentForGiveUp` (three-valued; replaced `shouldEstablishBlackholeTunnel` once containment
     gained a second source), `classifyGiveUpOutcome`, `connectionStateForGiveUp`,
     `shouldStopServiceOnGiveUp`,
-    `blackholedOngoingLine` (which 1101 line a BLACKHOLED session shows — the service RECORDS the
-    answer in `blackholedLine` rather than re-deriving it from `giveUpOutcome`, which the disable
-    branch clears while keeping the state; the paired service/repository line is cleared after
-    successful rotation, revive, healthy recovery, or full teardown),
+    `giveUpOngoingLine` (which 1101/home/tile line a give-up shows — TOTAL over the three outcomes,
+    including the UNPROTECTED one that renders as ERROR, because ERROR alone cannot tell an
+    uncontained give-up from an ordinary failed connection and both used to read "Error"; the
+    service RECORDS the answer in `giveUpLine` rather than re-deriving it from `giveUpOutcome`,
+    which the disable branch clears while keeping the state; the paired service/repository line is
+    cleared after successful rotation, revive, healthy recovery, or full teardown),
     `shouldFireFailoverRetry`, `shouldRestoreUnprotectedRearm`, `unprotectedRetryAction` (three-valued ATTEMPT/DEFER/STOP_SERVICE;
     the retry is spent by an ATTEMPT inside `rotateTunnel`'s reservation, never at schedule time,
     and deferring is bounded so every branch terminates), `shouldRestartForRecovery`,

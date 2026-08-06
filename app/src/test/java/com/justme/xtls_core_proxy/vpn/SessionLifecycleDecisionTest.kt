@@ -1,11 +1,12 @@
 package com.justme.xtls_core_proxy.vpn
 
 import com.justme.xtls_core_proxy.failover.FailoverPreferences
-import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -410,53 +411,63 @@ class SessionLifecycleDecisionTest {
         )
     }
 
-    // --- The BLACKHOLED ongoing line must survive a released give-up ---
+    // --- The recorded give-up line must survive a released give-up ---
 
     @Test
-    fun blackholedLine_neverSharedByTheTwoContainedOutcomes() {
+    fun giveUpLine_neverSharedByTheTwoContainedOutcomes() {
         // They have OPPOSITE packet truths: one is still proxying, the other drops everything.
         // Sharing a line tells a user with a working connection that their traffic is being held,
         // or a user behind a blackhole that their connection is merely unhealthy.
         assertEquals(
-            BlackholedOngoingLine.STILL_PROXYING,
-            blackholedOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL)
+            GiveUpOngoingLine.STILL_PROXYING,
+            giveUpOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL)
         )
         assertEquals(
-            BlackholedOngoingLine.TRAFFIC_HELD,
-            blackholedOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE)
+            GiveUpOngoingLine.TRAFFIC_HELD,
+            giveUpOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE)
         )
         assertNotEquals(
-            blackholedOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL),
-            blackholedOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE)
+            giveUpOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL),
+            giveUpOngoingLine(FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE)
         )
     }
 
     @Test
-    fun blackholedLine_existsForExactlyTheOutcomesThatRenderAsBlackholed() {
-        // Whole-enum guard: this line is the 1101 copy for the BLACKHOLED state, so it must exist
-        // for precisely the outcomes connectionStateForGiveUp maps there and for no other. The
-        // counter keeps it non-vacuous — if the mapping ever stopped producing BLACKHOLED at all,
-        // an implication-only assertion would pass while asserting nothing.
-        var blackholed = 0
-        for (outcome in FailoverGiveUpOutcome.entries) {
-            val rendersBlackholed =
-                connectionStateForGiveUp(outcome) == VpnConnectionState.BLACKHOLED
-            if (rendersBlackholed) blackholed++
-            assertEquals(
-                "$outcome renders as blackholed=$rendersBlackholed, so its ongoing line must " +
-                    "${if (rendersBlackholed) "exist" else "be absent"}",
-                rendersBlackholed,
-                blackholedOngoingLine(outcome) != null,
-            )
-        }
-        assertEquals("two outcomes must still render as BLACKHOLED", 2, blackholed)
+    fun giveUpLine_recordsTheUncontainedOutcomeToo_notOnlyTheBlackholedOnes() {
+        // It used to be null for UNPROTECTED, on the reasoning that the line was the BLACKHOLED
+        // copy and UNPROTECTED renders as ERROR. That left home and the tile with the generic
+        // "Error" — the exact string an ordinary failed connection shows — for the one outcome
+        // that admits the user is on the clear network. ERROR alone cannot tell the two apart, so
+        // the outcome has to reach the UI, and this recorded marker is the mechanism that already
+        // does it for the other two.
+        assertEquals(
+            GiveUpOngoingLine.UNPROTECTED,
+            giveUpOngoingLine(FailoverGiveUpOutcome.UNPROTECTED)
+        )
     }
 
     @Test
-    fun blackholedLine_isAbsentWhenNoGiveUpProducedTheState() {
-        // The service holds this as a nullable field, so null must mean "no BLACKHOLED line is
-        // true" rather than silently selecting one.
-        assertNull(blackholedOngoingLine(null))
+    fun giveUpLine_existsForEveryOutcome_andNoTwoOutcomesShareOne() {
+        // Whole-enum guard: every give-up outcome must reach the UI as its own line, or two
+        // outcomes with different packet truths end up behind one string. Collecting into a set
+        // keeps it non-vacuous — a mapping that collapsed two outcomes would shrink the set.
+        val lines = FailoverGiveUpOutcome.entries.map { outcome ->
+            val line = giveUpOngoingLine(outcome)
+            assertNotNull("$outcome must record a line for home/tile/1101", line)
+            line
+        }
+        assertEquals(
+            "each outcome must own a distinct line: $lines",
+            FailoverGiveUpOutcome.entries.size,
+            lines.toSet().size,
+        )
+    }
+
+    @Test
+    fun giveUpLine_isAbsentWhenNoGiveUpProducedTheState() {
+        // The service holds this as a nullable field, so null must mean "no give-up describes this
+        // session" rather than silently selecting one.
+        assertNull(giveUpOngoingLine(null))
     }
 
     // --- "Disconnect now, stop if the re-arm fails": exactly one automatic recovery attempt ---

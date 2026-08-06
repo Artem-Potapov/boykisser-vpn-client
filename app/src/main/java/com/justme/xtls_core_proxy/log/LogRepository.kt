@@ -76,7 +76,7 @@ object LogRepository {
         _userStopGeneration.update { it + 1 }
     }
 
-    private val _blackholedLine = MutableStateFlow<BlackholedOngoingLine?>(null)
+    private val _giveUpLine = MutableStateFlow<GiveUpOngoingLine?>(null)
 
     /**
      * The recorded packet-truth line for a [VpnConnectionState.BLACKHOLED] session, or null when
@@ -84,15 +84,15 @@ object LogRepository {
      * in-memory copy after successful recovery or full teardown — so a disable that releases
      * `giveUpOutcome` while keeping BLACKHOLED cannot make home/tile re-derive the wrong copy.
      */
-    val blackholedLine: StateFlow<BlackholedOngoingLine?> = _blackholedLine
+    val giveUpLine: StateFlow<GiveUpOngoingLine?> = _giveUpLine
 
-    fun setBlackholedLine(line: BlackholedOngoingLine?) {
-        _blackholedLine.value = line
+    fun setGiveUpLine(line: GiveUpOngoingLine?) {
+        _giveUpLine.value = line
     }
 
     /** Clears the recorded give-up line after a successful recovery or full teardown. */
-    fun clearBlackholedLine() {
-        _blackholedLine.value = null
+    fun clearGiveUpLine() {
+        _giveUpLine.value = null
     }
 
     private val _errorEvents = MutableSharedFlow<Int>(

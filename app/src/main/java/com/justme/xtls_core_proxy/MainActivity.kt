@@ -87,7 +87,7 @@ import com.justme.xtls_core_proxy.config.JsonFormatter
 import com.justme.xtls_core_proxy.config.ProfileShareLink
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.db.Subscription
-import com.justme.xtls_core_proxy.log.BlackholedOngoingLine
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
 import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
@@ -510,7 +510,7 @@ private fun MainScreen(
     val view by viewModel.groupedProfiles.collectAsState()
     val activeId by viewModel.activeProfileId.collectAsState()
     val state by viewModel.connectionState.collectAsState()
-    val blackholedLine by LogRepository.blackholedLine.collectAsState()
+    val giveUpLine by LogRepository.giveUpLine.collectAsState()
     val error by viewModel.error.collectAsState()
     val subscriptions by viewModel.subscriptions.collectAsState()
     val pingStates by viewModel.pingStates.collectAsState()
@@ -625,7 +625,7 @@ private fun MainScreen(
                 Text(
                     text = stringResource(
                         R.string.main_state_label,
-                        vpnConnectionStateLabel(state, blackholedLine)
+                        vpnConnectionStateLabel(state, giveUpLine)
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -1109,9 +1109,9 @@ private fun PingResultLine(state: PingState) {
 @Composable
 private fun vpnConnectionStateLabel(
     state: VpnConnectionState,
-    blackholedLine: BlackholedOngoingLine? = null,
+    giveUpLine: GiveUpOngoingLine? = null,
 ): String {
-    return stringResource(vpnConnectionStateLabelRes(state, blackholedLine))
+    return stringResource(vpnConnectionStateLabelRes(state, giveUpLine))
 }
 
 // BLACKHOLED is grouped with the live states below, not with ERROR: the service is still running
