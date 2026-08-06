@@ -71,10 +71,19 @@ class TunnelHealthMonitor(
  * threads: the poll loop nulls it from its own coroutine when it goes terminal,
  * `stop`/`pausePolling` null it from the service's lifecycle lock, and `resumePolling` may install
  * from the screen-receiver main thread while `stop` runs on `tunnelOpScope`. Retirement goes
- * through `getAndSet(null)`; creation goes through [tryInstallJob] (`compareAndSet` + a post-CAS
- * `isStarted` re-check) so a resume racing a stop cannot park an orphaned loop in the slot after
- * stop cleared it. The old `if (job.get() != null) return; … job.set(launched)` was a non-atomic
- * check-then-act on the creation half.
+ * through `getAndSet(null)`; creation goes through [launchAndInstallPollLoop] → [tryInstallJob]
+ * (`compareAndSet` + a post-CAS `isStarted` re-check) so an install racing a stop cannot park an
+ * orphaned loop in the slot after stop cleared it. The old
+ * `if (job.get() != null) return; … job.set(launched)` was a non-atomic check-then-act on the
+ * creation half.
+ *
+ * **BOTH creation paths go through it.** [start] used to finish with a plain `job.set(launched)`
+ * while only [resumePolling] used the CAS, so the claim above was true of half the class. That is
+ * unreachable today — `XrayVpnService` calls `start`/`stop` under one lock — but the asymmetry had
+ * two orphan shapes if a caller ever stepped outside it: a `stop` landing before the `set` parked a
+ * live loop behind `isStarted = false`, and a `resumePolling` winning the emptied slot had its job
+ * silently **overwritten** (not cancelled) and leaked. The cost of closing it is one CAS on a slot
+ * `start` has just emptied.
  *
  * NOTE this does NOT make the fire path race-free on its own — a cancel arriving between the
  * threshold check and the listener call would still land, whoever won the swap. That is why
@@ -107,7 +116,23 @@ private val job = AtomicReference<Job?>(null)
         consecutiveFailures = 0
         reportedUnhealthy = false
         reportedHealthy = false
+        // isStarted is set FIRST, above, and must stay there: it is the `stillLive` predicate the
+        // install below re-checks, so assigning it after would make every start decline its own job
+        // and leave the monitor silently non-polling.
         job.getAndSet(null)?.cancel()
+        launchAndInstallPollLoop()
+    }
+
+    /**
+     * The one launch site for the poll loop, shared by [start] and [resumePolling].
+     *
+     * Shared rather than duplicated because both halves are load-bearing and were previously stated
+     * twice: the `catch (Throwable)` is what stops an escaping throw reaching a scope with no
+     * `CoroutineExceptionHandler` and killing the process while the VPN is up, and the
+     * [tryInstallJob] install is what stops a loop being orphaned in — or overwritten out of — the
+     * slot. `CancellationException` is rethrown so structured concurrency still works.
+     */
+    private fun launchAndInstallPollLoop() {
         val launched = scope.launch {
             try {
                 runPollLoop()
@@ -121,7 +146,9 @@ private val job = AtomicReference<Job?>(null)
                 LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
             }
         }
-        job.set(launched)
+        if (!tryInstallJob(job, stillLive = { isStarted }, launched)) {
+            launched.cancel()
+        }
     }
 
     fun stop() {
@@ -141,18 +168,7 @@ private val job = AtomicReference<Job?>(null)
 
     fun resumePolling() {
         if (!isStarted) return
-        val launched = scope.launch {
-            try {
-                runPollLoop()
-            } catch (t: CancellationException) {
-                throw t
-            } catch (t: Throwable) {
-                LogRepository.append("TunnelHealthMonitor poll loop aborted: ${t.message}")
-            }
-        }
-        if (!tryInstallJob(job, stillLive = { isStarted }, launched)) {
-            launched.cancel()
-        }
+        launchAndInstallPollLoop()
     }
 
     private suspend fun runPollLoop() {

@@ -219,6 +219,37 @@ class TunnelHealthMonitorTest {
     }
 
     @Test
+    fun aFreshStartRevivesATerminalMonitor() = runTest {
+        // The other half of the terminal contract: pause/resume must NOT revive (above), but a
+        // fresh start() MUST — it is what applyFailoverPreferences runs after a rotation, and a
+        // monitor that silently declines to poll leaves failover dead for the rest of the session
+        // over a dead tunnel, with nothing anywhere to say so.
+        //
+        // It was untested, and the atomic install now makes it load-bearing: start() installs
+        // through tryInstallJob, whose `stillLive` predicate is `isStarted`. The fire path leaves
+        // isStarted = false, so start() re-arming it BEFORE the install is what lets the fresh job
+        // be admitted at all.
+        //
+        // MUTATION-VERIFIED: moving `isStarted = true` below the install in start() makes the
+        // second start() decline its own job and this assertion fails with fired == 1.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val probe = FakeProbe(healthy = false)
+        val fired = AtomicInteger(0)
+        val m = monitor(probe, FakeAvailability(), dispatcher)
+
+        m.start { fired.incrementAndGet() }
+        runCurrent()                           // fail 1
+        advanceTimeBy(15_001L); runCurrent()   // fail 2 -> fires, monitor goes terminal
+        assertEquals(1, fired.get())
+
+        m.start { fired.incrementAndGet() }
+        runCurrent()                           // fail 1 of the new start
+        advanceTimeBy(15_001L); runCurrent()   // fail 2 -> must fire again
+        assertEquals("a fresh start() must revive a terminal monitor", 2, fired.get())
+        m.stop()
+    }
+
+    @Test
     fun theUnhealthyListenerIsInvokedEvenWhenTheLoopWasAlreadyCancelled() = runTest {
         // Regression guard for the swallow hazard. pausePolling() runs on tunnelOpScope, a different
         // thread from this poll loop, and captures `job` before nulling it — so a screen-off landing
