@@ -220,8 +220,8 @@ class SessionLifecycleDecisionTest {
     }
 
     // --- Fail-closed give-up: what does it do to contain traffic, and where does the fd come from?
-    //     (These replace the shouldEstablishBlackholeTunnel tests; containmentForGiveUp subsumed
-    //     that predicate when the rotation bridge gave containment a second source.) ---
+    //     Inputs are the derived TunnelRole: one owner, one role, so "is a tunnel held" and "is it
+    //     still proxying" can no longer be answered by two fields that disagree. ---
 
     @Test
     fun giveUpWithNothingHeld_buildsAFreshBlackhole() {
@@ -230,8 +230,7 @@ class SessionLifecycleDecisionTest {
         assertEquals(
             GiveUpContainment.ESTABLISH_BLACKHOLE,
             containmentForGiveUp(
-                hasTunnel = false,
-                hasRotationBridge = false,
+                tunnelRole = TunnelRole.NONE,
                 tunnelState = SessionTunnelState.CONNECTED,
             )
         )
@@ -243,8 +242,7 @@ class SessionLifecycleDecisionTest {
         assertEquals(
             GiveUpContainment.NONE,
             containmentForGiveUp(
-                hasTunnel = true,
-                hasRotationBridge = false,
+                tunnelRole = TunnelRole.LIVE_PROXY,
                 tunnelState = SessionTunnelState.CONNECTED,
             )
         )
@@ -257,47 +255,103 @@ class SessionLifecycleDecisionTest {
         assertEquals(
             GiveUpContainment.ADOPT_ROTATION_BRIDGE,
             containmentForGiveUp(
-                hasTunnel = false,
-                hasRotationBridge = true,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
                 tunnelState = SessionTunnelState.CONNECTED,
             )
         )
     }
 
     @Test
-    fun aLiveTunnelIsNeverReplacedByTheBridge() {
-        // Adoption overwrites the tunnel field, so it must never fire while a real tunnel is held:
-        // that would drop a working, still-proxying fd on the floor and call the result contained.
+    fun aHeldUnreadBlackholeIsNeverReplacedByTheBridge() {
+        // The adoption arm writes the bridge over the owner. Doing that while a give-up from an
+        // EARLIER episode still holds its containment fd would drop a working, drop-only fd on the
+        // floor and call the result contained. Both unread roles refuse for the same reason, and
+        // the role is what now makes that one fact: there is no "fd present AND a bridge held"
+        // input left to reason about.
         assertEquals(
             GiveUpContainment.NONE,
             containmentForGiveUp(
-                hasTunnel = true,
-                hasRotationBridge = true,
+                tunnelRole = TunnelRole.UNREAD_BLACKHOLE,
                 tunnelState = SessionTunnelState.CONNECTED,
             )
         )
+    }
+
+    @Test
+    fun aHeldTunnelWinsOverTheStateCheck_inEveryState() {
+        // Precedence, whole-enum. The role guard is evaluated BEFORE the CONNECTED guard, exactly as
+        // the hasTunnel-then-state pair it replaces was. Be precise about what that buys: the two
+        // held roles answer NONE in every state either way, so this is a legibility/exhaustiveness
+        // requirement rather than an observable one — the `when` over the enum must stay total, and
+        // a state guard written first would make the held-tunnel arms read as consequences of the
+        // state rather than as the independent fact they are. This is the sweep the old suite lacked.
+        for (state in SessionTunnelState.entries) {
+            for (role in listOf(TunnelRole.LIVE_PROXY, TunnelRole.UNREAD_BLACKHOLE)) {
+                assertEquals(
+                    "a held $role must win outright in $state",
+                    GiveUpContainment.NONE,
+                    containmentForGiveUp(tunnelRole = role, tunnelState = state)
+                )
+            }
+        }
     }
 
     @Test
     fun giveUpWhileAnotherOwnerHoldsTheTunnel_establishesNothing_evenWithABridgeHeld() {
         // PAUSED means "no tunnel must exist" — adopting a bridge into it would break the
         // kill-on-foreground compliance contract just as surely as building a blackhole would.
-        for (state in listOf(
-            SessionTunnelState.STARTING,
-            SessionTunnelState.PAUSED,
-            SessionTunnelState.REVIVING,
-            SessionTunnelState.ROTATING,
-            SessionTunnelState.STOPPED,
-        )) {
-            for (bridge in listOf(false, true)) {
+        // Every role is swept, not just the tunnelled ones: the state guard is what refuses these,
+        // and a role added later must not be able to slip past it.
+        for (state in SessionTunnelState.entries) {
+            if (state == SessionTunnelState.CONNECTED) continue
+            for (role in TunnelRole.entries) {
                 assertEquals(
-                    "another owner drives the tunnel in $state (bridge held: $bridge)",
+                    "another owner drives the tunnel in $state (role: $role)",
                     GiveUpContainment.NONE,
-                    containmentForGiveUp(
-                        hasTunnel = false,
-                        hasRotationBridge = bridge,
-                        tunnelState = state,
-                    )
+                    containmentForGiveUp(tunnelRole = role, tunnelState = state)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun bridgeAdoptionHappens_onlyInConnected() {
+        // The one role whose answer depends on the state at all. Swept whole-enum so a state
+        // added later cannot be mistaken for a second adoption point.
+        for (state in SessionTunnelState.entries) {
+            assertEquals(
+                "a bridge in $state is ${if (state == SessionTunnelState.CONNECTED) "adoptable" else "left to its owner"}",
+                if (state == SessionTunnelState.CONNECTED) {
+                    GiveUpContainment.ADOPT_ROTATION_BRIDGE
+                } else {
+                    GiveUpContainment.NONE
+                },
+                containmentForGiveUp(
+                    tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+                    tunnelState = state,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun containmentTruthTable_isTotal_overEveryRoleAndState() {
+        // Whole-enum, whole-state. This is the anti-drift guard for the precedence rule: the pair
+        // of loops above proves each guard fires, this one pins the complete table so a new role
+        // or a new state cannot be added without an answer being decided for it here.
+        for (role in TunnelRole.entries) {
+            for (state in SessionTunnelState.entries) {
+                val expected = when {
+                    role == TunnelRole.LIVE_PROXY || role == TunnelRole.UNREAD_BLACKHOLE ->
+                        GiveUpContainment.NONE
+                    state != SessionTunnelState.CONNECTED -> GiveUpContainment.NONE
+                    role == TunnelRole.UNREAD_ROTATION_BRIDGE -> GiveUpContainment.ADOPT_ROTATION_BRIDGE
+                    else -> GiveUpContainment.ESTABLISH_BLACKHOLE
+                }
+                assertEquals(
+                    "containment for $role in $state",
+                    expected,
+                    containmentForGiveUp(tunnelRole = role, tunnelState = state)
                 )
             }
         }
@@ -305,23 +359,22 @@ class SessionLifecycleDecisionTest {
 
     @Test
     fun adoptingTheBridgeIsClassifiedAsABlackhole_neverAsALiveTunnel() {
-        // Within-one-give-up hazard: `heldKind` is read BEFORE the containment step, so an adopted
-        // bridge reaches classifyGiveUpOutcome as NONE + blackholeEstablished. Reading the fd after
-        // adoption without a kind would report CONTAINED_BY_LIVE_TUNNEL over an unread fd.
-        val heldKind = TunInterfaceKind.NONE
-        val containment = containmentForGiveUp(
-            hasTunnel = heldKind != TunInterfaceKind.NONE,
-            hasRotationBridge = true,
-            tunnelState = SessionTunnelState.CONNECTED,
+        // Within-one-give-up hazard: the role is read AFTER the containment step, so an adopted
+        // bridge reaches classifyGiveUpOutcome as the owner the adoption installed, not as the
+        // pre-adaction state. Reading the fd before adoption — or as a bare "an fd exists" — would
+        // report CONTAINED_BY_LIVE_TUNNEL over an unread fd.
+        assertEquals(
+            GiveUpContainment.ADOPT_ROTATION_BRIDGE,
+            containmentForGiveUp(
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+                tunnelState = SessionTunnelState.CONNECTED,
+            )
         )
-        val contained = when (containment) {
-            GiveUpContainment.NONE -> false
-            GiveUpContainment.ADOPT_ROTATION_BRIDGE -> true   // adoption cannot fail: same lock
-            GiveUpContainment.ESTABLISH_BLACKHOLE -> true     // assume the establish succeeded
-        }
+        // Adoption cannot fail — it happens under the same lock — so the resulting role is the
+        // blackhole owner, and that is what must be classified.
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(heldKind = heldKind, blackholeEstablished = contained)
+            classifyGiveUpOutcome(resultingRole = TunnelRole.UNREAD_BLACKHOLE)
         )
     }
 
@@ -329,69 +382,112 @@ class SessionLifecycleDecisionTest {
 
     @Test
     fun giveUpOverALiveTunnel_isNotTheSameAsABlackhole() {
-        // The no-candidate and thrash-cap give-ups run BEFORE any teardown, so the fd is the
+        // The no-candidate and thrash-cap give-ups run BEFORE any teardown, so the owner is the
         // current profile's still-proxying tunnel. Telling that user "your traffic is blocked" is
         // simply false.
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.LIVE_PROXY,
-                blackholeEstablished = false,
+            classifyGiveUpOutcome(resultingRole = TunnelRole.LIVE_PROXY)
+        )
+    }
+
+    @Test
+    fun aLiveTunnelIsNeverOverwrittenByTheContainmentStep() {
+        // The "regardless of what the blackhole attempt would have said" half of the old test,
+        // restated against the role: when the session still holds a live tunnel, containment
+        // establishes nothing, so the role classification reads is necessarily the live one. A
+        // containment step that did overwrite it would report a working tunnel as blocked.
+        assertEquals(
+            GiveUpContainment.NONE,
+            containmentForGiveUp(
+                tunnelRole = TunnelRole.LIVE_PROXY,
+                tunnelState = SessionTunnelState.CONNECTED,
             )
         )
         assertEquals(
-            "a live tunnel wins regardless of what the blackhole attempt would have said",
             FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.LIVE_PROXY,
-                blackholeEstablished = true,
-            )
+            classifyGiveUpOutcome(resultingRole = TunnelRole.LIVE_PROXY)
         )
     }
 
     @Test
     fun giveUpWithNoTunnel_andASuccessfulBlackhole_isContained() {
         assertEquals(
-            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.NONE,
-                blackholeEstablished = true,
+            GiveUpContainment.ESTABLISH_BLACKHOLE,
+            containmentForGiveUp(
+                tunnelRole = TunnelRole.NONE,
+                tunnelState = SessionTunnelState.CONNECTED,
             )
+        )
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(resultingRole = TunnelRole.UNREAD_BLACKHOLE)
         )
     }
 
     @Test
     fun giveUpWithNoTunnel_andAFailedBlackhole_isUnprotected() {
         // The one case where the user is genuinely on the clear network. It must never be reported
-        // with the reassuring "traffic is blocked on purpose" copy.
+        // with the reassuring "traffic is blocked on purpose" copy. A failed establish leaves the
+        // session owning nothing, which is the whole reason the outcome is not an input flag: the
+        // classification reads the owner the give-up ended up with.
         assertEquals(
             FailoverGiveUpOutcome.UNPROTECTED,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.NONE,
-                blackholeEstablished = false,
-            )
+            classifyGiveUpOutcome(resultingRole = TunnelRole.NONE)
         )
     }
 
     @Test
     fun giveUpOverAnExistingUnreadContainment_staysBlackhole_neverLiveTunnel() {
-        // Across-give-ups hazard: after a blackhole (or an adopted bridge) lands in tunInterface,
-        // a second give-up in the same session must not read "fd present" as "still proxying".
+        // Across-give-ups hazard: after a blackhole (or an adopted bridge) lands in the owner, a
+        // second give-up in the same session must not read "fd present" as "still proxying".
         // That lie posts vpn_status_no_response over a drop-only fd.
         assertEquals(
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.UNREAD_CONTAINMENT,
-                blackholeEstablished = false,
-            )
+            classifyGiveUpOutcome(resultingRole = TunnelRole.UNREAD_BLACKHOLE)
+        )
+    }
+
+    @Test
+    fun anUnadoptedBridgeIsClassifiedAsABlackhole_asAPacketTruthBackstop() {
+        // Defensive mapping, not the live path: the service adopts the bridge into the blackhole
+        // owner before classifying, so this arm should be unreachable in production. It is pinned
+        // anyway because an unread owned TUN does contain traffic — reporting it as anything other
+        // than contained would tell a user on a working blackhole that their traffic is exposed.
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            classifyGiveUpOutcome(resultingRole = TunnelRole.UNREAD_ROTATION_BRIDGE)
+        )
+    }
+
+    @Test
+    fun everyTunnelRoleIsClassifiedAndTheUnreadOnesShareOneOutcome() {
+        // Whole-enum guard, and the reason the map is a when and not a lookup table of "held" vs
+        // "not held": the two unread roles are physically the same packet truth and MUST land on
+        // one outcome, while the live tunnel must not share it. If a future role were added and
+        // folded into either group by accident, this is where it shows.
+        val byRole = TunnelRole.entries.associateWith { classifyGiveUpOutcome(resultingRole = it) }
+        assertEquals(
+            "the two unread roles are both drop-only containment",
+            FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
+            byRole[TunnelRole.UNREAD_ROTATION_BRIDGE]
         )
         assertEquals(
-            "already-held unread containment wins even if a blackhole attempt flag is true",
             FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-            classifyGiveUpOutcome(
-                heldKind = TunInterfaceKind.UNREAD_CONTAINMENT,
-                blackholeEstablished = true,
-            )
+            byRole[TunnelRole.UNREAD_BLACKHOLE]
+        )
+        assertNotEquals(
+            "an unread fd must never be reported as still proxying",
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+            byRole[TunnelRole.UNREAD_BLACKHOLE]
+        )
+        assertEquals(
+            FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL,
+            byRole[TunnelRole.LIVE_PROXY]
+        )
+        assertEquals(
+            FailoverGiveUpOutcome.UNPROTECTED,
+            byRole[TunnelRole.NONE]
         )
     }
 
@@ -644,7 +740,7 @@ class SessionLifecycleDecisionTest {
             shouldRestoreUnprotectedRearm(
                 failoverEnabled = true,
                 giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
-                hasTunnel = false,
+                tunnelRole = TunnelRole.NONE,
                 rearmJobActive = false,
             )
         )
@@ -653,7 +749,7 @@ class SessionLifecycleDecisionTest {
             shouldRestoreUnprotectedRearm(
                 failoverEnabled = false,
                 giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
-                hasTunnel = false,
+                tunnelRole = TunnelRole.NONE,
                 rearmJobActive = false,
             )
         )
@@ -662,7 +758,7 @@ class SessionLifecycleDecisionTest {
             shouldRestoreUnprotectedRearm(
                 failoverEnabled = true,
                 giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
-                hasTunnel = false,
+                tunnelRole = TunnelRole.NONE,
                 rearmJobActive = true,
             )
         )
@@ -671,7 +767,7 @@ class SessionLifecycleDecisionTest {
             shouldRestoreUnprotectedRearm(
                 failoverEnabled = true,
                 giveUpOutcome = FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE,
-                hasTunnel = true,
+                tunnelRole = TunnelRole.UNREAD_BLACKHOLE,
                 rearmJobActive = false,
             )
         )
@@ -680,7 +776,45 @@ class SessionLifecycleDecisionTest {
             shouldRestoreUnprotectedRearm(
                 failoverEnabled = true,
                 giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
-                hasTunnel = true,
+                tunnelRole = TunnelRole.LIVE_PROXY,
+                rearmJobActive = false,
+            )
+        )
+    }
+
+    @Test
+    fun theRearmRestoreHappens_onlyForTheUnprotectedGiveUpHoldingNothing() {
+        // Whole-enum over the give-up marker and the tunnel role, so the two dimensions this rule
+        // gates on are both swept rather than spot-checked. Only UNPROTECTED + nothing owned may
+        // restore: every other pairing either is not this recovery path, or has containment already.
+        for (outcome in listOf<FailoverGiveUpOutcome?>(null) + FailoverGiveUpOutcome.entries) {
+            for (role in TunnelRole.entries) {
+                val expected = outcome == FailoverGiveUpOutcome.UNPROTECTED && role == TunnelRole.NONE
+                assertEquals(
+                    "rearm restore for outcome=$outcome role=$role",
+                    expected,
+                    shouldRestoreUnprotectedRearm(
+                        failoverEnabled = true,
+                        giveUpOutcome = outcome,
+                        tunnelRole = role,
+                        rearmJobActive = false,
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
+    fun aHeldRotationBridgeIsNotAnUnprotectedRestorePoint() {
+        // The one input the role and the old boolean could read differently. An owned unread bridge
+        // IS containment, exactly as a blackhole is, so the session is not "owning nothing" and the
+        // UNPROTECTED recovery is not owed. Pre-owner this read as a restore because the bridge
+        // lived in a sibling field the boolean never asked about.
+        assertFalse(
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
                 rearmJobActive = false,
             )
         )

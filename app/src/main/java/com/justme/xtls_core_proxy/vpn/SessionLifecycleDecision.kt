@@ -128,22 +128,25 @@ internal fun canReserveRotationFromAuthoritativeState(
  * across the queued retry. If that retry loses the reservation race (most importantly because the
  * user disabled failover), the bridge is the sole containment and must be adopted by give-up.
  * Stale callbacks and every state with another lifecycle owner remain outside this rule.
+ *
+ * [tunnelRole] replaces the pair of presence booleans this used to take. It is not merely a tidier
+ * spelling: the rule is about *what the session owns*, and the two booleans could agree with each
+ * other while disagreeing with the owner (`hasTunnel = false` next to a bridge, or a live tunnel
+ * next to a bridge) — only the role states one fact, and it is the fact the funnel acts on.
  */
 internal fun shouldFunnelRotationReservationRefusal(
     running: Boolean,
     activeSessionEpoch: Long?,
     callbackSessionEpoch: Long,
     tunnelState: SessionTunnelState,
-    hasTunnel: Boolean,
-    hasRotationBridge: Boolean,
+    tunnelRole: TunnelRole,
 ): Boolean = acceptsSessionLifecycleCallback(
     running = running,
     activeSessionEpoch = activeSessionEpoch,
     callbackSessionEpoch = callbackSessionEpoch,
 ) &&
     tunnelState == SessionTunnelState.CONNECTED &&
-    !hasTunnel &&
-    hasRotationBridge
+    tunnelRole == TunnelRole.UNREAD_ROTATION_BRIDGE
 
 /**
  * Whether a kill-switch event landing mid-transition must be DEFERRED (recorded and replayed once
@@ -317,31 +320,41 @@ internal enum class GiveUpContainment {
  * stranding the bridge fd and leaving the process holding two VPN interfaces, with no compile-time
  * or runtime signal. An exhaustive `when` over this enum makes that ordering unrepresentable.
  *
- * [hasTunnel] wins outright: an fd already in `tunInterface` (live proxy OR unread containment) is
- * already containing traffic and both other arms would overwrite the field holding it. Whether that
- * fd is still proxying is [classifyGiveUpOutcome]'s job via [TunInterfaceKind], not this one's.
+ * [tunnelRole] wins outright: an fd already owned by the session (a live proxy OR an unread
+ * blackhole) is already containing traffic and both other arms would overwrite the owner holding
+ * it. Whether that fd is still proxying is [classifyGiveUpOutcome]'s job, not this one's.
  *
  * `CONNECTED` only, for the reason the blackhole predicate always had: `PAUSED` is the kill-switch's
  * deliberate no-tunnel state and its compliance contract is "no tunnel must exist", so ADOPTING one
  * there breaks it exactly as surely as building one would. Every other state has a different owner
- * mid-transition who will establish (or tear down) itself.
+ * mid-transition who will establish (or tear down) itself. The state guard is therefore SECOND: the
+ * role is checked first, exactly as the `hasTunnel`-then-state pair it replaces was.
  *
  * Note what this does NOT decide: whether the containment succeeded, or which give-up outcome to
- * report. Both acting arms report success back to [classifyGiveUpOutcome] as `blackholeEstablished`,
- * and an adopted bridge is honestly a blackhole — same builder, same captured apps, no protector, no
- * Xray. That distinction only survives because the caller captures [TunInterfaceKind] BEFORE the
- * adoption (and keeps the kind honest as UNREAD_CONTAINMENT after writing the fd into
- * `tunInterface`), not after a bare `!= null` read.
+ * report. Both acting arms end with the session owning an unread fd, so the caller classifies the
+ * RESULTING role — the owner it holds after adoption or establish — and that distinction only
+ * survives because the owner is captured after the write, not by a bare "fd present" read.
  */
 internal fun containmentForGiveUp(
-    hasTunnel: Boolean,
-    hasRotationBridge: Boolean,
+    tunnelRole: TunnelRole,
     tunnelState: SessionTunnelState,
-): GiveUpContainment = when {
-    hasTunnel -> GiveUpContainment.NONE
-    tunnelState != SessionTunnelState.CONNECTED -> GiveUpContainment.NONE
-    hasRotationBridge -> GiveUpContainment.ADOPT_ROTATION_BRIDGE
-    else -> GiveUpContainment.ESTABLISH_BLACKHOLE
+): GiveUpContainment = when (tunnelRole) {
+    TunnelRole.LIVE_PROXY,
+    TunnelRole.UNREAD_BLACKHOLE -> GiveUpContainment.NONE
+
+    TunnelRole.UNREAD_ROTATION_BRIDGE ->
+        if (tunnelState == SessionTunnelState.CONNECTED) {
+            GiveUpContainment.ADOPT_ROTATION_BRIDGE
+        } else {
+            GiveUpContainment.NONE
+        }
+
+    TunnelRole.NONE ->
+        if (tunnelState == SessionTunnelState.CONNECTED) {
+            GiveUpContainment.ESTABLISH_BLACKHOLE
+        } else {
+            GiveUpContainment.NONE
+        }
 }
 
 /**
@@ -354,24 +367,29 @@ internal fun containmentForGiveUp(
  * the give-up blackhole re-used as a stop-gap: same builder, same captured apps, no protector and no
  * Xray, so apps briefly lose connectivity instead of briefly leaking. That is the intended trade.
  *
- * [hasRotationBridge] is what makes this idempotent, and it is load-bearing rather than defensive:
- * one rotation episode walks N dead candidates through the same reserved transition, re-entering the
- * teardown path each time. A second establish would strand the first fd — a leaked VPN interface,
- * held until the process dies.
+ * [TunnelRole.UNREAD_ROTATION_BRIDGE] is what makes this idempotent, and it is load-bearing rather
+ * than defensive: one rotation episode walks N dead candidates through the same reserved transition,
+ * re-entering the teardown path each time. A second establish would strand the first fd — a leaked
+ * VPN interface, held until the process dies.
  *
- * [hasTunnel] must be false for the same reason [containmentForGiveUp] refuses to act on a live
- * tunnel: `establish()` replaces the process's active interface, so opening a bridge over a working
- * tunnel would silently turn it into a blackhole.
+ * [TunnelRole.LIVE_PROXY] must be false for the same reason [containmentForGiveUp] refuses to act
+ * on a live tunnel: `establish()` replaces the process's active interface, so opening a bridge over
+ * a working tunnel would silently turn it into a blackhole.
+ *
+ * The two refusals are different facts — a held bridge is the idempotency guard above, a held
+ * proxy is the replacement guard here — and the role collapses them into one equality. That is a
+ * reduction in *explanation*, not in coverage: with one owner at most one handle is held, so
+ * "neither a tunnel nor a bridge" was already exactly [TunnelRole.NONE]. What the role removes is
+ * the possibility of the two fields describing one moment inconsistently; the two booleans only
+ * agreed with each other for as long as both writes stayed in lock-step with the fd they described.
  *
  * `ROTATING` only. An initial connect has no prior tunnel to bridge from, and a `reviveTunnel`
  * starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
  */
 internal fun shouldEstablishRotationBridge(
-    hasTunnel: Boolean,
-    hasRotationBridge: Boolean,
+    tunnelRole: TunnelRole,
     tunnelState: SessionTunnelState,
-): Boolean = !hasTunnel &&
-    !hasRotationBridge &&
+): Boolean = tunnelRole == TunnelRole.NONE &&
     tunnelState == SessionTunnelState.ROTATING
 
 /**
@@ -381,13 +399,18 @@ internal fun shouldEstablishRotationBridge(
  * the clear-network window for the whole off-lock rebuild. Aborting funnels into give-up, which
  * tries blackhole containment (or reports UNPROTECTED honestly if that also fails).
  *
- * [bridgeRequired] is the value of [shouldEstablishRotationBridge] just checked; [bridgeHeld] is
- * whether [establishRotationBridge] actually left an fd in `rotationBridgeInterface`.
+ * [bridgeRequired] is the value of [shouldEstablishRotationBridge] just checked; [resultingRole] is
+ * the tunnel role the session actually holds after the establish attempt. Only
+ * [TunnelRole.UNREAD_ROTATION_BRIDGE] counts as the bridge being held. The old `bridgeHeld` Boolean
+ * read the same fact at both call sites, because the caller tears the tunnel down first, so nothing
+ * else can be owned at this point; naming the role instead makes that precondition explicit rather
+ * than incidental, and keeps a live proxy or an unread blackhole from ever being counted as the
+ * cover this rule exists to require.
  */
 internal fun shouldAbortRotationForMissingBridge(
     bridgeRequired: Boolean,
-    bridgeHeld: Boolean,
-): Boolean = bridgeRequired && !bridgeHeld
+    resultingRole: TunnelRole,
+): Boolean = bridgeRequired && resultingRole != TunnelRole.UNREAD_ROTATION_BRIDGE
 
 /**
  * What a failover give-up actually left behind. Three physically different situations that must
@@ -409,9 +432,13 @@ internal enum class FailoverGiveUpOutcome {
 }
 
 /**
- * What [com.justme.xtls_core_proxy.vpn.XrayVpnService]'s `tunInterface` currently holds — not merely
- * whether an fd exists. A blackhole give-up (or an adopted rotation bridge) writes an unread fd into
- * that field; treating "fd present" as "still proxying" is the across-give-ups misclassification.
+ * **SUPERSEDED by [TunnelRole] — removed with the service's owner migration.**
+ *
+ * What `tunInterface` currently holds, tracked beside the fd rather than derived from it. It is no
+ * longer an input to any decision here: [classifyGiveUpOutcome] reads the derived [TunnelRole]
+ * instead. Kept only until the service's owner migration lands, because `XrayVpnService` still
+ * stores this tag next to the fd it does not yet own through a sealed type. Do not add a decision
+ * input of this type, and do not reintroduce it once removed.
  */
 internal enum class TunInterfaceKind {
     /** No fd in `tunInterface`. */
@@ -425,27 +452,33 @@ internal enum class TunInterfaceKind {
 }
 
 /**
- * Classifies a give-up from the kind of TUN held *before* the containment step, and whether a
- * blackhole (or bridge adoption) then succeeded.
+ * Classifies a give-up from the tunnel role the session holds **after** the containment step.
  *
- * [TunInterfaceKind.LIVE_PROXY] and [TunInterfaceKind.UNREAD_CONTAINMENT] both win outright — an fd
- * is already containing traffic, so [blackholeEstablished] carries no information in those cases.
- * They must not share one outcome: unread containment is drop-only, never "still proxying".
+ * [resultingRole] is read after [containmentForGiveUp]'s arm has run and its fd written into the
+ * authoritative owner, which is what makes this a packet-truth read rather than an input echo:
+ * whether the blackhole was established is no longer a separate flag to be threaded through, it is
+ * simply the owner the session ends the give-up holding.
  *
- * Within one give-up, [heldKind] is captured before adoption/establish writes the unread fd into
- * `tunInterface`. Across give-ups, the service must keep [TunInterfaceKind] honest after that write
- * — a boolean `tunInterface != null` is not enough.
+ * [TunnelRole.LIVE_PROXY] wins outright — an established tunnel is still proxying, so the give-up
+ * blocked nothing and there was nowhere to rotate to. Both unread roles are drop-only containment
+ * and must never be reported as [FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL]; that
+ * misclassification posts "your server stopped responding" over a tunnel that is deliberately
+ * blackholing, or "your traffic is blocked" over one that is working.
+ *
+ * [TunnelRole.UNREAD_ROTATION_BRIDGE] is mapped to [FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE] as
+ * a defensive packet-truth mapping: an unread owned TUN does contain traffic, whichever unread role
+ * holds it. The service is expected to have **adopted** the bridge into the blackhole owner before
+ * classifying, so this arm is the backstop, not the live path. Within one give-up the role is read
+ * after adoption; across give-ups the owner must still be honest, so a boolean "an fd exists" read
+ * may not stand in for it.
  */
 internal fun classifyGiveUpOutcome(
-    heldKind: TunInterfaceKind,
-    blackholeEstablished: Boolean,
-): FailoverGiveUpOutcome = when (heldKind) {
-    TunInterfaceKind.LIVE_PROXY -> FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL
-    TunInterfaceKind.UNREAD_CONTAINMENT -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
-    TunInterfaceKind.NONE -> when {
-        blackholeEstablished -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
-        else -> FailoverGiveUpOutcome.UNPROTECTED
-    }
+    resultingRole: TunnelRole,
+): FailoverGiveUpOutcome = when (resultingRole) {
+    TunnelRole.LIVE_PROXY -> FailoverGiveUpOutcome.CONTAINED_BY_LIVE_TUNNEL
+    TunnelRole.UNREAD_ROTATION_BRIDGE,
+    TunnelRole.UNREAD_BLACKHOLE -> FailoverGiveUpOutcome.CONTAINED_BY_BLACKHOLE
+    TunnelRole.NONE -> FailoverGiveUpOutcome.UNPROTECTED
 }
 
 /**
@@ -591,15 +624,36 @@ internal fun shouldFireFailoverRetry(
  * [shouldFireFailoverRetry]). That reasoning does **not** cover re-enable: without a restore, the
  * health monitor may start and probe the clear network forever while no automatic recovery or stop
  * ever runs.
+ *
+ * [tunnelRole] replaces the `hasTunnel` boolean and reads strictly more ownership than it did: it
+ * answers "does the session own no TUN **at all**", so a held rotation bridge also refuses the
+ * restore, where the boolean — which only ever asked about the `tunInterface` field — read the
+ * bridge as "no tunnel" and admitted it.
+ *
+ * This is the ONE input on which the migration is not a pure restatement, so the reachable case is
+ * named here. The two can differ only for `UNPROTECTED` with a bridge held, and that bridge is
+ * necessarily an in-flight rotation: a give-up classifies UNPROTECTED only after
+ * [containmentForGiveUp] returned ESTABLISH_BLACKHOLE (a held bridge would have been ADOPTed into
+ * containment, not left held), and a give-up stops the monitor, so a later rotation can only be the
+ * re-arm timer's own ATTEMPT, which holds the bridge across its off-lock rebuild while
+ * `giveUpOutcome` is still UNPROTECTED. Re-enabling failover inside that window is the case, and the
+ * role refuses the restore there while the boolean granted it.
+ *
+ * Which answer is right is a policy question this rule now answers in one place instead of leaving
+ * to a field-boundary accident, and the answer it gives is the conservative one: the session already
+ * has a rotation in flight, so the recovery it is owed is under way and a second re-arm would be a
+ * second attempt. That reasoning is recorded rather than left implicit because a reviewer comparing
+ * the two implementations will find exactly this difference and it is the one place in this
+ * migration where the two are not interchangeable.
  */
 internal fun shouldRestoreUnprotectedRearm(
     failoverEnabled: Boolean,
     giveUpOutcome: FailoverGiveUpOutcome?,
-    hasTunnel: Boolean,
+    tunnelRole: TunnelRole,
     rearmJobActive: Boolean,
 ): Boolean = failoverEnabled &&
     giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED &&
-    !hasTunnel &&
+    tunnelRole == TunnelRole.NONE &&
     !rearmJobActive
 
 /**
@@ -627,9 +681,10 @@ internal fun shouldRestoreUnprotectedRearm(
  *   outcome turns it into a real `instance.Close()` plus an fd close on the main thread. **That is
  *   RISK-1**, documented in `AGENTS.md` and in `docs/features/auto-failover.md`. It is also why the
  *   sibling rule holds: never add anything that awaits to `stopVpn`.
- * - **`CONTAINED_BY_BLACKHOLE` holds no running core** — it is classified with
- *   [TunInterfaceKind.NONE] (or already-[TunInterfaceKind.UNREAD_CONTAINMENT] on a later give-up),
- *   i.e. after `tearDownTunnelLocked()` has already called `stopXray()`, and the blackhole builder
+ * - **`CONTAINED_BY_BLACKHOLE` holds no running core** — it is classified from
+ *   [TunnelRole.UNREAD_BLACKHOLE] (reached from [TunnelRole.NONE] when the containment step
+ *   established one, or from an already-unread owner on a later give-up), i.e. after
+ *   `tearDownTunnelLocked()` has already called `stopXray()`, and the blackhole builder
  *   starts none. RISK-1 therefore does not apply to it. It is excluded for the *other* reason: it
  *   **still holds a TUN, so there is nothing for a restart to rescue** — plus the general one above
  *   that keeps "start while running" idempotent.

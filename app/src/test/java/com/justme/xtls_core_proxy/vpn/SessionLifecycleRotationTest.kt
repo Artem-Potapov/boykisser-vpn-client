@@ -83,18 +83,61 @@ class SessionLifecycleRotationTest {
                 activeSessionEpoch = 5L,
                 callbackSessionEpoch = 5L,
                 tunnelState = SessionTunnelState.CONNECTED,
-                hasTunnel = false,
-                hasRotationBridge = true,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
             )
         )
         assertEquals(
             GiveUpContainment.ADOPT_ROTATION_BRIDGE,
             containmentForGiveUp(
-                hasTunnel = false,
-                hasRotationBridge = true,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
                 tunnelState = SessionTunnelState.CONNECTED,
             )
         )
+    }
+
+    @Test
+    fun onlyTheCurrentSessionsRefusal_whileHoldingTheBridge_funnelsToGiveUp() {
+        // The two halves the single all-true assertion above could not falsify. A stale epoch or a
+        // stopped service is not this session's bridge, and funnelling it into give-up would strand
+        // a containment fd behind another session's cleanup.
+        for ((label, running, activeSessionEpoch) in listOf(
+            Triple("a stale epoch", true, 6L),
+            Triple("a stopped service", false, 5L),
+        )) {
+            assertFalse(
+                "$label must not funnel this session's bridge into give-up",
+                shouldFunnelRotationReservationRefusal(
+                    running = running,
+                    activeSessionEpoch = activeSessionEpoch,
+                    callbackSessionEpoch = 5L,
+                    tunnelState = SessionTunnelState.CONNECTED,
+                    tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun onlyAnUnreadBridgeInConnected_funnelsToGiveUp() {
+        // Whole-enum over both gated inputs. The funnel exists for one shape of ownership — the
+        // bridge is the sole containment — and the episode is only admitting again in CONNECTED.
+        // Every other pairing releases the bridge on the reservation-refusal path instead.
+        for (state in SessionTunnelState.entries) {
+            for (role in TunnelRole.entries) {
+                assertEquals(
+                    "funnel for role=$role state=$state",
+                    state == SessionTunnelState.CONNECTED &&
+                        role == TunnelRole.UNREAD_ROTATION_BRIDGE,
+                    shouldFunnelRotationReservationRefusal(
+                        running = true,
+                        activeSessionEpoch = 5L,
+                        callbackSessionEpoch = 5L,
+                        tunnelState = state,
+                        tunnelRole = role,
+                    )
+                )
+            }
+        }
     }
 
     @Test
@@ -388,8 +431,7 @@ class SessionLifecycleRotationTest {
         // establish(). Every tunneled app emits cleartext for that whole span.
         assertTrue(
             shouldEstablishRotationBridge(
-                hasTunnel = false,
-                hasRotationBridge = false,
+                tunnelRole = TunnelRole.NONE,
                 tunnelState = SessionTunnelState.ROTATING,
             )
         )
@@ -402,24 +444,28 @@ class SessionLifecycleRotationTest {
         // leak a VPN interface for the rest of the process's life.
         assertFalse(
             shouldEstablishRotationBridge(
-                hasTunnel = false,
-                hasRotationBridge = true,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
                 tunnelState = SessionTunnelState.ROTATING,
             )
         )
     }
 
     @Test
-    fun rotationBridge_isNeverEstablishedWhileALiveTunnelIsHeld() {
+    fun rotationBridge_isNeverEstablishedWhileAnyTunnelIsHeld() {
         // establish() while a real interface is up would replace the interface Xray is dialing
-        // through with an unread one — turning a healthy tunnel into a blackhole.
-        assertFalse(
-            shouldEstablishRotationBridge(
-                hasTunnel = true,
-                hasRotationBridge = false,
-                tunnelState = SessionTunnelState.ROTATING,
+        // through with an unread one — turning a healthy tunnel into a blackhole. Every non-NONE
+        // role refuses, which is the whole reason the input is a role and not a pair of booleans:
+        // "a tunnel AND a bridge" is no longer a state that can be expressed.
+        for (role in TunnelRole.entries) {
+            if (role == TunnelRole.NONE) continue
+            assertFalse(
+                "$role is a held interface; a rotation must not open a bridge over it",
+                shouldEstablishRotationBridge(
+                    tunnelRole = role,
+                    tunnelState = SessionTunnelState.ROTATING,
+                )
             )
-        )
+        }
     }
 
     @Test
@@ -427,21 +473,31 @@ class SessionLifecycleRotationTest {
         // Scope is rotation ONLY. An initial connect has no prior tunnel to bridge from, and
         // PAUSED is the kill-switch's deliberate no-tunnel state, whose compliance contract is
         // literally "no tunnel must exist".
-        for (state in listOf(
-            SessionTunnelState.STARTING,
-            SessionTunnelState.CONNECTED,
-            SessionTunnelState.PAUSED,
-            SessionTunnelState.REVIVING,
-            SessionTunnelState.STOPPED,
-        )) {
+        for (state in SessionTunnelState.entries) {
+            if (state == SessionTunnelState.ROTATING) continue
             assertFalse(
                 "$state has an owner other than a rotation; it must not open a bridge",
                 shouldEstablishRotationBridge(
-                    hasTunnel = false,
-                    hasRotationBridge = false,
+                    tunnelRole = TunnelRole.NONE,
                     tunnelState = state,
                 )
             )
+        }
+    }
+
+    @Test
+    fun theBridgeIsOpenedForExactlyOneRoleStatePair() {
+        // Whole-enum over both inputs — the anti-drift guard. Every other pairing must be false,
+        // so a role or a state added later cannot silently become a second bridge-creation point:
+        // a second arm here strands an fd and leaks a VPN interface for the process's lifetime.
+        for (role in TunnelRole.entries) {
+            for (state in SessionTunnelState.entries) {
+                assertEquals(
+                    "bridge establishment for role=$role state=$state",
+                    role == TunnelRole.NONE && state == SessionTunnelState.ROTATING,
+                    shouldEstablishRotationBridge(tunnelRole = role, tunnelState = state)
+                )
+            }
         }
     }
 
@@ -451,15 +507,59 @@ class SessionLifecycleRotationTest {
         // the off-lock rebuild reopens the clear-network window the bridge exists to close.
         // Aborting into give-up (which tries blackhole containment) is the fail-closed answer.
         assertTrue(
-            shouldAbortRotationForMissingBridge(bridgeRequired = true, bridgeHeld = false)
+            shouldAbortRotationForMissingBridge(
+                bridgeRequired = true,
+                resultingRole = TunnelRole.NONE,
+            )
         )
         assertFalse(
             "bridge held — continue the rebuild under cover",
-            shouldAbortRotationForMissingBridge(bridgeRequired = true, bridgeHeld = true)
+            shouldAbortRotationForMissingBridge(
+                bridgeRequired = true,
+                resultingRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+            )
         )
         assertFalse(
             "bridge was not required (already held / not ROTATING) — no abort from this rule",
-            shouldAbortRotationForMissingBridge(bridgeRequired = false, bridgeHeld = false)
+            shouldAbortRotationForMissingBridge(
+                bridgeRequired = false,
+                resultingRole = TunnelRole.NONE,
+            )
         )
+    }
+
+    @Test
+    fun onlyAnEstablishedRotationBridgeCountsAsHeld() {
+        // Whole-enum over the resulting role. The role this rotation asked for is the only one
+        // that closes the gap; anything else — nothing established, a live proxy, an unread
+        // blackhole — leaves the off-lock rebuild uncovered and must abort. A boolean "an fd
+        // exists" could not tell those apart, and a live or blackhole fd here would be
+        // double-counted as cover the rotation actually has.
+        for (role in TunnelRole.entries) {
+            assertEquals(
+                "abort for required bridge resulting in $role",
+                role != TunnelRole.UNREAD_ROTATION_BRIDGE,
+                shouldAbortRotationForMissingBridge(
+                    bridgeRequired = true,
+                    resultingRole = role,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun anUnrequiredBridgeNeverAborts_regardlessOfWhatTheSessionEndsUpHolding() {
+        // The vacuous half, swept whole-enum. When no bridge was required there is no uncovered
+        // window for this rule to protect, so the resulting role must not be able to force an
+        // abort — the rotation continues exactly as the reservation said it would.
+        for (role in TunnelRole.entries) {
+            assertFalse(
+                "no bridge was required; $role must not abort the rebuild",
+                shouldAbortRotationForMissingBridge(
+                    bridgeRequired = false,
+                    resultingRole = role,
+                )
+            )
+        }
     }
 }
