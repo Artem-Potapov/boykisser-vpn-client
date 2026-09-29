@@ -1133,6 +1133,9 @@ class XrayVpnService : VpnService() {
                         if (unprotectedRecoverySinceMs != null &&
                             isCurrentSessionLocked(sessionEpoch)
                         ) {
+                            // A recovery timer handoff is no longer pending once this queued
+                            // operation reaches its reservation boundary. If reservation refuses,
+                            // the refusal arm below either re-arms it or enters give-up.
                             unprotectedRecoveryRotationQueued = false
                         }
                         // A recovery that never happened must not spend the single retry, and it
@@ -1157,7 +1160,10 @@ class XrayVpnService : VpnService() {
                         return@launch
                     }
                     // ---- THE ATTEMPT ----
-                    unprotectedRecoveryRotationQueued = false
+                    // The recovery handoff marker remains asserted throughout the admitted
+                    // operation. It is cleared only by refusal, success, give-up, session stop, or
+                    // a replacement session; settings reconciliation must see the owed operation
+                    // while candidate preparation and retries are still in flight.
                     // Written here, and deliberately BEFORE the thrash-cap admission below: the
                     // reservation is what makes this a real attempt, and a denied admission still
                     // funnels into giveUpRotationLocked, which must see the budget as spent or a
@@ -1375,6 +1381,9 @@ class XrayVpnService : VpnService() {
                             // the SAFE direction — against letting the throw escape and tear down a
                             // healthy session's monitor while writing BLACKHOLED over it.
                             clearGiveUpLineLocked()
+                            if (unprotectedRecoverySinceMs != null) {
+                                unprotectedRecoveryRotationQueued = false
+                            }
                             afterRotationCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
@@ -1522,7 +1531,10 @@ class XrayVpnService : VpnService() {
                             }
                         }
                         LogRepository.append("Failover: ${next.name} failed to come up: ${error.message}")
-                        rotateTunnel(session.epoch)   // try the next candidate, still under the cap
+                        rotateTunnel(
+                            session.epoch,
+                            unprotectedRecoverySinceMs = unprotectedRecoverySinceMs,
+                        )   // try the next candidate, still under the cap
                     }
             } catch (ce: CancellationException) {
                 // Structured-concurrency cancellation (tunnelOpScope.cancel() in onDestroy) must
@@ -1579,6 +1591,9 @@ class XrayVpnService : VpnService() {
         }
         episodeFailedIds = emptySet()
         stopFailoverMonitorLocked()
+        if (sessionEpoch == activeSessionEpoch && unprotectedRecoveryRotationQueued) {
+            unprotectedRecoveryRotationQueued = false
+        }
         reconcileScreenReceiverLocked(sessionEpoch)
 
         if (sessionTunnelState != SessionTunnelState.CONNECTED) {
@@ -1845,6 +1860,16 @@ class XrayVpnService : VpnService() {
                     now = System.currentTimeMillis(),
                     rotationWindowMs = authoritativeFailoverSettings().rotationWindowMs,
                 )
+                if (shouldPublishUnprotectedRecoveryHandoff(
+                        action = decided,
+                        isCurrentSession = true,
+                    )
+                ) {
+                    // Publish the handoff in the same lock acquisition as ATTEMPT. Re-enable
+                    // reconciliation cannot observe an ATTEMPT without its marker and schedule a
+                    // duplicate recovery between this decision and dispatch.
+                    unprotectedRecoveryRotationQueued = true
+                }
                 if (decided == UnprotectedRetryAction.DEFER) {
                     LogRepository.append(
                         "Failover: recovery rotation cannot be attempted yet (tunnel is " +
@@ -1862,32 +1887,32 @@ class XrayVpnService : VpnService() {
                 decided
             }
             when (action) {
-                // Mark handoff before leaving the timer coroutine. Settings reconciliation can run
-                // immediately after this point while rotateTunnel is still queued on the serial lane.
-                UnprotectedRetryAction.ATTEMPT -> {
-                    synchronized(lock) {
-                        if (isCurrentSessionLocked(sessionEpoch)) {
-                            unprotectedRecoveryRotationQueued = true
-                        }
-                    }
+                UnprotectedRetryAction.ATTEMPT ->
                     rotateTunnel(sessionEpoch, unprotectedRecoverySinceMs = unprotectedSinceMs)
-                }
                 UnprotectedRetryAction.DEFER -> Unit
                 UnprotectedRetryAction.STOP_SERVICE -> {
                     // The episode has outlasted its deferral deadline without ever becoming
-                    // rotatable. A foreground service that owns no TUN, protects nothing and
-                    // cannot even try must land in an honest OFF state rather than persist. Both
-                    // surfaces, as in giveUpRotationLocked's stop branch: stopVpn clears the
-                    // foreground notification, so the 1102 error notification is what reaches a
-                    // user who is not looking at the app.
-                    LogRepository.append(
-                        "Failover: no tunnel, and no chance to retry for " +
-                            "$UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS rotation windows; " +
-                            "stopping the VPN"
-                    )
-                    LogRepository.emitError(R.string.vpn_failover_stopped_error)
-                    postErrorNotification(R.string.vpn_failover_stopped_error)
-                    stopVpn(expectedSessionEpoch = sessionEpoch)
+                    // rotatable. Re-check the session while holding the lifecycle lock immediately
+                    // before every effect. A replacement session may start after the timer's first
+                    // check and must not inherit an old timer's warning, notification or teardown.
+                    synchronized(lock) {
+                        if (!shouldExecuteUnprotectedStop(
+                                action = UnprotectedRetryAction.STOP_SERVICE,
+                                isCurrentSession = isCurrentSessionLocked(sessionEpoch),
+                            )
+                        ) {
+                            return@launch
+                        }
+                        unprotectedRecoveryRotationQueued = false
+                        LogRepository.append(
+                            "Failover: no tunnel, and no chance to retry for " +
+                                "$UNPROTECTED_UNATTEMPTED_RETRY_WINDOWS rotation windows; " +
+                                "stopping the VPN"
+                        )
+                        LogRepository.emitError(R.string.vpn_failover_stopped_error)
+                        postErrorNotification(R.string.vpn_failover_stopped_error)
+                        stopVpn(expectedSessionEpoch = sessionEpoch)
+                    }
                 }
             }
         }
@@ -1971,6 +1996,7 @@ class XrayVpnService : VpnService() {
         label: String,
         allowLiveProxyOwner: Boolean = false,
     ): ParcelFileDescriptor? {
+        var establishedPfd: ParcelFileDescriptor? = null
         return try {
             // INSIDE the try on purpose. Both callers are reachable from rotateTunnel's
             // `catch (Throwable)` — the give-up directly, the bridge via a rotation that re-enters
@@ -2014,6 +2040,7 @@ class XrayVpnService : VpnService() {
             }
 
             val pfd = builder.establish()
+            establishedPfd = pfd
             if (pfd == null) {
                 LogRepository.append("Failover: $label establish() returned null")
             } else {
@@ -2022,7 +2049,15 @@ class XrayVpnService : VpnService() {
                 }
             }
             pfd
+        } catch (ce: CancellationException) {
+            // No owner has been installed yet. If cancellation arrives after establish(), close
+            // that unowned descriptor before propagating structured cancellation.
+            runCatching { establishedPfd?.close() }
+            throw ce
         } catch (error: Throwable) {
+            // Ordinary post-establishment failures have the same ownership rule: this helper has
+            // not installed the descriptor, so it must not return with an unowned live TUN.
+            runCatching { establishedPfd?.close() }
             LogRepository.append("Failover: $label TUN could not be established: ${error.message}")
             null
         }
@@ -2032,8 +2067,10 @@ class XrayVpnService : VpnService() {
      * Give-up containment: takes ownership of the unread TUN as blackhole. Returns whether traffic
      * is now actually contained.
      *
-     * Caller must hold `lock`, and must only call this while [tunnelOwner] is [TunnelInterfaceOwner.None]
-     * (see [containmentForGiveUp], which is the only thing that authorises it).
+     * Caller must hold `lock`. Give-up blackhole establishment is authorised only while
+     * [tunnelOwner] is [TunnelInterfaceOwner.None]; the initial rotation bridge path may also call
+     * the shared helper with [allowLiveProxyOwner] while [tunnelOwner] is [TunnelInterfaceOwner.LiveProxy].
+     * See [containmentForGiveUp] for the give-up-side authorization.
      */
     private fun establishBlackholeTunnelLocked(): Boolean {
         val pfd = establishUnreadTunnelLocked("blackhole") ?: return false

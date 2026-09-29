@@ -1,5 +1,7 @@
 package com.justme.xtls_core_proxy.vpn
 
+import kotlinx.coroutines.CancellationException
+
 /**
  * Every mutation of the session's [TunnelInterfaceOwner], expressed as a pure function of the owner
  * the caller currently holds. The service performs the I/O — building a TUN, calling `establish()`,
@@ -135,6 +137,8 @@ internal object TunnelOwnerTransitions {
     fun runBestEffortDiagnostic(diagnostic: () -> Unit) {
         try {
             diagnostic()
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Throwable) {
             // Diagnostics are not lifecycle operations.
         }

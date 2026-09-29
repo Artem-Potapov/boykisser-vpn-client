@@ -713,6 +713,53 @@ class SessionLifecycleDecisionTest {
         )
     }
 
+    @Test
+    fun retryTimer_handoffIsPublishedOnlyForCurrentAttempt() {
+        assertTrue(
+            shouldPublishUnprotectedRecoveryHandoff(
+                action = UnprotectedRetryAction.ATTEMPT,
+                isCurrentSession = true,
+            )
+        )
+        assertFalse(
+            "a stale timer must not publish a recovery handoff marker",
+            shouldPublishUnprotectedRecoveryHandoff(
+                action = UnprotectedRetryAction.ATTEMPT,
+                isCurrentSession = false,
+            )
+        )
+        assertFalse(
+            "deferral and stop actions do not queue a rotation",
+            shouldPublishUnprotectedRecoveryHandoff(
+                action = UnprotectedRetryAction.DEFER,
+                isCurrentSession = true,
+            )
+        )
+    }
+
+    @Test
+    fun retryTimer_stopEffectsRequireCurrentSessionAtExecution() {
+        assertTrue(
+            shouldExecuteUnprotectedStop(
+                action = UnprotectedRetryAction.STOP_SERVICE,
+                isCurrentSession = true,
+            )
+        )
+        assertFalse(
+            "a stale STOP_SERVICE timer must not emit effects into a replacement session",
+            shouldExecuteUnprotectedStop(
+                action = UnprotectedRetryAction.STOP_SERVICE,
+                isCurrentSession = false,
+            )
+        )
+        assertFalse(
+            shouldExecuteUnprotectedStop(
+                action = UnprotectedRetryAction.ATTEMPT,
+                isCurrentSession = true,
+            )
+        )
+    }
+
     // --- A scheduled retry must not outlive the setting that authorised it ---
 
     @Test

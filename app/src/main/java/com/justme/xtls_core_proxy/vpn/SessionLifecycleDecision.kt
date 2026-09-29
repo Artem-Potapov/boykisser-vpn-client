@@ -606,8 +606,18 @@ internal fun unprotectedRetryAction(
     else -> UnprotectedRetryAction.STOP_SERVICE
 }
 
+internal fun shouldPublishUnprotectedRecoveryHandoff(
+    action: UnprotectedRetryAction,
+    isCurrentSession: Boolean,
+): Boolean = action == UnprotectedRetryAction.ATTEMPT && isCurrentSession
+
+internal fun shouldExecuteUnprotectedStop(
+    action: UnprotectedRetryAction,
+    isCurrentSession: Boolean,
+): Boolean = action == UnprotectedRetryAction.STOP_SERVICE && isCurrentSession
+
 /**
- * Whether a give-up's re-arm timer may still act when it finally fires.
+ * Whether a scheduled retry may still act when it finally fires.
  *
  * The timer is scheduled under one set of preferences and fires up to an hour later under another,
  * so it must re-check [failoverEnabled] at the firing point rather than trusting the settings that

@@ -458,6 +458,19 @@ class TunnelOwnerTransitionsTest {
         assertTrue(installed)
     }
 
+    @Test
+    fun `diagnostic cancellation propagates instead of being swallowed`() {
+        val cancellation = kotlinx.coroutines.CancellationException("scope cancelled")
+
+        val thrown = assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            TunnelOwnerTransitions.runBestEffortDiagnostic {
+                throw cancellation
+            }
+        }
+
+        assertSame(cancellation, thrown)
+    }
+
     // ---- owner identity and the no-side-effect guarantee ----
 
     @Test
