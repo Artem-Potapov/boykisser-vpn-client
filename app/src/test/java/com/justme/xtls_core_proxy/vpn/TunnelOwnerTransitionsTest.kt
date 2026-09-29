@@ -174,6 +174,32 @@ class TunnelOwnerTransitionsTest {
     // ---- live proxy install ----
 
     @Test
+    fun `rotation bridge promotion installs over a live proxy and returns prior handle`() {
+        val liveHandle = Token("live")
+        val bridgeHandle = Token("bridge")
+
+        val result = TunnelOwnerTransitions.replaceLiveProxyWithRotationBridge(
+            owner = TunnelInterfaceOwner.LiveProxy(liveHandle),
+            handle = bridgeHandle,
+        )
+
+        assertEquals(UNREAD_ROTATION_BRIDGE, result.owner.toRole())
+        assertSame(bridgeHandle, result.owner.handle)
+        assertSame(liveHandle, result.priorLiveProxyToClose)
+    }
+
+    @Test
+    fun `rotation bridge promotion rejects an unread owner`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            TunnelOwnerTransitions.replaceLiveProxyWithRotationBridge(
+                owner = TunnelInterfaceOwner.UnreadBlackhole(Token("blackhole")),
+                handle = Token("bridge"),
+            )
+        }
+        assertTrue(error.message!!.contains(UNREAD_BLACKHOLE.name))
+    }
+
+    @Test
     fun `live proxy installs over None with no cleanup handle`() {
         val candidate = Token("candidate")
 
@@ -404,6 +430,32 @@ class TunnelOwnerTransitionsTest {
 
         assertTrue(result.owner is TunnelInterfaceOwner.None)
         assertNull(result.handleToClose)
+    }
+
+    @Test
+    fun `unread installation closes descriptor when owner installation fails`() {
+        val handle = Token("unread")
+
+        assertThrows(IllegalStateException::class.java) {
+            TunnelOwnerTransitions.installUnreadOrClose(
+                owner = TunnelInterfaceOwner.LiveProxy(Token("live")),
+                handle = handle,
+                install = TunnelOwnerTransitions::installBlackhole,
+                close = Token::close,
+            )
+        }
+
+        assertEquals(1, handle.closeCount)
+    }
+
+    @Test
+    fun `diagnostic failure is isolated after descriptor establishment`() {
+        var installed = false
+        TunnelOwnerTransitions.runBestEffortDiagnostic {
+            installed = true
+            throw IllegalStateException("diagnostic failure")
+        }
+        assertTrue(installed)
     }
 
     // ---- owner identity and the no-side-effect guarantee ----

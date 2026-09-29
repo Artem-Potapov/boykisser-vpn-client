@@ -42,6 +42,12 @@ internal object TunnelOwnerTransitions {
         val priorBridgeToClose: Handle?,
     )
 
+    /** The outcome of replacing a live proxy with an unread rotation bridge. */
+    data class RotationBridgeInstallResult<Handle>(
+        val owner: TunnelInterfaceOwner.UnreadRotationBridge<Handle>,
+        val priorLiveProxyToClose: Handle,
+    )
+
     /** The outcome of a terminal release: the owner is already [TunnelInterfaceOwner.None] and the
      * caller still has to close [handleToClose]. Nothing is closed here. */
     data class ReleaseResult<Handle>(
@@ -107,6 +113,44 @@ internal object TunnelOwnerTransitions {
             )
         } else {
             rejectInstall(owner, "installLiveProxy", "an empty owner or a held rotation bridge")
+        }
+
+    /** Installs an unread owner, closing the newly established handle if installation fails. */
+    fun <Handle, Owner : TunnelInterfaceOwner<Handle>> installUnreadOrClose(
+        owner: TunnelInterfaceOwner<Handle>,
+        handle: Handle,
+        install: (TunnelInterfaceOwner<Handle>, Handle) -> Owner,
+        close: (Handle) -> Unit,
+    ): Owner = try {
+        install(owner, handle)
+    } catch (error: Throwable) {
+        try {
+            close(handle)
+        } catch (_: Throwable) {
+            // Preserve the ownership failure; descriptor cleanup is best-effort.
+        }
+        throw error
+    }
+
+    fun runBestEffortDiagnostic(diagnostic: () -> Unit) {
+        try {
+            diagnostic()
+        } catch (_: Throwable) {
+            // Diagnostics are not lifecycle operations.
+        }
+    }
+
+    fun <Handle> replaceLiveProxyWithRotationBridge(
+        owner: TunnelInterfaceOwner<Handle>,
+        handle: Handle,
+    ): RotationBridgeInstallResult<Handle> =
+        if (owner is TunnelInterfaceOwner.LiveProxy) {
+            RotationBridgeInstallResult(
+                owner = TunnelInterfaceOwner.UnreadRotationBridge(handle),
+                priorLiveProxyToClose = owner.handle,
+            )
+        } else {
+            rejectInstall(owner, "replaceLiveProxyWithRotationBridge", "a live proxy")
         }
 
     /** Opens the rotation bridge over a gap. Only legal from `None`: rotation is the one path that

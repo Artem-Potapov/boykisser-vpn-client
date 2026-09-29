@@ -148,8 +148,32 @@ internal fun shouldFunnelRotationReservationRefusal(
     tunnelState == SessionTunnelState.CONNECTED &&
     tunnelRole == TunnelRole.UNREAD_ROTATION_BRIDGE
 
-/**
- * Whether a kill-switch event landing mid-transition must be DEFERRED (recorded and replayed once
+internal fun shouldReleaseRotationBridgeAfterReservationRefusal(
+    running: Boolean,
+    activeSessionEpoch: Long?,
+    callbackSessionEpoch: Long,
+    tunnelState: SessionTunnelState,
+    tunnelRole: TunnelRole,
+): Boolean = acceptsSessionLifecycleCallback(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+) && tunnelState != SessionTunnelState.ROTATING && !shouldFunnelRotationReservationRefusal(
+    running = running,
+    activeSessionEpoch = activeSessionEpoch,
+    callbackSessionEpoch = callbackSessionEpoch,
+    tunnelState = tunnelState,
+    tunnelRole = tunnelRole,
+)
+
+/** Whether a live owner must be bridged before it is torn down for a rotation. */
+internal fun shouldEstablishRotationBridgeBeforeTeardown(
+    tunnelRole: TunnelRole,
+    tunnelState: SessionTunnelState,
+): Boolean = tunnelRole == TunnelRole.LIVE_PROXY &&
+    tunnelState == SessionTunnelState.ROTATING
+
+/** Whether a kill-switch event landing mid-transition must be DEFERRED (recorded and replayed once
  * the transition commits) rather than dropped.
  *
  * A kill can only tear down a CONNECTED tunnel. Both transitional states take the tunnel down and
@@ -432,26 +456,6 @@ internal enum class FailoverGiveUpOutcome {
 }
 
 /**
- * **SUPERSEDED by [TunnelRole] — removed with the service's owner migration.**
- *
- * What `tunInterface` currently holds, tracked beside the fd rather than derived from it. It is no
- * longer an input to any decision here: [classifyGiveUpOutcome] reads the derived [TunnelRole]
- * instead. Kept only until the service's owner migration lands, because `XrayVpnService` still
- * stores this tag next to the fd it does not yet own through a sealed type. Do not add a decision
- * input of this type, and do not reintroduce it once removed.
- */
-internal enum class TunInterfaceKind {
-    /** No fd in `tunInterface`. */
-    NONE,
-
-    /** Live, still-proxying tunnel (protector + Xray behind the fd). */
-    LIVE_PROXY,
-
-    /** Unread containment fd — give-up blackhole or adopted rotation bridge. */
-    UNREAD_CONTAINMENT,
-}
-
-/**
  * Classifies a give-up from the tunnel role the session holds **after** the containment step.
  *
  * [resultingRole] is read after [containmentForGiveUp]'s arm has run and its fd written into the
@@ -627,8 +631,7 @@ internal fun shouldFireFailoverRetry(
  *
  * [tunnelRole] replaces the `hasTunnel` boolean and reads strictly more ownership than it did: it
  * answers "does the session own no TUN **at all**", so a held rotation bridge also refuses the
- * restore, where the boolean — which only ever asked about the `tunInterface` field — read the
- * bridge as "no tunnel" and admitted it.
+ * restore, where a separate bridge owner could otherwise be missed by a field-specific boolean read.
  *
  * This is the ONE input on which the migration is not a pure restatement, so the reachable case is
  * named here. The two can differ only for `UNPROTECTED` with a bridge held, and that bridge is
@@ -651,10 +654,12 @@ internal fun shouldRestoreUnprotectedRearm(
     giveUpOutcome: FailoverGiveUpOutcome?,
     tunnelRole: TunnelRole,
     rearmJobActive: Boolean,
+    recoveryRotationQueued: Boolean = false,
 ): Boolean = failoverEnabled &&
     giveUpOutcome == FailoverGiveUpOutcome.UNPROTECTED &&
     tunnelRole == TunnelRole.NONE &&
-    !rearmJobActive
+    !rearmJobActive &&
+    !recoveryRotationQueued
 
 /**
  * Whether an incoming start request should RESTART the running session instead of taking

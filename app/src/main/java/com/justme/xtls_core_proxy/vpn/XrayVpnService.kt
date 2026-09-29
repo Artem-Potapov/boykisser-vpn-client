@@ -216,12 +216,10 @@ class XrayVpnService : VpnService() {
      */
     private var unprotectedRetryConsumed: Boolean = false
 
-    /**
-     * Instant the current UNPROTECTED episode began, for [unprotectedRetryAction]'s deferral
-     * deadline. Survives a disable/re-enable so restoring the re-arm does not restart the bound.
-     * Cleared wherever [giveUpOutcome] is cleared. Guarded by `lock`.
-     */
     private var unprotectedEpisodeSinceMs: Long? = null
+
+    /** True after the UNPROTECTED recovery timer has handed off a rotation attempt. */
+    private var unprotectedRecoveryRotationQueued: Boolean = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -380,6 +378,7 @@ class XrayVpnService : VpnService() {
             activeSessionEpoch = nextSessionEpoch
             activeEpochVolatile = nextSessionEpoch
             sessionTunnelState = SessionTunnelState.STARTING
+            unprotectedRecoveryRotationQueued = false
             nextSessionEpoch
         }
 
@@ -1121,10 +1120,21 @@ class XrayVpnService : VpnService() {
                             )
                             return@launch
                         }
-                        // Nothing was attempted — the transition could not even be reserved
-                        // (kill-switch pause, stale epoch, …). No sole containment bridge is held
-                        // in this branch, so release remains the correct cleanup.
-                        releaseRotationBridgeLocked("rotation reservation refused")
+                        if (shouldReleaseRotationBridgeAfterReservationRefusal(
+                                running = running,
+                                activeSessionEpoch = activeSessionEpoch,
+                                callbackSessionEpoch = sessionEpoch,
+                                tunnelState = sessionTunnelState,
+                                tunnelRole = tunnelOwner.toRole(),
+                            )
+                        ) {
+                            releaseRotationBridgeLocked("rotation reservation refused")
+                        }
+                        if (unprotectedRecoverySinceMs != null &&
+                            isCurrentSessionLocked(sessionEpoch)
+                        ) {
+                            unprotectedRecoveryRotationQueued = false
+                        }
                         // A recovery that never happened must not spend the single retry, and it
                         // must not silently drop the bound that stops a service protecting nothing
                         // either, so re-arm with the ORIGINAL give-up instant — but only while the
@@ -1147,6 +1157,7 @@ class XrayVpnService : VpnService() {
                         return@launch
                     }
                     // ---- THE ATTEMPT ----
+                    unprotectedRecoveryRotationQueued = false
                     // Written here, and deliberately BEFORE the thrash-cap admission below: the
                     // reservation is what makes this a real attempt, and a denied admission still
                     // funnels into giveUpRotationLocked, which must see the budget as spent or a
@@ -1217,24 +1228,63 @@ class XrayVpnService : VpnService() {
                     if (!ownsTunnelTransitionLocked(session.epoch, SessionTunnelState.ROTATING)) {
                         return@launch
                     }
-                    // Guard: only tear down if we don't already hold an UnreadRotationBridge from
-                    // a prior null/throw failure. A retained bridge must remain authoritative
-                    // through the recursive retry entry.
+                    // Open the unread bridge BEFORE releasing a live proxy. This preserves an
+                    // authoritative capture owner while Builder setup/establish runs and avoids the
+                    // interface-free interval on the first rotation of an episode.
+                    val initialBridgeRequired = shouldEstablishRotationBridgeBeforeTeardown(
+                        tunnelRole = tunnelOwner.toRole(),
+                        tunnelState = sessionTunnelState,
+                    )
+                    if (initialBridgeRequired) {
+                        val bridgePfd = establishUnreadTunnelLocked(
+                            label = "rotation bridge",
+                            allowLiveProxyOwner = true,
+                        )
+                        if (bridgePfd != null) {
+                            val installed = TunnelOwnerTransitions.replaceLiveProxyWithRotationBridge(
+                                owner = tunnelOwner,
+                                handle = bridgePfd,
+                            )
+                            tunnelOwner = installed.owner
+                            XrayBridge.stopXray().onFailure { error ->
+                                LogRepository.append("Xray stop warning: ${error.message}")
+                            }
+                            try {
+                                installed.priorLiveProxyToClose.close()
+                            } catch (error: Throwable) {
+                                LogRepository.append(
+                                    "Failover: rotation bridge predecessor close warning: " +
+                                        error.message
+                                )
+                            }
+                        }
+                        if (tunnelOwner !is TunnelInterfaceOwner.UnreadRotationBridge) {
+                            LogRepository.append(
+                                "Failover: rotation bridge could not be established before teardown; " +
+                                    "aborting the rotation"
+                            )
+                            giveUpRotationLocked(
+                                session.epoch,
+                                "rotation bridge could not be established",
+                            )
+                            return@launch
+                        }
+                    }
+
+                    // A retained bridge already covers this rotation episode. Otherwise this is a
+                    // legacy recovery path after a candidate was installed and torn down.
                     if (tunnelOwner !is TunnelInterfaceOwner.UnreadRotationBridge) {
                         tearDownTunnelLocked()
                     }
-                    // ---- BRIDGE THE GAP ----
-                    // bringUpTunnel does buildRuntimeConfig, geo-asset prep and the split read
-                    // OFF-lock before it reaches establish(), so without this the session would own
-                    // no VPN interface for SECONDS — on every routine rotation, and once per dead
-                    // candidate while a pool is exhausted — and every tunneled app would emit
-                    // cleartext on the underlying network for that whole span. Opened here, under
-                    // the same lock as the teardown, so nothing can observe the session between the
-                    // two. The trade is deliberate and is the safe direction: during a switch, apps
-                    // briefly lose connectivity instead of briefly leaking.
+                    // The first rotation establishes the unread bridge while the live owner is still
+                    // authoritative. Subsequent retries already retain the bridge. The fallback below
+                    // handles a candidate that was installed and then torn down after an operational
+                    // bring-up failure, without ever rebuilding uncovered.
                     //
-                    // Not folded into tearDownTunnelLocked: that function is also what the
-                    // kill-switch and stopVpn use to reach a genuinely tunnel-less state.
+                    // The bridge is opened under the same lock as any required teardown, so the
+                    // authoritative owner never passes through None during the off-lock config/geo/
+                    // split preparation. During a switch, apps briefly lose connectivity instead of
+                    // briefly leaking on the underlying network.
                     val bridgeRequired = shouldEstablishRotationBridge(
                         tunnelRole = tunnelOwner.toRole(),
                         tunnelState = sessionTunnelState,
@@ -1812,11 +1862,16 @@ class XrayVpnService : VpnService() {
                 decided
             }
             when (action) {
-                // rotateTunnel re-checks epoch + CONNECTED under the lock itself and spends the
-                // retry only once it has reserved the transition, so a state change in this gap
-                // costs another re-arm rather than the recovery.
-                UnprotectedRetryAction.ATTEMPT ->
+                // Mark handoff before leaving the timer coroutine. Settings reconciliation can run
+                // immediately after this point while rotateTunnel is still queued on the serial lane.
+                UnprotectedRetryAction.ATTEMPT -> {
+                    synchronized(lock) {
+                        if (isCurrentSessionLocked(sessionEpoch)) {
+                            unprotectedRecoveryRotationQueued = true
+                        }
+                    }
                     rotateTunnel(sessionEpoch, unprotectedRecoverySinceMs = unprotectedSinceMs)
+                }
                 UnprotectedRetryAction.DEFER -> Unit
                 UnprotectedRetryAction.STOP_SERVICE -> {
                     // The episode has outlasted its deferral deadline without ever becoming
@@ -1912,7 +1967,10 @@ class XrayVpnService : VpnService() {
      * Returns the fd, or null when nothing could be established (the caller then degrades to "no
      * containment"). Caller must hold `lock`.
      */
-    private fun establishUnreadTunnelLocked(label: String): ParcelFileDescriptor? {
+    private fun establishUnreadTunnelLocked(
+        label: String,
+        allowLiveProxyOwner: Boolean = false,
+    ): ParcelFileDescriptor? {
         return try {
             // INSIDE the try on purpose. Both callers are reachable from rotateTunnel's
             // `catch (Throwable)` — the give-up directly, the bridge via a rotation that re-enters
@@ -1920,7 +1978,7 @@ class XrayVpnService : VpnService() {
             // landing uncaught on a SupervisorJob with no handler, i.e. process death with the VPN
             // up. Both call sites are guarded by a pure predicate under the same held lock, but a
             // contract violation must degrade to "uncontained", never to a crash.
-            check(tunnelOwner is TunnelInterfaceOwner.None) {
+            check(allowLiveProxyOwner || tunnelOwner is TunnelInterfaceOwner.None) {
                 "Cannot establish an unread TUN while this session already owns one"
             }
             val builder = Builder()
@@ -1959,7 +2017,9 @@ class XrayVpnService : VpnService() {
             if (pfd == null) {
                 LogRepository.append("Failover: $label establish() returned null")
             } else {
-                LogRepository.append("Failover: $label TUN established with fd=${pfd.fd}")
+                TunnelOwnerTransitions.runBestEffortDiagnostic {
+                    LogRepository.append("Failover: $label TUN established with fd=${pfd.fd}")
+                }
             }
             pfd
         } catch (error: Throwable) {
@@ -1977,7 +2037,12 @@ class XrayVpnService : VpnService() {
      */
     private fun establishBlackholeTunnelLocked(): Boolean {
         val pfd = establishUnreadTunnelLocked("blackhole") ?: return false
-        tunnelOwner = TunnelOwnerTransitions.installBlackhole(tunnelOwner, pfd)
+        tunnelOwner = TunnelOwnerTransitions.installUnreadOrClose(
+            owner = tunnelOwner,
+            handle = pfd,
+            install = TunnelOwnerTransitions::installBlackhole,
+            close = ParcelFileDescriptor::close,
+        )
         return true
     }
 
@@ -1994,7 +2059,12 @@ class XrayVpnService : VpnService() {
      */
     private fun establishRotationBridgeLocked(): Boolean {
         val pfd = establishUnreadTunnelLocked("rotation bridge") ?: return false
-        tunnelOwner = TunnelOwnerTransitions.installRotationBridge(tunnelOwner, pfd)
+        tunnelOwner = TunnelOwnerTransitions.installUnreadOrClose(
+            owner = tunnelOwner,
+            handle = pfd,
+            install = TunnelOwnerTransitions::installRotationBridge,
+            close = ParcelFileDescriptor::close,
+        )
         return true
     }
 
@@ -2227,6 +2297,7 @@ class XrayVpnService : VpnService() {
                     giveUpOutcome = giveUpOutcome,
                     tunnelRole = tunnelOwner.toRole(),
                     rearmJobActive = failoverRearmJob?.isActive == true,
+                    recoveryRotationQueued = unprotectedRecoveryRotationQueued,
                 )
             ) {
                 val since = unprotectedEpisodeSinceMs ?: System.currentTimeMillis()
@@ -2406,6 +2477,7 @@ class XrayVpnService : VpnService() {
             giveUpOutcome = null
             unprotectedRetryConsumed = false
             unprotectedEpisodeSinceMs = null
+            unprotectedRecoveryRotationQueued = false
             // The session is over, so no BLACKHOLED line is true any more. Mirror onto
             // LogRepository so home/tile cannot keep showing a contained-outcome string after
             // Disconnect.

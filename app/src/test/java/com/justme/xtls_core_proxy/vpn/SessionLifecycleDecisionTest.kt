@@ -820,6 +820,32 @@ class SessionLifecycleDecisionTest {
         )
     }
 
+    @Test
+    fun reEnableDuringUnprotected_doesNotRestoreWhileRecoveryRotationIsQueued() {
+        assertFalse(
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                tunnelRole = TunnelRole.NONE,
+                rearmJobActive = false,
+                recoveryRotationQueued = true,
+            )
+        )
+    }
+
+    @Test
+    fun reEnableDuringUnprotected_restoresWhenNoRecoveryRotationIsQueued() {
+        assertTrue(
+            shouldRestoreUnprotectedRearm(
+                failoverEnabled = true,
+                giveUpOutcome = FailoverGiveUpOutcome.UNPROTECTED,
+                tunnelRole = TunnelRole.NONE,
+                rearmJobActive = false,
+                recoveryRotationQueued = false,
+            )
+        )
+    }
+
     // --- Connect-from-UNPROTECTED must actually recover, not no-op ---
 
     @Test

@@ -422,6 +422,44 @@ class SessionLifecycleRotationTest {
         }
     }
 
+    @Test
+    fun staleReservationRefusal_neverReleasesTheCurrentSessionsBridge() {
+        assertFalse(
+            shouldReleaseRotationBridgeAfterReservationRefusal(
+                running = true,
+                activeSessionEpoch = 6L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.ROTATING,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+            )
+        )
+        assertTrue(
+            shouldReleaseRotationBridgeAfterReservationRefusal(
+                running = true,
+                activeSessionEpoch = 5L,
+                callbackSessionEpoch = 5L,
+                tunnelState = SessionTunnelState.PAUSED,
+                tunnelRole = TunnelRole.UNREAD_ROTATION_BRIDGE,
+            )
+        )
+    }
+
+    @Test
+    fun initialRotation_opensBridgeBeforeReleasingLiveProxy() {
+        assertTrue(
+            shouldEstablishRotationBridgeBeforeTeardown(
+                tunnelRole = TunnelRole.LIVE_PROXY,
+                tunnelState = SessionTunnelState.ROTATING,
+            )
+        )
+        assertFalse(
+            shouldEstablishRotationBridgeBeforeTeardown(
+                tunnelRole = TunnelRole.NONE,
+                tunnelState = SessionTunnelState.ROTATING,
+            )
+        )
+    }
+
     // --- The rotation bridge: no clear network between teardown and the next establish() ---
 
     @Test

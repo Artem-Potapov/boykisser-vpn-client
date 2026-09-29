@@ -362,50 +362,16 @@ Key properties:
 
 ## The rotation bridge: no clear network during a switch
 
-`rotateTunnel` tears the dead TUN down under `lock`, then `bringUpTunnel` does `buildRuntimeConfig`,
-`GeoAssetPreparer.prepare`, the `SplitTunnelRepository` read and the whole `Builder` setup **off-lock**
-before it reaches `establish()`. For that entire span the session owns **no VPN interface**, so every
-app that was tunneled emits cleartext on the underlying network. It happens on **every** routine
-rotation, and once per dead candidate while a pool is exhausted. For users evading state censorship
-that is a multi-second window of real destinations visible to DPI, repeated per switch.
+`rotateTunnel` establishes the unread rotation bridge under `lock` BEFORE releasing the current live owner. The bridge builder uses the same capture plan as the live path, and its descriptor becomes authoritative before the live descriptor is closed. `bringUpTunnel` then does `buildRuntimeConfig`, `GeoAssetPreparer.prepare`, the `SplitTunnelRepository` read and the whole `Builder` setup **off-lock** while the unread bridge keeps apps captured. Candidate replacement retains that bridge through `Builder.establish()` and promotes the new live owner before bounded old-bridge cleanup.
 
-The teardown-before-bring-up ordering is forced by `bringUpTunnel`'s `check(tunInterface == null)` and
-did not change. What changed is that the window is now **covered by a bridge TUN**: the give-up
-blackhole builder re-used as a stop-gap — same session name, MTU, addresses, default routes, DNS
-servers and `SplitTunnelPlanner` plan, so exactly the same apps stay captured, but **no protector and
-no Xray**. Packets enter an fd nobody reads and are dropped.
+The bridge therefore covers the full off-lock preparation span instead of exposing a clear-network interval. It uses the same session name, MTU, addresses, default routes, DNS servers and `SplitTunnelPlanner` plan, but no protector or Xray; packets enter an fd nobody reads and are dropped.
 
 **The trade is deliberate and is the safe direction:** during a switch, apps briefly lose connectivity
 instead of briefly leaking.
 
-`shouldEstablishRotationBridge(hasTunnel, hasRotationBridge, tunnelState)` (pure, in
-`SessionLifecycleDecision.kt`) decides when one is opened: `ROTATING` only, no live tunnel, and none
-already held. Scope is **rotation only** — an initial connect has no prior tunnel to bridge from, and
-`reviveTunnel` starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
+`shouldEstablishRotationBridge(tunnelRole, tunnelState)` remains the retry-side decision for opening a bridge when no owner is held. The first rotation uses `shouldEstablishRotationBridgeBeforeTeardown` and establishes the unread bridge while the live proxy owner is still authoritative; the bounded transition then promotes the bridge and closes the prior live descriptor. Scope is **rotation only** — an initial connect has no prior tunnel to bridge from, and `reviveTunnel` starts from `PAUSED`, where the absence of a TUN is the kill-switch's deliberate intent.
 
-### `tunInterface` holds either a live proxy or unread containment — kind is explicit
-
-The bridge lives in `rotationBridgeInterface`, **never** in `tunInterface` during the rotation gap.
-That is still load-bearing: mid-rotation the bridge must not join `tunInterface`'s overloaded meaning
-before a give-up can adopt and re-kind it.
-
-`tunInterface != null` alone is **not** "still proxying". After a blackhole give-up or bridge adoption,
-that field holds an **unread** fd. `tunInterfaceKind` (`NONE` / `LIVE_PROXY` / `UNREAD_CONTAINMENT`)
-tracks which, and `classifyGiveUpOutcome(heldKind, …)` keys off the kind — not a boolean presence
-check. Without the kind, a **second** give-up in the same session (monitor rebuild over a blackhole,
-or `failRotation` after a post-settlement throw) would post `vpn_status_no_response` over a drop-only
-fd.
-
-| Reader | What it does | What a bare `!= null` would cause after a blackhole |
-|---|---|---|
-| `giveUpRotationLocked` (`heldKind`) | feeds `classifyGiveUpOutcome` | `CONTAINED_BY_LIVE_TUNNEL` over an unread fd |
-| `clearGiveUpStateOnRecovery` | refuses to clear while null (clear-network probe) | unchanged — still presence-based, and correct: a blackhole probe cannot succeed |
-| `bringUpTunnel` / the unread-TUN builder | `check(… == null)` before `establish()` | unchanged |
-
-A fuller **tunnel-role enum** that also folds `rotationBridgeInterface` into one field
-(`LIVE_PROXY` / `UNREAD_BRIDGE` / `UNREAD_BLACKHOLE` / `NONE`) remains the recommended follow-up —
-see the Wave A report — but the kind on `tunInterface` closes the misclassification without that
-wider refactor.
+The bridge is represented by the sealed `TunnelInterfaceOwner.UnreadRotationBridge` variant. There is no separate bridge field: role projection is derived from the one authoritative owner, and candidate replacement retains that owner through `establish()`.
 
 ### A give-up in the gap ADOPTS the bridge
 
@@ -437,7 +403,7 @@ unread fd. The full set of exits from the gap:
 
 | Exit | Handling |
 |---|---|
-| Bring-up succeeds | `bringUpTunnel` releases it immediately before `establish()` (the handover, below) |
+| Bring-up succeeds | `bringUpTunnel` retains the bridge through replacement `establish()`, promotes `LiveProxy`, then closes the bounded prior-bridge handle |
 | Bring-up fails — before or after `establish()` | the failure arm tears down any half-built fd and **re-opens** the bridge (idempotent: a pre-`establish()` failure still holds the original and keeps that fd rather than churning it) before recursing, and the recursion re-reads the DB and re-resolves the pool off-lock |
 | Recursive retry / N dead candidates | one bridge is held across the whole episode; `shouldEstablishRotationBridge`'s `hasRotationBridge` term is what prevents a second |
 | Give-up (thrash cap, no candidate, rotation error) | **adopted** as the blackhole |
@@ -481,24 +447,10 @@ Bridge establishment is **required once the live TUN is torn down**. On failure,
 `shouldAbortRotationForMissingBridge` aborts into give-up rather than rebuilding uncovered — see
 Known residuals / the bridge section's failure path.
 
-### Handover ordering: release-then-establish, and the follow-up it defers
+### Initial bridge and candidate handover ordering
 
-The handover is **release the bridge, then `establish()` the real interface**, adjacent, inside
-`bringUpTunnel`'s existing locked block, with **no I/O between them** — everything expensive has
-already run off-lock above. The window in which no interface exists collapses from seconds to one
-binder round-trip, and `bringUpTunnel`'s `check(tunInterface == null)` precondition is untouched.
+The initial bridge is established while `LiveProxy` is authoritative; after non-null establishment, `UnreadRotationBridge` is installed before stopping Xray and closing the old live descriptor. A null or thrown bridge establishment leaves the original live owner available to give-up, rather than tearing down first and opening an interface-free interval. Candidate replacement likewise retains the bridge through `Builder.establish()`: null/throw keeps the same unread handle; success installs `LiveProxy` before closing the old bridge. Diagnostic appends run after establishment and cannot turn a returned unread descriptor into a failed establishment. Device packet capture across both replacements remains required before the Phase 2 no-escape gate can pass.
 
-**The seamless ordering is a real, derived follow-up — not a rejected idea.** Android replaces the
-process's active VPN interface when `establish()` is called again, so establishing *first* and closing
-the bridge *after* would leave no instant without an interface at all, making the handover genuinely
-gapless. The reason it is not implemented: what happens to the still-active bridge when that second
-`establish()` **fails** is exactly the part no documentation settles. If a partially-applied failure
-deactivates the bridge, the code would believe it holds an interface while the user is on the clear
-network — trading a bounded stall for an unbounded leak, which is the wrong direction for this threat
-model. It needs a device, and none was reachable. **Verify on hardware, then swap the two lines and
-close the residual window.** Until then the residual exposure is one `establish()` call, plus — only
-on the bring-up-failure path — the short hop from that call returning to the failure arm re-opening
-the bridge under the same lock.
 
 ## Coexistence with the kill-switch
 
