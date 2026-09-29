@@ -1381,9 +1381,11 @@ class XrayVpnService : VpnService() {
                             // the SAFE direction — against letting the throw escape and tear down a
                             // healthy session's monitor while writing BLACKHOLED over it.
                             clearGiveUpLineLocked()
-                            if (unprotectedRecoverySinceMs != null) {
-                                unprotectedRecoveryRotationQueued = false
-                            }
+                            // A successful rotation satisfies any owed UNPROTECTED recovery, even
+                            // if another queued lifecycle operation performed the actual admission.
+                            // Clear only at this committed success boundary, never while preparation
+                            // or candidate retries are still in flight.
+                            unprotectedRecoveryRotationQueued = false
                             afterRotationCommitted("publishing the connected state") {
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                             }
