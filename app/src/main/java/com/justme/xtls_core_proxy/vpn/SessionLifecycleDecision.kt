@@ -606,15 +606,65 @@ internal fun unprotectedRetryAction(
     else -> UnprotectedRetryAction.STOP_SERVICE
 }
 
+internal fun scheduleUnprotectedRearmGeneration(currentGeneration: Long): Long = currentGeneration + 1L
+
+internal fun invalidateUnprotectedRearmGeneration(activeGeneration: Long): Long =
+    scheduleUnprotectedRearmGeneration(activeGeneration)
+
+internal data class UnprotectedRearmTimerDecision(
+    val publishHandoff: Boolean,
+    val dispatchRecovery: Boolean,
+    val deferRearm: Boolean,
+    val executeStop: Boolean,
+)
+
+internal fun decideUnprotectedRearmTimer(
+    action: UnprotectedRetryAction,
+    isCurrentSession: Boolean,
+    timerGeneration: Long,
+    activeGeneration: Long,
+): UnprotectedRearmTimerDecision = UnprotectedRearmTimerDecision(
+    publishHandoff = shouldPublishUnprotectedRecoveryHandoff(
+        action,
+        isCurrentSession,
+        timerGeneration,
+        activeGeneration,
+    ),
+    dispatchRecovery = action == UnprotectedRetryAction.ATTEMPT &&
+        isCurrentSession &&
+        isCurrentUnprotectedRearmGeneration(timerGeneration, activeGeneration),
+    deferRearm = action == UnprotectedRetryAction.DEFER &&
+        isCurrentUnprotectedRearmGeneration(timerGeneration, activeGeneration),
+    executeStop = shouldExecuteUnprotectedStop(
+        action,
+        isCurrentSession,
+        timerGeneration,
+        activeGeneration,
+    ),
+)
+
+internal fun isCurrentUnprotectedRearmGeneration(
+    timerGeneration: Long,
+    activeGeneration: Long,
+): Boolean = timerGeneration == activeGeneration
+
 internal fun shouldPublishUnprotectedRecoveryHandoff(
     action: UnprotectedRetryAction,
     isCurrentSession: Boolean,
-): Boolean = action == UnprotectedRetryAction.ATTEMPT && isCurrentSession
+    timerGeneration: Long,
+    activeGeneration: Long,
+): Boolean = action == UnprotectedRetryAction.ATTEMPT &&
+    isCurrentSession &&
+    isCurrentUnprotectedRearmGeneration(timerGeneration, activeGeneration)
 
 internal fun shouldExecuteUnprotectedStop(
     action: UnprotectedRetryAction,
     isCurrentSession: Boolean,
-): Boolean = action == UnprotectedRetryAction.STOP_SERVICE && isCurrentSession
+    timerGeneration: Long,
+    activeGeneration: Long,
+): Boolean = action == UnprotectedRetryAction.STOP_SERVICE &&
+    isCurrentSession &&
+    isCurrentUnprotectedRearmGeneration(timerGeneration, activeGeneration)
 
 /**
  * Whether a scheduled retry may still act when it finally fires.

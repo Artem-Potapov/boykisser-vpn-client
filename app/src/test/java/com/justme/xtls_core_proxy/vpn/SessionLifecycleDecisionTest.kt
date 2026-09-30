@@ -714,11 +714,57 @@ class SessionLifecycleDecisionTest {
     }
 
     @Test
+    fun retryTimer_staleGenerationDoesNotPublishAfterReplacement() {
+        // J1 already passed shouldFireFailoverRetry and left the lock. Disable cancels its job
+        // but cannot stop the non-suspending continuation, then re-enable schedules J2. J1 must
+        // not publish the recovery marker or dispatch after that replacement.
+        val scheduled = scheduleUnprotectedRearmGeneration(currentGeneration = 7L)
+        val replaced = invalidateUnprotectedRearmGeneration(scheduled)
+        assertFalse(
+            "a replaced timer must not stop the service after re-enable",
+            shouldExecuteUnprotectedStop(
+                action = UnprotectedRetryAction.STOP_SERVICE,
+                isCurrentSession = true,
+                timerGeneration = scheduled,
+                activeGeneration = replaced,
+            )
+        )
+        assertFalse(
+            "a timer replaced by a newer re-arm must not publish or dispatch",
+            shouldPublishUnprotectedRecoveryHandoff(
+                action = UnprotectedRetryAction.ATTEMPT,
+                isCurrentSession = true,
+                timerGeneration = scheduled,
+                activeGeneration = replaced,
+            )
+        )
+        assertEquals(scheduled + 1L, replaced)
+    }
+
+    @Test
+    fun retryTimer_handoffAndDispatchRequireTheSameCurrentGeneration() {
+        val scheduled = scheduleUnprotectedRearmGeneration(currentGeneration = 7L)
+        val replaced = invalidateUnprotectedRearmGeneration(scheduled)
+        val decision = decideUnprotectedRearmTimer(
+            action = UnprotectedRetryAction.ATTEMPT,
+            isCurrentSession = true,
+            timerGeneration = scheduled,
+            activeGeneration = replaced,
+        )
+        assertFalse(decision.publishHandoff)
+        assertFalse(decision.dispatchRecovery)
+        assertFalse(decision.executeStop)
+    }
+
+    @Test
     fun retryTimer_handoffIsPublishedOnlyForCurrentAttempt() {
+        val generation = scheduleUnprotectedRearmGeneration(currentGeneration = 7L)
         assertTrue(
             shouldPublishUnprotectedRecoveryHandoff(
                 action = UnprotectedRetryAction.ATTEMPT,
                 isCurrentSession = true,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
         assertFalse(
@@ -726,6 +772,8 @@ class SessionLifecycleDecisionTest {
             shouldPublishUnprotectedRecoveryHandoff(
                 action = UnprotectedRetryAction.ATTEMPT,
                 isCurrentSession = false,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
         assertFalse(
@@ -733,16 +781,21 @@ class SessionLifecycleDecisionTest {
             shouldPublishUnprotectedRecoveryHandoff(
                 action = UnprotectedRetryAction.DEFER,
                 isCurrentSession = true,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
     }
 
     @Test
     fun retryTimer_stopEffectsRequireCurrentSessionAtExecution() {
+        val generation = scheduleUnprotectedRearmGeneration(currentGeneration = 7L)
         assertTrue(
             shouldExecuteUnprotectedStop(
                 action = UnprotectedRetryAction.STOP_SERVICE,
                 isCurrentSession = true,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
         assertFalse(
@@ -750,12 +803,16 @@ class SessionLifecycleDecisionTest {
             shouldExecuteUnprotectedStop(
                 action = UnprotectedRetryAction.STOP_SERVICE,
                 isCurrentSession = false,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
         assertFalse(
             shouldExecuteUnprotectedStop(
                 action = UnprotectedRetryAction.ATTEMPT,
                 isCurrentSession = true,
+                timerGeneration = generation,
+                activeGeneration = generation,
             )
         )
     }

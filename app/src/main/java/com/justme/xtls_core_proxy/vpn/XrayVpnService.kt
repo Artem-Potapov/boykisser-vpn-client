@@ -221,6 +221,13 @@ class XrayVpnService : VpnService() {
     /** True after the UNPROTECTED recovery timer has handed off a rotation attempt. */
     private var unprotectedRecoveryRotationQueued: Boolean = false
 
+    /**
+     * Identity of the re-arm timer that is allowed to publish a recovery handoff or stop the
+     * service. Scheduling, cancellation, and replacement all advance it under `lock`; a timer
+     * whose captured identity no longer matches has already been replaced and must return.
+     */
+    private var failoverRearmGeneration: Long = 0L
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -1824,6 +1831,8 @@ class XrayVpnService : VpnService() {
     ) {
         val windowMs = authoritativeFailoverSettings().rotationWindowMs
         failoverRearmJob?.cancel()
+        val generation = scheduleUnprotectedRearmGeneration(failoverRearmGeneration)
+        failoverRearmGeneration = generation
         failoverRearmJob = serviceScope.launch {
             delay(windowMs)
             // BACKSTOP for the cancel in applyFailoverPreferences: this timer was scheduled under
@@ -1834,7 +1843,7 @@ class XrayVpnService : VpnService() {
                 val ok = shouldFireFailoverRetry(
                     failoverEnabled = authoritativeFailoverSettings().enabled,
                     isCurrentSession = isCurrentSessionLocked(sessionEpoch),
-                )
+                ) && isCurrentUnprotectedRearmGeneration(generation, failoverRearmGeneration)
                 if (ok) rotationAttempts = emptyList()
                 ok
             }
@@ -1845,8 +1854,14 @@ class XrayVpnService : VpnService() {
                 return@launch
             }
             if (!retryByRotation) {
-                // Re-checks epoch, running and CONNECTED internally, so a stale timer is a no-op.
-                applyFailoverPreferences(authoritativeFailoverSettings(), sessionEpoch)
+                // Re-checks epoch, running, CONNECTED, and this timer's generation internally, so a
+                // stale or replaced timer is a no-op.
+                synchronized(lock) {
+                    if (!isCurrentUnprotectedRearmGeneration(generation, failoverRearmGeneration)) {
+                        return@launch
+                    }
+                    applyFailoverPreferences(authoritativeFailoverSettings(), sessionEpoch)
+                }
                 return@launch
             }
             // ---- The UNPROTECTED recovery ----
@@ -1862,17 +1877,19 @@ class XrayVpnService : VpnService() {
                     now = System.currentTimeMillis(),
                     rotationWindowMs = authoritativeFailoverSettings().rotationWindowMs,
                 )
-                if (shouldPublishUnprotectedRecoveryHandoff(
-                        action = decided,
-                        isCurrentSession = true,
-                    )
-                ) {
-                    // Publish the handoff in the same lock acquisition as ATTEMPT. Re-enable
-                    // reconciliation cannot observe an ATTEMPT without its marker and schedule a
-                    // duplicate recovery between this decision and dispatch.
+                val timer = decideUnprotectedRearmTimer(
+                    action = decided,
+                    isCurrentSession = true,
+                    timerGeneration = generation,
+                    activeGeneration = failoverRearmGeneration,
+                )
+                if (timer.publishHandoff) {
+                    // Publish the handoff in the same lock acquisition as ATTEMPT, but only while
+                    // this timer is still the scheduled generation. A replacement scheduled after
+                    // the proceed check must not let this continuation publish or dispatch.
                     unprotectedRecoveryRotationQueued = true
                 }
-                if (decided == UnprotectedRetryAction.DEFER) {
+                if (timer.deferRearm) {
                     LogRepository.append(
                         "Failover: recovery rotation cannot be attempted yet (tunnel is " +
                             "$sessionTunnelState); re-arming without spending the retry"
@@ -1886,25 +1903,25 @@ class XrayVpnService : VpnService() {
                         unprotectedSinceMs = unprotectedSinceMs,
                     )
                 }
-                decided
+                timer
             }
-            when (action) {
-                UnprotectedRetryAction.ATTEMPT ->
+            when {
+                action.dispatchRecovery ->
                     rotateTunnel(sessionEpoch, unprotectedRecoverySinceMs = unprotectedSinceMs)
-                UnprotectedRetryAction.DEFER -> Unit
-                UnprotectedRetryAction.STOP_SERVICE -> {
+                action.executeStop -> {
                     // The episode has outlasted its deferral deadline without ever becoming
-                    // rotatable. Re-check the session while holding the lifecycle lock immediately
-                    // before every effect. A replacement session may start after the timer's first
-                    // check and must not inherit an old timer's warning, notification or teardown.
+                    // rotatable. Re-check the session and this timer's generation while holding
+                    // the lifecycle lock immediately before every effect. A replacement session or
+                    // a replacement re-arm must not inherit an old timer's warning, notification,
+                    // marker clear, or teardown.
                     synchronized(lock) {
-                        if (!shouldExecuteUnprotectedStop(
-                                action = UnprotectedRetryAction.STOP_SERVICE,
-                                isCurrentSession = isCurrentSessionLocked(sessionEpoch),
-                            )
-                        ) {
-                            return@launch
-                        }
+                        val stop = decideUnprotectedRearmTimer(
+                            action = UnprotectedRetryAction.STOP_SERVICE,
+                            isCurrentSession = isCurrentSessionLocked(sessionEpoch),
+                            timerGeneration = generation,
+                            activeGeneration = failoverRearmGeneration,
+                        )
+                        if (!stop.executeStop) return@launch
                         unprotectedRecoveryRotationQueued = false
                         LogRepository.append(
                             "Failover: no tunnel, and no chance to retry for " +
@@ -2257,6 +2274,8 @@ class XrayVpnService : VpnService() {
                 // is handed back to them by their own explicit action, not silently dropped.
                 failoverRearmJob?.cancel()
                 failoverRearmJob = null
+                failoverRearmGeneration =
+                    invalidateUnprotectedRearmGeneration(failoverRearmGeneration)
                 // Unconditional, for the same reason the cancel above is: the re-arm job is the
                 // owner of this reset (scheduleFailoverRearmLocked clears the window when its
                 // timer fires, so a re-armed episode starts with a clean budget) and we have just
@@ -2554,6 +2573,7 @@ class XrayVpnService : VpnService() {
             failoverSettingsJob = null
             failoverRearmJob?.cancel()
             failoverRearmJob = null
+            failoverRearmGeneration = invalidateUnprotectedRearmGeneration(failoverRearmGeneration)
             // Unconditional here (the whole session is ending), but it must follow the monitor
             // teardown above so the shared-receiver invariant still holds if anything re-enters.
             unregisterScreenReceiver()
