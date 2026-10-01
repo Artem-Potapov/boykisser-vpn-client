@@ -9,8 +9,10 @@ import com.justme.xtls_core_proxy.db.ProfileDao
  * SPEC 2 SEAM: this is the single place that changes when user-curated pools land. Keep the
  * signature stable and keep the logic here rather than inlining it into the service.
  *
- * The pool is derived at runtime and never persisted, which sidesteps the fact that Room profile
- * IDs churn — replaceProfilesForSubscription deletes and re-inserts rows on every refresh.
+ * The pool is derived at runtime and never persisted. Room profile ids churn on a keep-less
+ * refresh (`replaceProfilesForSubscription` full-wipes then re-inserts). On a keep-path refresh
+ * the kept id survives and the parsed list is inserted wholesale, so this pool can contain the
+ * same server twice until that is fixed — see docs/known-issues/subscription-refresh-duplicate-profile.md.
  */
 object FailoverPoolResolver {
 

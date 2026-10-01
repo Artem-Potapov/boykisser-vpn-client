@@ -6,7 +6,7 @@ This document covers the technical architecture, fail-closed security guarantees
 
 Single-module Gradle build (`:app`) + a separate Go module (`xray-go/`) wrapped via `gomobile bind` into `app/libs/xray.aar`.
 
-**Per-feature maintainer docs live under `docs/features/` — check there before grepping.**
+**Per-feature maintainer docs live under `docs/features/` — check there before grepping.** Confirmed unfixed defects live under [`docs/known-issues/`](docs/known-issues/README.md).
 
 ```
 .
@@ -37,7 +37,7 @@ Single-module Gradle build (`:app`) + a separate Go module (`xray-go/`) wrapped 
 │       │   │   ├── sideload/      Sideloading warning (launch trigger dormant) → docs/features/
 │       │   │   ├── split/         Split-tunnel + SplitTunnelPlanner → docs/features/
 │       │   │   ├── state/         VpnViewModel, ConnectAction/ReconnectFlow, PingCoordinator, AutoPingLatch → docs/features/
-│       │   │   ├── subs/          Subscription fetch/parse/refresh, PromoGate, Boykisser* activities
+│       │   │   ├── subs/          Subscription fetch/parse/refresh, PromoGate, Boykisser* activities — keep-id clone: docs/known-issues/subscription-refresh-duplicate-profile.md
 │       │   │   ├── tile/          QS Tile + TileClickDecision → docs/features/
 │       │   │   ├── ui/            Reusable Compose components + theme → docs/features/app-appearance.md
 │       │   │   └── vpn/           XrayVpnService, StartCommandDecision, SessionLifecycleDecision, VpnNotifications → docs/features/
@@ -50,6 +50,7 @@ Single-module Gradle build (`:app`) + a separate Go module (`xray-go/`) wrapped 
 │       └── test/java/...          JVM unit tests
 ├── docs/
 │   ├── features/                  Per-feature maintainer reference — CHECK HERE FIRST
+│   ├── known-issues/              Confirmed unfixed defects (not feature docs)
 │   ├── play-policy-declarations.md
 │   ├── qa/                        QA scenarios (incl. auto-failover-qa.md)
 │   └── superpowers/               Working artifacts (plans/specs); specs not committed
@@ -59,7 +60,7 @@ Single-module Gradle build (`:app`) + a separate Go module (`xray-go/`) wrapped 
 └── .gradle/, .kotlin/, .idea/     (generated/IDE state, gitignored)
 ```
 
-**Known `docs/features/` gaps**: promo gating (`subs/PromoGate`), subscription management, `add/` routing, per-server editor, `db/` Room layer, `geo/GeoAssetPreparer`, split-tunnel doc, `vpn/VpnNotifications`.
+**Known `docs/features/` gaps**: promo gating (`subs/PromoGate`), subscription management (fetch/parse/UI still undocumented; the keep-id clone is a known issue, not a feature doc: [`docs/known-issues/subscription-refresh-duplicate-profile.md`](docs/known-issues/subscription-refresh-duplicate-profile.md)), `add/` routing, per-server editor, `db/` Room layer, `geo/GeoAssetPreparer`, split-tunnel doc, `vpn/VpnNotifications`.
 
 ## Architecture & Fail-Closed Security
 

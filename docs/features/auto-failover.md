@@ -354,11 +354,15 @@ Key properties:
   "any working server" beats "the fastest server" — a poor pick simply rotates again. Latency ordering
   needs a process-scoped ping repository (deferred).
 - **The pool comes from `FailoverPoolResolver`** — the manual (`subscriptionId == null`) partition or
-  the current profile's whole subscription, resolved fresh from the DAO and never persisted (Room
-  profile ids churn: `replaceProfilesForSubscription` deletes and re-inserts on every refresh). That
-  object's KDoc marks it the **Spec 2 seam** for user-curated pools. Connect-to-fastest resolves through
-  the same object on purpose — an independently-derived second pool would diverge with no compile-time
-  signal.
+  the current profile's whole subscription, resolved fresh from the DAO and never persisted. Room
+  profile ids churn on a **keep-less** refresh (`replaceProfilesForSubscription` full-wipes then
+  re-inserts). On a **keep-path** refresh — active profile belongs to that subscription — the kept id
+  survives **and** the parsed list is inserted wholesale, so the pool can contain the same server
+  twice (stale kept row + fresh twin). That is a confirmed defect, not a pool-resolver bug: see
+  [`subscription-refresh-duplicate-profile.md`](../known-issues/subscription-refresh-duplicate-profile.md).
+  `FailoverPoolResolver`'s KDoc marks it the **Spec 2 seam** for user-curated pools. Connect-to-fastest
+  resolves through the same object on purpose — an independently-derived second pool would diverge
+  with no compile-time signal.
 
 ## The rotation bridge: no clear network during a switch
 

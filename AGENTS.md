@@ -11,7 +11,9 @@ This file is the main entry point. For detailed information, see:
 - **[AGENTS-ARCHITECTURE.md](AGENTS-ARCHITECTURE.md)** — Repository structure, architecture diagrams, fail-closed security guarantees, dormant features
 - **[AGENTS-DEVELOPMENT.md](AGENTS-DEVELOPMENT.md)** — Testing strategy, release builds, extensibility hooks, environment variables
 
-**Per-feature maintainer docs**: `docs/features/` — check there before grepping for `tile/`, `i18n/`, `killswitch/`, etc.
+**Per-feature maintainer docs**: `docs/features/` — check there before grepping for `tile/`, `i18n/`, `killswitch/`, `subs/`, etc.
+
+**Known issues** (confirmed, unfixed): [`docs/known-issues/`](docs/known-issues/README.md) — keep-id subscription clone: [`docs/known-issues/subscription-refresh-duplicate-profile.md`](docs/known-issues/subscription-refresh-duplicate-profile.md).
 
 ## Quick Start
 
@@ -147,6 +149,7 @@ Do not perform deploy/release publication steps without explicit maintainer appr
 │       ├── androidTest/           Instrumented tests
 │       └── test/                  JVM unit tests
 ├── docs/features/                 Per-feature maintainer reference
+├── docs/known-issues/             Confirmed unfixed defects (not feature docs)
 ├── scripts/
 │   ├── build-xray-aar.bash        Linux/macOS AAR build
 │   └── build-xray-aar.ps1         Windows AAR build

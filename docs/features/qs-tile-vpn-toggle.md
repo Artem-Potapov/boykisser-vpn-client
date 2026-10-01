@@ -146,6 +146,8 @@ The OS sends an implicit `Intent(ACTION_QS_TILE_PREFERENCES).setPackage(packageN
 
 The "pick the lowest id" behavior is intentional and matches what the previous `dao.getAll().first().firstOrNull()` did before `getFirst()` existed. Manual and subscription-imported profiles are not distinguished — whichever exists at the lowest id wins.
 
+**The tile does not insert profile rows.** `pickOrPersistActive` writes only `vpn_prefs.active_profile_id`. Tile Stop sends `ACTION_STOP` and does **not** clear that id (`XrayVpnService.stopVpn` never calls `setActiveProfileId(null)` — only in-app Disconnect does). Naming a subscription-owned row as active is enough to arm `ProfileDao.replaceProfilesForSubscription`'s keep branch; the next stale refresh of that sub then keeps that row **and** re-inserts the whole parsed list, producing a second identical-looking copy of the connected server. Tile handoff / long-press also opens `MainActivity`, whose `onStart` runs `refreshAllStaleSubscriptions`. Full mechanism, confirmation steps, and the intended fix: [`subscription-refresh-duplicate-profile.md`](../known-issues/subscription-refresh-duplicate-profile.md). Do not "fix" the clone by making the tile insert or by dropping `keepProfileId`.
+
 This is the single piece of profile-resolution lore that lives in the repository rather than the tile, because `VpnViewModel.activeProfileId` binds to `ActiveProfileRepository.activeProfileIdFlow` via `stateIn` (so UI collectors see tile-initiated writes), and the VM's internal logic reads the authoritative id directly via `getActiveProfileId(getApplication())` — both paths see the same value regardless of who wrote it.
 
 ## TOCTOU on `VpnService.prepare`
