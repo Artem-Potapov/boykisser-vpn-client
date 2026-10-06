@@ -226,6 +226,14 @@ Everything else active in code:
 
 **Disabled.** Gated behind `MainActivity.SIDELOAD_WARNING_LAUNCH_ENABLED = false`. Dialog, `SideloadWarningRepository`, strings, on-demand Settings-hub entry all remain. Flip flag to restore once-per-version launch prompt. See `docs/features/sideloading-warning.md`.
 
+### Temporary 1M log buffer (debug-only — revert before shipping)
+
+**Live in debug only.** `LogRepository.maxLines` default/ceiling and `LogPreferences.DEFAULT_BUFFER` are raised to `1_000_000` (preset list includes it) so a long Debug capture can retain the in-memory buffer. This is **not** the dormant call-site-only pattern above: a release compile must fail while it is live.
+
+- Kotlin: `LogRepository` `init` `check(BuildConfig.DEBUG)` — a release binary cannot load the object.
+- Gradle: `app/build.gradle.kts` throws `GradleException` from every `compile*Release*` task (`TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER`).
+- Revert: `5000` default, `coerceIn(100, 50_000)`, presets `[1000, 2000, 5000, 10000]`, drop both guards. See `docs/features/logs-screen.md`.
+
 **Note**: `boykiss3r.site` / `somenewsteps.space` **live** for two active probe paths — name-theft warning's status probe (`nametheft/NameTheftWarning.kt`) and promo gate's `/dowepromote` probe (`subs/PromoGate.kt`). Only promo **add** deep-link routes on those domains are dormant.
 
 ## Security Notes

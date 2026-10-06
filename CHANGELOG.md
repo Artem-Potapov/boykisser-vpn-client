@@ -3,6 +3,13 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
+## Unreleased
+
+### Changed
+- **TEMPORARY debug-only:** in-memory log buffer default/ceiling raised to 1 000 000 lines
+  (`TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER`). Release compiles throw until this is reverted to
+  5 000 / 50 000. Do not ship.
+
 ## [3.0.0PRE] — 2026-09-02
 
 Tag: `3.0.0-PreRelease` (pending). Major release.

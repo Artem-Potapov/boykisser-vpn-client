@@ -197,6 +197,17 @@ tasks.named("preBuild") {
     dependsOn(verifyXrayAar)
 }
 
+// TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER — revert this entire block before any release.
+// The 1M in-memory log cap is debug-only. Any release compile must fail while this is live.
+tasks.matching { it.name.startsWith("compile") && it.name.contains("Release") }.configureEach {
+    doFirst {
+        throw GradleException(
+            "TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER: the 1M log buffer is debug-only. " +
+                "Revert the cap to 50_000 / DEFAULT_BUFFER=5000 before assembling a release."
+        )
+    }
+}
+
 dependencies {
     implementation(files("libs/xray.aar"))
 
@@ -233,6 +244,8 @@ dependencies {
 tasks.withType<Test>().configureEach {
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
     inputs.file(layout.projectDirectory.file("src/main/res/xml/network_security_config.xml"))
+    // LogBufferReleaseGuardTest reads this file for the release-compile tripwire.
+    inputs.file(layout.projectDirectory.file("build.gradle.kts"))
 }
 
 // --- connectedAndroidTest post-run uninstall: OPT-IN -------------------------------------------

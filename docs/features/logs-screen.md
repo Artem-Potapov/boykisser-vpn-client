@@ -315,21 +315,28 @@ exposes a mutable cap:
 
 ```kotlin
 @Volatile
-var maxLines: Int = 5000
+var maxLines: Int = 1_000_000
     private set
 
 fun setMaxLines(n: Int) {
-    val capped = n.coerceIn(100, 50_000)
+    val capped = n.coerceIn(100, 1_000_000)
     maxLines = capped
     _logs.update { it.takeLast(capped) }
 }
 ```
 
-`setMaxLines` is a **live**, immediate UI concern: it clamps the requested value into `[100, 50_000]`
+`setMaxLines` is a **live**, immediate UI concern: it clamps the requested value into `[100, 1_000_000]`
 and, in the same call, trims the current buffer down to the new cap (`takeLast(capped)`) — there is no
 "applies on reconnect" delay for the buffer size, unlike the log level. `LogRepository.append` also
-caps every future append at `maxLines`. The default (`5000`) matches
+caps every future append at `maxLines`. The default (`1_000_000`) matches
 `LogPreferences.DEFAULT_BUFFER`.
+
+> **TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER.** The 1 000 000-line default/ceiling is a debug-only
+> override for a capture campaign. `LogRepository` `check`s `BuildConfig.DEBUG` at init, and
+> `app/build.gradle.kts` throws `GradleException` from every `compile*Release*` task so a
+> release APK cannot be assembled while this is live. Revert to `5000` / `coerceIn(100, 50_000)`
+> / presets `[1000, 2000, 5000, 10000]` before shipping. Copy/Share remain byte-bounded; Export
+> still materialises the whole buffer in one `joinToString` and can OOM at 1 M lines.
 
 `LogsActivity`'s buffer-size dialog picks from `LogPreferences.BUFFER_PRESETS` and, on selection, calls
 **both** `LogPreferences.setBufferLines(context, preset)` (persist) **and**
@@ -345,7 +352,7 @@ uses):
 | Key | Type | Default | Preset/range |
 |---|---|---|---|
 | `xray_log_level` | `String` (enum name) | none stored → `XrayLogLevel.fromName(null)` → `WARNING` | `DEBUG` / `INFO` / `WARNING` / `ERROR` (picker excludes `NONE`) |
-| `xray_log_buffer_lines` | `Int` | `DEFAULT_BUFFER = 5000` | `BUFFER_PRESETS = [1000, 2000, 5000, 10000]` |
+| `xray_log_buffer_lines` | `Int` | `DEFAULT_BUFFER = 1_000_000` (TEMPORARY debug-only) | `BUFFER_PRESETS = [1000, 2000, 5000, 10000, 1_000_000]` |
 
 The two settings have **different apply semantics**, and this is the single most important operational
 fact about this screen:
@@ -369,7 +376,7 @@ fact about this screen:
 | [`log/LogPreferences.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogPreferences.kt) | `xray_prefs`-backed `getLogLevel`/`setLogLevel`, `getBufferLines`/`setBufferLines`, `BUFFER_PRESETS`, `DEFAULT_BUFFER`. |
 | [`log/XrayCoreLogTailer.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/XrayCoreLogTailer.kt) | Polls the log file every 400 ms (≤64 KiB/poll fixed buffer), tracks byte offset, resets on shrink, strips Xray's own timestamp, feeds `LogRepository.append`. The **file read** catches only `IOException` (rethrows `CancellationException`) and retries. The **per-line handoff** to `append`/`sanitize` is separately guarded so a non-IOException bug there leaves a breadcrumb and the loop survives instead of silently killing the tailer coroutine. |
 | [`log/BoundedLogLineAccumulator.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/BoundedLogLineAccumulator.kt) | Byte-oriented complete-line splitter; UTF-8 decode only after `\n`; discard-until-newline on pending overflow (>64 KiB). |
-| [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `maxLines` (default 5000) + `setMaxLines` (coerce `[100, 50_000]`, immediate trim); `append` timestamps + redacts (UUID / `publicKey` / `shortId`) every line; `logs: StateFlow<List<String>>`. |
+| [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | `maxLines` (default 1_000_000, TEMPORARY debug-only) + `setMaxLines` (coerce `[100, 1_000_000]`, immediate trim); `append` timestamps + redacts (UUID / `publicKey` / `shortId`) every line; `logs: StateFlow<List<String>>`. Init `check(BuildConfig.DEBUG)` so a release binary cannot load the object. |
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
 | [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringTransition` (current session AND `REVIVING`/`ROTATING` — the single defer-vs-drop rule for a kill landing mid-transition). Auto-failover added the rotation half in the same file — `SessionTunnelState.ROTATING`, `canReserveRotation` (CONNECTED→ROTATING), `shouldDeferKillDuringTransition` (REVIVING **or** ROTATING), the monitor/receiver/give-up predicates and `activeProfileIdToRestoreOnRefusedStart`; see [auto-failover.md](auto-failover.md). |
 | [`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt) | Pure `bound(lines, maxBytes)` → newest-tail `BoundedLog` (`text`/`includedLines`/`totalLines`/`truncated`) under a 256 KiB budget; keeps the inline Copy/Share payload clear of the Binder transaction limit. Export bypasses it (streams). |
@@ -411,7 +418,8 @@ fact about this screen:
     split across accepts round-trips correctly; oversized unterminated input follows the
     discard-until-newline policy and never emits a truncated secret prefix.
 - **JUnit4 (JVM)** — `app/src/test/.../log/LogRepositoryBufferTest.kt`: `setMaxLines` coerces into
-  `[100, 50_000]`, trims the current buffer immediately, and caps subsequent `append`s.
+  `[100, 1_000_000]`, trims the current buffer immediately, and caps subsequent `append`s.
+  `LogBufferReleaseGuardTest` pins the `TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER` Gradle tripwire.
 - **JUnit4 (JVM)** — `app/src/test/.../log/LogShareBudgetTest.kt`: `bound` returns an empty untruncated
   result for an empty buffer; keeps every line (in order) when under budget; keeps only the newest tail
   under the byte budget when over (oldest dropped, newest kept, payload ≤ `maxBytes`); and still returns
@@ -439,7 +447,8 @@ fact about this screen:
   connected, confirm the running session is unaffected, then disconnect/reconnect and confirm the new
   level takes effect; trigger kill-switch pause/revive and confirm log lines keep flowing to the same
   buffer with no level change; run Copy/Share/Export and confirm UUID/publicKey/shortId values read
-  `<redacted-uuid>` / `<redacted>` rather than raw values. **Also, at the 10 000-line preset after a long
-  Debug session, run Copy and Share and confirm the explainer dialog appears and neither crashes/drops
-  the VPN** (the `TransactionTooLargeException` path), while Export still writes the full log. See
+  `<redacted-uuid>` / `<redacted>` rather than raw values. **Also, at a large buffer (10 000 or the
+  temporary 1 000 000-line preset) after a long Debug session, run Copy and Share and confirm the
+  explainer dialog appears and neither crashes/drops the VPN** (the `TransactionTooLargeException`
+  path). Export still writes the full log but can OOM at 1 M lines (known, temporary). See
   [`docs/qa/`](../qa/) for the broader QA scenario list.
