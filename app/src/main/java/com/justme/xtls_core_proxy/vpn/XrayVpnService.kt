@@ -14,8 +14,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
-import android.os.SystemClock
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.justme.xtls_core_proxy.MainActivity
 import com.justme.xtls_core_proxy.R
@@ -95,22 +93,6 @@ class XrayVpnService : VpnService() {
         private const val CHANNEL_ID = "xray_vpn_channel"
         private const val ERROR_CHANNEL_ID = "xray_vpn_error_channel"
         private const val ERROR_NOTIFICATION_ID = 1102
-    }
-
-    // Temporary packet-capture diagnostics. Never let logging become a lifecycle failure.
-    private fun failoverTrace(phase: String, handle: ParcelFileDescriptor? = null) {
-        runCatching {
-            synchronized(lock) {
-                Log.i(
-                    "FailoverTrace",
-                    "FFTRACE phase=$phase wallMs=${System.currentTimeMillis()} " +
-                        "monoNs=${SystemClock.elapsedRealtimeNanos()} " +
-                        "epoch=$activeSessionEpoch state=$sessionTunnelState " +
-                        "owner=${tunnelOwner.toRole()} fd=${handle?.fd ?: "-"} " +
-                        "thread=${Thread.currentThread().name}",
-                )
-            }
-        }
     }
 
     private val lock = Any()
@@ -403,7 +385,6 @@ class XrayVpnService : VpnService() {
             activeSessionEpoch = nextSessionEpoch
             activeEpochVolatile = nextSessionEpoch
             sessionTunnelState = SessionTunnelState.STARTING
-            failoverTrace("START_RESERVED")
             unprotectedRecoveryRotationQueued = false
             nextSessionEpoch
         }
@@ -525,7 +506,6 @@ class XrayVpnService : VpnService() {
                                     }
                                 }
                                 sessionTunnelState = SessionTunnelState.CONNECTED
-                                failoverTrace("CONNECTED_COMMIT")
                                 LogRepository.setConnectionState(VpnConnectionState.CONNECTED)
                                 updateNotification(localizedString(R.string.vpn_status_connected))
                                 applyKillSwitchPreferences(prefs, sessionEpoch)
@@ -655,25 +635,14 @@ class XrayVpnService : VpnService() {
                 // Establish first: a null or throw leaves the same bridge authoritative. Once a
                 // candidate exists, install it before closing the bridge, with no unrelated work
                 // between them. The prior bridge is then only a bounded local cleanup handle.
-                failoverTrace("CANDIDATE_ESTABLISH_BEGIN")
-                val pfd = try {
-                    builder.establish().also { failoverTrace("CANDIDATE_ESTABLISH_END", it) }
-                } catch (error: Throwable) {
-                    failoverTrace("CANDIDATE_ESTABLISH_FAILED")
-                    throw error
-                } ?: throw IllegalStateException("VpnService.establish() returned null")
+                val pfd = builder.establish()
+                    ?: throw IllegalStateException("VpnService.establish() returned null")
                 val installed = TunnelOwnerTransitions.installLiveProxy(tunnelOwner, pfd)
                 tunnelOwner = installed.owner
-                failoverTrace("LIVE_OWNER_PUBLISHED", pfd)
                 val bridgeCloseFailure = try {
-                    if (installed.priorBridgeToClose != null) {
-                        failoverTrace("BRIDGE_CLOSE_BEGIN", installed.priorBridgeToClose)
-                        installed.priorBridgeToClose.close()
-                        failoverTrace("BRIDGE_CLOSE_END")
-                    }
+                    installed.priorBridgeToClose?.close()
                     null
                 } catch (error: Throwable) {
-                    failoverTrace("BRIDGE_CLOSE_FAILED")
                     error
                 }
 
@@ -701,13 +670,9 @@ class XrayVpnService : VpnService() {
                 // Must succeed before Xray dials, or (with self-exclusion removed in
                 // Task 2) the proxy socket would route into the tun and loop. getOrThrow()
                 // also surfaces a controller-install failure from the Go bridge.
-                failoverTrace("REGISTER_PROTECTOR_BEGIN")
                 XrayBridge.registerProtector(this@XrayVpnService).getOrThrow()
-                failoverTrace("REGISTER_PROTECTOR_END")
 
-                failoverTrace("START_XRAY_BEGIN", pfd)
                 XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
-                failoverTrace("START_XRAY_END", pfd)
                 LogRepository.append("Xray core started")
             }
         }
@@ -722,23 +687,16 @@ class XrayVpnService : VpnService() {
      * first so its role-specific warning and audit survive.
      */
     private fun tearDownTunnelLocked() {
-        failoverTrace("TEARDOWN_BEGIN")
-        failoverTrace("STOP_XRAY_BEGIN")
         XrayBridge.stopXray().onFailure { error ->
             LogRepository.append("Xray stop warning: ${error.message}")
         }
-        failoverTrace("STOP_XRAY_END")
         val released = TunnelOwnerTransitions.release(tunnelOwner)
         tunnelOwner = released.owner
         try {
-            failoverTrace("OLD_FD_CLOSE_BEGIN", released.handleToClose)
             released.handleToClose?.close()
-            failoverTrace("OLD_FD_CLOSE_END")
         } catch (error: Throwable) {
-            failoverTrace("OLD_FD_CLOSE_FAILED")
             LogRepository.append("TUN close warning: ${error.message}")
         }
-        failoverTrace("TEARDOWN_END")
     }
 
     /**
@@ -1032,7 +990,6 @@ class XrayVpnService : VpnService() {
                             // live tunnel, a dead watchdog and a dropped kill-switch event, and
                             // the log would not say so.
                             sessionTunnelState = SessionTunnelState.CONNECTED
-                            failoverTrace("CONNECTED_COMMIT")
                             // ---- POST-COMMIT, still under `lock` ----
                             // Guarded PER STEP, never as one shared block, for the reason recorded
                             // at rotation's commit: the steps below have INDEPENDENT consequences,
@@ -1236,7 +1193,6 @@ class XrayVpnService : VpnService() {
                         is RotationAdmission.Admitted -> rotationAttempts = admission.attempts
                     }
                     sessionTunnelState = SessionTunnelState.ROTATING
-                    failoverTrace("ROTATION_RESERVED")
                     val session = SessionContext(sessionEpoch, currentProfileId, sessionLog)
                     episodeFailedIds = FailoverEpisodeDecision.recordProbeFailedCurrent(
                         failedIds = episodeFailedIds,
@@ -1293,30 +1249,22 @@ class XrayVpnService : VpnService() {
                         tunnelState = sessionTunnelState,
                     )
                     if (initialBridgeRequired) {
-                        failoverTrace("BRIDGE_ESTABLISH_BEGIN")
                         val bridgePfd = establishUnreadTunnelLocked(
                             label = "rotation bridge",
                             allowLiveProxyOwner = true,
                         )
-                        failoverTrace("BRIDGE_ESTABLISH_END", bridgePfd)
                         if (bridgePfd != null) {
                             val installed = TunnelOwnerTransitions.replaceLiveProxyWithRotationBridge(
                                 owner = tunnelOwner,
                                 handle = bridgePfd,
                             )
                             tunnelOwner = installed.owner
-                            failoverTrace("BRIDGE_OWNER_PUBLISHED", bridgePfd)
-                            failoverTrace("STOP_XRAY_BEGIN")
                             XrayBridge.stopXray().onFailure { error ->
                                 LogRepository.append("Xray stop warning: ${error.message}")
                             }
-                            failoverTrace("STOP_XRAY_END")
                             try {
-                                failoverTrace("OLD_FD_CLOSE_BEGIN", installed.priorLiveProxyToClose)
                                 installed.priorLiveProxyToClose.close()
-                                failoverTrace("OLD_FD_CLOSE_END")
                             } catch (error: Throwable) {
-                                failoverTrace("OLD_FD_CLOSE_FAILED")
                                 LogRepository.append(
                                     "Failover: rotation bridge predecessor close warning: " +
                                         error.message
@@ -1401,7 +1349,6 @@ class XrayVpnService : VpnService() {
                             // posts the give-up alert and stops the monitor OVER A HEALTHY,
                             // JUST-RESTORED TUNNEL. A committed success must not be reclassifiable.
                             sessionTunnelState = SessionTunnelState.CONNECTED
-                            failoverTrace("CONNECTED_COMMIT")
                             // ---- POST-COMMIT, still under `lock` ----
                             // Two of the three calls below reach a subsystem and can therefore
                             // throw: getSystemService(...).notify/cancel are binder calls, and
@@ -1641,7 +1588,6 @@ class XrayVpnService : VpnService() {
      * Caller must hold `lock`.
      */
     private fun giveUpRotationLocked(sessionEpoch: Long, reason: String) {
-        failoverTrace("GIVE_UP_BEGIN")
         LogRepository.append("Failover: giving up ($reason)")
         // A rotation has THREE exits, and this is the third. The two that commit CONNECTED replay a
         // kill deferred during the rotation; a give-up must DROP it — replaying it up to
@@ -1699,7 +1645,6 @@ class XrayVpnService : VpnService() {
         // Classify the owner after containment has been adopted or established. A successful
         // blackhole from None must be reported as CONTAINED_BY_BLACKHOLE, never as UNPROTECTED.
         val outcome = classifyGiveUpOutcome(tunnelOwner.toRole())
-        failoverTrace("GIVE_UP_CLASSIFIED_$outcome")
 
         if (shouldStopServiceOnGiveUp(outcome, unprotectedRetryConsumed)) {
             // The one automatic recovery attempt has been spent and traffic is STILL not contained.
@@ -2070,7 +2015,6 @@ class XrayVpnService : VpnService() {
         label: String,
         allowLiveProxyOwner: Boolean = false,
     ): ParcelFileDescriptor? {
-        failoverTrace("UNREAD_PREPARE_BEGIN")
         var establishedPfd: ParcelFileDescriptor? = null
         return try {
             // INSIDE the try on purpose. Both callers are reachable from rotateTunnel's
@@ -2114,10 +2058,8 @@ class XrayVpnService : VpnService() {
                 }
             }
 
-            failoverTrace("UNREAD_ESTABLISH_BEGIN")
             val pfd = builder.establish()
             establishedPfd = pfd
-            failoverTrace("UNREAD_ESTABLISH_END", pfd)
             if (pfd == null) {
                 LogRepository.append("Failover: $label establish() returned null")
             } else {
@@ -2127,13 +2069,11 @@ class XrayVpnService : VpnService() {
             }
             pfd
         } catch (ce: CancellationException) {
-            failoverTrace("UNREAD_ESTABLISH_CANCELLED")
             // No owner has been installed yet. If cancellation arrives after establish(), close
             // that unowned descriptor before propagating structured cancellation.
             runCatching { establishedPfd?.close() }
             throw ce
         } catch (error: Throwable) {
-            failoverTrace("UNREAD_ESTABLISH_FAILED")
             // Ordinary post-establishment failures have the same ownership rule: this helper has
             // not installed the descriptor, so it must not return with an unowned live TUN.
             runCatching { establishedPfd?.close() }
@@ -2575,7 +2515,6 @@ class XrayVpnService : VpnService() {
      * dropping and re-taking it.
      */
     private fun stopVpn(expectedSessionEpoch: Long? = null, stopService: Boolean = true) {
-        failoverTrace("STOP_VPN_BEGIN")
         synchronized(lock) {
             if (expectedSessionEpoch != null && !isCurrentSessionLocked(expectedSessionEpoch)) return
 
