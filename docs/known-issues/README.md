@@ -7,3 +7,5 @@ Check here before re-investigating a bug that already has a record. When an issu
 | Issue | Status |
 |---|---|
 | [Subscription refresh duplicates the active server](subscription-refresh-duplicate-profile.md) | Confirmed in code, unfixed |
+| [Rotation handover leaks one segment of an in-flight connection](rotation-handover-segment-leak.md) | Confirmed on device, not fixable from the app |
+| [One UI / GMS port-53 queries leave on the underlying network](oneui-gms-port53-underlying.md) | Observed on device, absent on a clean emulator, not fixable from the app |
