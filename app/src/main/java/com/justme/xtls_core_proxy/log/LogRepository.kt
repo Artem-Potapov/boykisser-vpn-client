@@ -1,7 +1,6 @@
 package com.justme.xtls_core_proxy.log
 
 import androidx.annotation.StringRes
-import com.justme.xtls_core_proxy.BuildConfig
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,20 +41,13 @@ enum class VpnConnectionState {
 }
 
 object LogRepository {
-    // TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER — revert to 5000 / coerceIn(100, 50_000) before shipping.
     @Volatile
-    var maxLines: Int = 1_000_000
+    var maxLines: Int = 5000
         private set
-
-    init {
-        check(BuildConfig.DEBUG) {
-            "TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER must not ship in a release build"
-        }
-    }
 
     /** Update the cap and immediately trim the current buffer. Live (pure UI concern). */
     fun setMaxLines(n: Int) {
-        val capped = n.coerceIn(100, 1_000_000)
+        val capped = n.coerceIn(100, 50_000)
         maxLines = capped
         _logs.update { it.takeLast(capped) }
     }

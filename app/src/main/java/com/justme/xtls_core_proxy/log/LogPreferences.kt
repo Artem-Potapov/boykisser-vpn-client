@@ -8,9 +8,8 @@ object LogPreferences {
     private const val PREFS = "xray_prefs"
     private const val KEY_LEVEL = "xray_log_level"
     private const val KEY_BUFFER = "xray_log_buffer_lines"
-    // TEMPORARY_DEBUG_ONLY_1M_LOG_BUFFER — revert DEFAULT_BUFFER to 5000 and drop 1_000_000 from presets.
-    const val DEFAULT_BUFFER = 1_000_000
-    val BUFFER_PRESETS = listOf(1000, 2000, 5000, 10000, 1_000_000)
+    const val DEFAULT_BUFFER = 5000
+    val BUFFER_PRESETS = listOf(1000, 2000, 5000, 10000)
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

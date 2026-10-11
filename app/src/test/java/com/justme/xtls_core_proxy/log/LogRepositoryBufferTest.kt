@@ -10,7 +10,7 @@ class LogRepositoryBufferTest {
     @After fun tearDown() {
         LogRepository.clear()
         LogRepository.clearGiveUpLine()
-        LogRepository.setMaxLines(1_000_000)
+        LogRepository.setMaxLines(5000)
     }
 
     @Test fun clearGiveUpLine_removesARecordedGiveUpLine() {
@@ -40,22 +40,9 @@ class LogRepositoryBufferTest {
         assertEquals(100, LogRepository.maxLines)
     }
 
-    @Test fun setMaxLines_acceptsOneMillionLineCap() {
-        LogRepository.setMaxLines(1_000_000)
-        assertEquals(1_000_000, LogRepository.maxLines)
-    }
-
     @Test fun setMaxLines_coercesAboveMaximumDownToCeiling() {
-        LogRepository.setMaxLines(2_000_000)
-        assertEquals(1_000_000, LogRepository.maxLines)
-    }
-
-    @Test fun defaultBuffer_isOneMillionLines() {
-        assertEquals(1_000_000, LogPreferences.DEFAULT_BUFFER)
-    }
-
-    @Test fun bufferPresets_includeOneMillionLines() {
-        assertEquals(listOf(1000, 2000, 5000, 10000, 1_000_000), LogPreferences.BUFFER_PRESETS)
+        LogRepository.setMaxLines(1_000_000)
+        assertEquals(50_000, LogRepository.maxLines)
     }
 
     @Test fun formatLogTimestamp_usesUs24HourMillisecondsFormat() {
