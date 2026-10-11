@@ -9,7 +9,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -591,37 +590,27 @@ class XrayVpnService : VpnService() {
                     throw IllegalStateException("Geofile preparation failed: ${error.message}", error)
                 }
 
-            val builder = Builder()
-                .setSession(localizedString(R.string.app_name))
-                .setMtu(sessionTuning.core.mtu)
-                .addAddress("10.7.0.1", 32)
-                .addAddress("fd00:1:fd00:1::1", 128)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer("1.1.1.1")
-                .also { if (sessionTuning.core.ipv6) it.addDnsServer("2606:4700:4700::1111") }
-
             val splitPrefs = SplitTunnelRepository.load(this@XrayVpnService)
             if (splitPrefs.mode == SplitTunnelMode.ALLOW_ONLY && splitPrefs.packages.isEmpty()) {
                 LogRepository.append("Split tunnel allow-only mode enabled with no selected apps")
             }
             // Whole-app tunneling: self is never excluded. Xray's own sockets bypass the
-            // tun via protect() (registered above), not via app exclusion.
-            val plan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
-            plan.allowedPackages.forEach { pkg ->
-                try {
-                    builder.addAllowedApplication(pkg)
-                } catch (_: PackageManager.NameNotFoundException) {
+            // tun via protect() (registered below), not via app exclusion.
+            val splitPlan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
+            val capturePlan = TunCapturePlanFactory.create(
+                sessionName = localizedString(R.string.app_name),
+                mtu = sessionTuning.core.mtu,
+                ipv6Enabled = sessionTuning.core.ipv6,
+                splitPlan = splitPlan,
+            )
+            val builder = Builder()
+            TunCapturePlanApplicator.apply(
+                plan = capturePlan,
+                target = VpnServiceTunBuilderTarget(builder),
+                onMissingPackage = { pkg ->
                     LogRepository.append("Split tunnel skipped missing package: $pkg")
-                }
-            }
-            plan.disallowedPackages.forEach { pkg ->
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (_: PackageManager.NameNotFoundException) {
-                    LogRepository.append("Split tunnel skipped missing package: $pkg")
-                }
-            }
+                },
+            )
 
             // Serialise ownership of the global TUN/Xray bridge with full stop and the next
             // session admission. A stale starter is rejected before it can publish resources.
@@ -2026,37 +2015,27 @@ class XrayVpnService : VpnService() {
             check(allowLiveProxyOwner || tunnelOwner is TunnelInterfaceOwner.None) {
                 "Cannot establish an unread TUN while this session already owns one"
             }
-            val builder = Builder()
-                .setSession(localizedString(R.string.app_name))
-                .setMtu(sessionTuning.core.mtu)
-                .addAddress("10.7.0.1", 32)
-                .addAddress("fd00:1:fd00:1::1", 128)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                // Mirrors bringUpTunnel: DNS is aimed INTO the tun, so resolver traffic is dropped
-                // here too instead of falling back to the underlying network's resolvers.
-                .addDnsServer("1.1.1.1")
-                .also { if (sessionTuning.core.ipv6) it.addDnsServer("2606:4700:4700::1111") }
-
             // Same plan as a real bring-up, so exactly the same apps stay captured: anything the
             // user split OUT keeps the direct route it already had while connected, and everything
-            // else keeps riding the tun — now into the blackhole.
+            // else keeps riding the tun — now into the blackhole. DNS stays aimed into the tun, so
+            // resolver traffic is dropped here too instead of falling back to the underlying
+            // network's resolvers.
             val splitPrefs = SplitTunnelRepository.load(this)
-            val plan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
-            plan.allowedPackages.forEach { pkg ->
-                try {
-                    builder.addAllowedApplication(pkg)
-                } catch (_: PackageManager.NameNotFoundException) {
+            val splitPlan = SplitTunnelPlanner.plan(splitPrefs.mode, splitPrefs.packages, packageName)
+            val capturePlan = TunCapturePlanFactory.create(
+                sessionName = localizedString(R.string.app_name),
+                mtu = sessionTuning.core.mtu,
+                ipv6Enabled = sessionTuning.core.ipv6,
+                splitPlan = splitPlan,
+            )
+            val builder = Builder()
+            TunCapturePlanApplicator.apply(
+                plan = capturePlan,
+                target = VpnServiceTunBuilderTarget(builder),
+                onMissingPackage = { pkg ->
                     LogRepository.append("Failover: $label TUN skipped missing package: $pkg")
-                }
-            }
-            plan.disallowedPackages.forEach { pkg ->
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (_: PackageManager.NameNotFoundException) {
-                    LogRepository.append("Failover: $label TUN skipped missing package: $pkg")
-                }
-            }
+                },
+            )
 
             val pfd = builder.establish()
             establishedPfd = pfd
