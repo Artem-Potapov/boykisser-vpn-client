@@ -1,6 +1,9 @@
 package com.justme.xtls_core_proxy.tile
 
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.isActiveSessionState
+import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
 
 /**
  * Pure result of a QS-tile click, decided from observable inputs:
@@ -44,15 +47,13 @@ internal sealed interface TileClickDecision {
  * beyond the state is what lets both call sites share one copy instead of hand-duplicating it, which
  * is how a live-looking dead tile shipped once already.
  *
- * Note this is a boolean chain, not an exhaustive `when`: adding a `VpnConnectionState` constant
- * still compiles and still falls through to `false`. `TileClickDecisionTest` sweeps the whole enum
- * against this function to turn that into a test failure.
+ * Note this delegates the membership set to [VpnConnectionState.isActiveSessionState]. The function
+ * stays because `XrayVpnTileService.handleClick` calls it before profile and permission work.
+ * `TileClickDecisionTest` sweeps the whole enum against this function so a future state cannot fall
+ * through unnoticed.
  */
 internal fun shouldStopOnTileClick(state: VpnConnectionState): Boolean =
-    state == VpnConnectionState.CONNECTING ||
-        state == VpnConnectionState.CONNECTED ||
-        state == VpnConnectionState.PAUSED ||
-        state == VpnConnectionState.BLACKHOLED
+    state.isActiveSessionState()
 
 internal fun decideTileClick(
     state: VpnConnectionState,
@@ -67,4 +68,31 @@ internal fun decideTileClick(
     } else {
         TileClickDecision.Start(profileId)
     }
+}
+
+/** Active/inactive half of the QS tile. Labels are [tileLabelChoice], not this predicate. */
+internal fun tileShowsActive(state: VpnConnectionState): Boolean = state.isActiveSessionState()
+
+internal sealed interface TileLabelChoice {
+    data class Localized(val labelRes: Int) : TileLabelChoice
+    data class ResolvedProfileName(val fallbackLabelRes: Int) : TileLabelChoice
+}
+
+/**
+ * Exhaustive tile label split. CONNECTED still resolves the profile name in the service;
+ * BLACKHOLED and ERROR still pass the recorded give-up line. ERROR stays a label, not an active tile.
+ */
+internal fun tileLabelChoice(
+    state: VpnConnectionState,
+    giveUpLine: GiveUpOngoingLine?,
+): TileLabelChoice = when (state) {
+    VpnConnectionState.CONNECTED ->
+        TileLabelChoice.ResolvedProfileName(vpnConnectionStateLabelRes(state))
+    VpnConnectionState.DISCONNECTED,
+    VpnConnectionState.CONNECTING,
+    VpnConnectionState.PAUSED ->
+        TileLabelChoice.Localized(vpnConnectionStateLabelRes(state))
+    VpnConnectionState.BLACKHOLED,
+    VpnConnectionState.ERROR ->
+        TileLabelChoice.Localized(vpnConnectionStateLabelRes(state, giveUpLine))
 }

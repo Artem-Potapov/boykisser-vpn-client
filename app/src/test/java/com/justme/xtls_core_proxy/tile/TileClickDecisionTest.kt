@@ -1,6 +1,10 @@
 package com.justme.xtls_core_proxy.tile
 
+import com.justme.xtls_core_proxy.R
+import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.isActiveSessionState
+import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -127,6 +131,11 @@ class TileClickDecisionTest {
                 state in stops,
                 shouldStopOnTileClick(state),
             )
+            assertEquals(
+                "$state: the tile Stop seam must share only the helper's classification",
+                state.isActiveSessionState(),
+                shouldStopOnTileClick(state),
+            )
             val decision = decideTileClick(state, profileId = 7L, needsVpnConsent = false,
                 needsNotifPermission = false)
             assertEquals(
@@ -135,6 +144,58 @@ class TileClickDecisionTest {
                 decision,
             )
         }
+    }
+
+    @Test
+    fun tileActiveInactiveMatchesActiveSessionMembershipOnly() {
+        // updateTile may use the helper only to choose STATE_ACTIVE vs STATE_INACTIVE.
+        // Labels stay exhaustive and caller-specific: CONNECTED still resolves a profile name,
+        // BLACKHOLED and ERROR still take giveUpLine, and ERROR stays inactive.
+        for (state in VpnConnectionState.entries) {
+            assertEquals(
+                "$state",
+                state.isActiveSessionState(),
+                tileShowsActive(state),
+            )
+        }
+    }
+
+    @Test
+    fun tileLabelChoiceStaysExhaustiveAndSeparateFromActiveClassification() {
+        val giveUpLine = GiveUpOngoingLine.UNPROTECTED
+        val expected = mapOf(
+            VpnConnectionState.DISCONNECTED to TileLabelChoice.Localized(
+                vpnConnectionStateLabelRes(VpnConnectionState.DISCONNECTED),
+            ),
+            VpnConnectionState.CONNECTING to TileLabelChoice.Localized(
+                vpnConnectionStateLabelRes(VpnConnectionState.CONNECTING),
+            ),
+            VpnConnectionState.CONNECTED to TileLabelChoice.ResolvedProfileName(
+                vpnConnectionStateLabelRes(VpnConnectionState.CONNECTED),
+            ),
+            VpnConnectionState.PAUSED to TileLabelChoice.Localized(
+                vpnConnectionStateLabelRes(VpnConnectionState.PAUSED),
+            ),
+            VpnConnectionState.BLACKHOLED to TileLabelChoice.Localized(
+                vpnConnectionStateLabelRes(VpnConnectionState.BLACKHOLED, giveUpLine),
+            ),
+            VpnConnectionState.ERROR to TileLabelChoice.Localized(
+                vpnConnectionStateLabelRes(VpnConnectionState.ERROR, giveUpLine),
+            ),
+        )
+        assertEquals(VpnConnectionState.entries.toSet(), expected.keys)
+        for (state in VpnConnectionState.entries) {
+            assertEquals("$state", expected.getValue(state), tileLabelChoice(state, giveUpLine))
+        }
+        assertEquals(
+            R.string.main_state_unprotected,
+            (tileLabelChoice(VpnConnectionState.ERROR, giveUpLine) as TileLabelChoice.Localized).labelRes,
+        )
+        assertEquals(
+            R.string.main_state_blackholed,
+            (tileLabelChoice(VpnConnectionState.BLACKHOLED, GiveUpOngoingLine.UNPROTECTED)
+                as TileLabelChoice.Localized).labelRes,
+        )
     }
 
     @Test

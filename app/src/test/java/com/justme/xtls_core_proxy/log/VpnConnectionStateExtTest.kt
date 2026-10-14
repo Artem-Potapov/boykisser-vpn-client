@@ -31,6 +31,11 @@ class VpnConnectionStateExtTest {
             VpnConnectionState.DISCONNECTED to false,
             VpnConnectionState.ERROR to false,
         )
+        assertEquals(
+            "A VpnConnectionState was added without an explicit isActiveSessionState decision.",
+            VpnConnectionState.entries.toSet(),
+            expectedMap.keys,
+        )
         for ((state, expected) in expectedMap) {
             assertEquals(expected, state.isActiveSessionState())
         }

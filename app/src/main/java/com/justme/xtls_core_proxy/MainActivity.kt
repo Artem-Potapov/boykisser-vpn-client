@@ -90,6 +90,7 @@ import com.justme.xtls_core_proxy.db.Subscription
 import com.justme.xtls_core_proxy.log.GiveUpOngoingLine
 import com.justme.xtls_core_proxy.log.LogRepository
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.isActiveSessionState
 import com.justme.xtls_core_proxy.log.vpnConnectionStateLabelRes
 import com.justme.xtls_core_proxy.nametheft.NameTheftDialog
 import com.justme.xtls_core_proxy.nametheft.NameTheftWarning
@@ -1119,13 +1120,8 @@ private fun vpnConnectionStateLabel(
 // its long-press menu offers Disconnect rather than a connect row. Same treatment PAUSED already
 // gets, for the same reason. This is deliberately NOT the connect-affordance rule: that one is
 // state.connectAction, which offers RECONNECT from a give-up rather than disabling everything.
-internal fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean {
-    return profile.id == activeId &&
-        (state == VpnConnectionState.CONNECTED ||
-            state == VpnConnectionState.CONNECTING ||
-            state == VpnConnectionState.PAUSED ||
-            state == VpnConnectionState.BLACKHOLED)
-}
+internal fun isActive(profile: Profile, activeId: Long?, state: VpnConnectionState): Boolean =
+    profile.id == activeId && state.isActiveSessionState()
 
 /**
  * Whether the top-bar Disconnect button should render.

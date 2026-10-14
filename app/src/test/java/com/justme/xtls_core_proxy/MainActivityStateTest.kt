@@ -2,6 +2,8 @@ package com.justme.xtls_core_proxy
 
 import com.justme.xtls_core_proxy.db.Profile
 import com.justme.xtls_core_proxy.log.VpnConnectionState
+import com.justme.xtls_core_proxy.log.isActiveSessionState
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -77,6 +79,11 @@ class MainActivityStateTest {
         )
         for (state in VpnConnectionState.entries) {
             assertTrue("$state", isActive(profile, 7L, state) == (state in live))
+            assertEquals(
+                "$state: isActive must share only the helper's state classification",
+                state.isActiveSessionState(),
+                isActive(profile, 7L, state),
+            )
         }
     }
 
