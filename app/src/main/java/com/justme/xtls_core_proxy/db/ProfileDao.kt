@@ -8,12 +8,15 @@ import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+private const val MANUAL_PROFILES_SQL =
+    "SELECT * FROM profiles WHERE subscriptionId IS NULL ORDER BY id ASC"
+
 @Dao
 interface ProfileDao {
     @Query("SELECT * FROM profiles ORDER BY id ASC")
     fun getAll(): Flow<List<Profile>>
 
-    @Query("SELECT * FROM profiles WHERE subscriptionId IS NULL ORDER BY id ASC")
+    @Query(MANUAL_PROFILES_SQL)
     fun getManual(): Flow<List<Profile>>
 
     @Query("SELECT * FROM profiles WHERE id = :id")
@@ -34,7 +37,7 @@ interface ProfileDao {
     suspend fun getBySubscriptionId(subId: Long): List<Profile>
 
     /** Suspend snapshot of the manually-added ("My profiles") servers. */
-    @Query("SELECT * FROM profiles WHERE subscriptionId IS NULL ORDER BY id ASC")
+    @Query(MANUAL_PROFILES_SQL)
     suspend fun getManualList(): List<Profile>
 
     @Insert
