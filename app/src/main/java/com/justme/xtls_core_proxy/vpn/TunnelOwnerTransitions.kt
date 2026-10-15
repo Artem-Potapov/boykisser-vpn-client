@@ -9,8 +9,10 @@ import kotlinx.coroutines.CancellationException
  * and which handle the caller still owes a close to**.
  *
  * Deliberately free of lock, close, `Builder`, logging and Android types: the ordering constraints the
- * bridge depends on (release-then-`establish()`, adopt-instead-of-rebuild) are properties of the
- * *decision*, so they are testable here instead of only being visible in `XrayVpnService`.
+ * bridge depends on (the rotation bridge stays authoritative through `establish()`, then the old
+ * bridge is closed; adopt-instead-of-rebuild) are properties of the *decision*, so they are testable
+ * here instead of only being visible in `XrayVpnService`. The earlier production order was
+ * release-then-`establish()`; that is not the current constraint.
  *
  * Every install rejects an owner it would silently overwrite. An occupied role means a leaked VPN
  * interface or a second interface the session never asked for, so the failure is a loud

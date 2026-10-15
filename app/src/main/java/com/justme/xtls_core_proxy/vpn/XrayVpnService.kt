@@ -1614,11 +1614,11 @@ class XrayVpnService : VpnService() {
             return
         }
 
-        // heldRole is captured BEFORE the containment step. Within one give-up that ordering keeps
-        // an adopted bridge classified CONTAINED_BY_BLACKHOLE (adoption writes tunnelOwner and
-        // retags the role). Across give-ups the role must stay honest: after a blackhole/adopt,
-        // tunnelOwner holds an unread fd tagged UnreadBlackhole — a boolean `!= null` would
-        // mislabel the next give-up as CONTAINED_BY_LIVE_TUNNEL.
+        // heldRole is captured BEFORE the containment step so the arm is chosen from the
+        // pre-adoption role. Classification is the later tunnelOwner.toRole() read, after adoption
+        // or blackhole establishment has retagged the owner. Across give-ups the role must stay
+        // honest: after a blackhole/adopt, tunnelOwner holds an unread fd tagged UnreadBlackhole —
+        // a boolean `!= null` would mislabel the next give-up as CONTAINED_BY_LIVE_TUNNEL.
         val heldRole = tunnelOwner.toRole()
         when (
             containmentForGiveUp(
@@ -2111,10 +2111,11 @@ class XrayVpnService : VpnService() {
      * blackhole a give-up would build, so building a second one would strand this one.
      *
      * Adopts [TunnelInterfaceOwner.UnreadRotationBridge] as [TunnelInterfaceOwner.UnreadBlackhole]
-     * and returns whether traffic is contained. The caller reads the role BEFORE calling this —
-     * that ordering (plus keeping the kind honest after this write) is what keeps the adopted
-     * bridge classified `CONTAINED_BY_BLACKHOLE` instead of inheriting the live tunnel's
-     * "still proxying" copy.
+     * and returns whether traffic is contained. The caller classifies the role AFTER this write —
+     * [giveUpRotationLocked] reads `tunnelOwner.toRole()` only once adoption or blackhole
+     * establishment has landed — so the adopted bridge is `CONTAINED_BY_BLACKHOLE` instead of
+     * inheriting the live tunnel's "still proxying" copy. The pre-containment role chooses the
+     * arm; it is not the classification.
      *
      * Caller must hold `lock`, and must have checked [containmentForGiveUp].
      */

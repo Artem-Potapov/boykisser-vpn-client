@@ -434,10 +434,10 @@ internal fun shouldEstablishRotationBridge(
  * [bridgeRequired] is the value of [shouldEstablishRotationBridge] just checked; [resultingRole] is
  * the tunnel role the session actually holds after the establish attempt. Only
  * [TunnelRole.UNREAD_ROTATION_BRIDGE] counts as the bridge being held. The old `bridgeHeld` Boolean
- * read the same fact at both call sites, because the caller tears the tunnel down first, so nothing
- * else can be owned at this point; naming the role instead makes that precondition explicit rather
- * than incidental, and keeps a live proxy or an unread blackhole from ever being counted as the
- * cover this rule exists to require.
+ * read the same fact at both call sites. That was true when the caller tore the tunnel down before
+ * `establish()`; establish-first keeps `UnreadRotationBridge` authoritative through a null or throw,
+ * so naming the role is the precondition rather than a side effect of teardown, and keeps a live
+ * proxy or an unread blackhole from ever being counted as the cover this rule exists to require.
  */
 internal fun shouldAbortRotationForMissingBridge(
     bridgeRequired: Boolean,
