@@ -16,9 +16,10 @@ and leave the old build on the device, which reads as the app ignoring your chan
 **What auto-failover does (the behaviour you're verifying):** while connected, the app probes the
 **live tunnel** with an HTTP 204 request through the tun. After `failureThreshold` consecutive
 failures it rotates to another server in the same pool (the same subscription, or the "My profiles"
-partition). **The switch itself is covered by a bridge TUN** — an unread fd held from the teardown
-until the new interface is established — so apps briefly lose connectivity instead of briefly leaking
-(Test 23). When it runs out of servers it **gives up fail-closed** — it re-establishes a *blackhole*
+partition). **The switch itself is covered by a bridge TUN** — an unread owner held from before the
+live fd is closed, through replacement `establish()`, until `LiveProxy` is installed — so apps briefly
+lose connectivity instead of briefly leaking (Test 23). When it runs out of servers it **gives up
+fail-closed** — it re-establishes a *blackhole*
 TUN (an fd nobody reads) rather than releasing traffic to the clear network — and reports which of
 three physically different situations it left behind. Feature reference:
 [`docs/features/auto-failover.md`](../features/auto-failover.md).
@@ -322,10 +323,12 @@ present and work there too.
 
 ## Test 7 — The QS tile from `BLACKHOLED` ★
 
-**Why:** the tile renders `STATE_ACTIVE` for `BLACKHOLED`, and the Stop gate is read from **two**
-call sites (`decideTileClick` and `handleClick`'s no-IO fast path). They now share one
-`shouldStopOnTileClick`, but the render is a separate `when`, so a mismatch between render and gate
-would still make the tile look live and be dead — strictly worse than looking dead.
+**Why:** active rendering and tile Stop eligibility share `isActiveSessionState` (exactly
+`CONNECTING`, `CONNECTED`, `PAUSED`, `BLACKHOLED`). `updateTile` uses that helper only for
+active/inactive; the CONNECTED profile name, localized labels, `giveUpLine`, and `subtitle = null`
+stay separate, and `ERROR` stays inactive. This device test still exercises the live tile and the Stop
+action — a shared helper does not replace that. A mismatch between render and gate would still make
+the tile look live and be dead — strictly worse than looking dead.
 
 **Steps:**
 1. Add the app's tile to Quick Settings.
@@ -815,12 +818,15 @@ ViewModel alive and are not affected.
 
 ## Test 23 — No cleartext escapes during a switch (the rotation bridge) ★★ MANDATORY BEFORE MERGE
 
-**Why:** rotation tears the TUN down and then spends **seconds** off-lock building the next config
-(`buildRuntimeConfig`, geo-asset prep, the split read) before `establish()`. Until the rotation bridge
-landed, every tunneled app emitted cleartext on the underlying network for that whole span — on every
-routine rotation, and once per dead candidate while a pool is exhausted. Nothing in the JVM suite can
-prove this: `XrayVpnService` is not instantiable there, so the pure rules are tested and the
-*sequencing* is not. **This test is the only proof that the fix works.** Feature reference:
+**Why:** capture-plan construction finishes before the establish-first handover, and the unread bridge
+remains the containment interface while the replacement is established. `bringUpTunnel` spends
+**seconds** off-lock building the next config (`buildRuntimeConfig`, geo-asset prep, the per-establishment
+split read, `TunCapturePlan`) before `establish()`, and `UnreadRotationBridge` stays authoritative
+through that call. `null` or a throw leaves the original bridge in place for the existing retry/give-up
+path. Nothing in the JVM suite can prove the no-underlying-packet-escape policy: `XrayVpnService` is not
+instantiable there, so the pure rules are tested and the *sequencing* is not. **Packet capture across
+the whole switch is that proof. Logs are diagnostic evidence only — they do not prove the policy.**
+Feature reference:
 [`docs/features/auto-failover.md` → The rotation bridge](../features/auto-failover.md#the-rotation-bridge-no-clear-network-during-a-switch).
 
 **You need:** a second machine on the same network able to see the device's traffic (a laptop running
@@ -840,19 +846,34 @@ what leaves the device.
 4. Kill A's proxy and let the watchdog rotate to B.
 
 **PASS:**
-- Logs show, in this order and with nothing in between:
-  `Failover: rotating A -> B`, `Failover: rotation bridge TUN established with fd=…`, then later
-  `Failover: rotation bridge released (handing over to the newly established tunnel)` and
-  `TUN established with fd=…`.
-- The capture shows **no packet to the step-3 destination on the underlying network** at any point,
-  including the whole window between the two log lines. Traffic to A's and B's server addresses is
-  expected and fine — that is the proxy itself.
+- Logs show this diagnostic order: `Failover: rotating A -> B`, then
+  `Failover: rotation bridge TUN established with fd=…`, then the replacement
+  `TUN established with fd=…`, then an optional
+  `Failover: rotation bridge close warning: …` only if that one close threw, then the mandatory
+  `Failover: rotation bridge released (handing over to the newly established tunnel)`, then
+  `Using geofiles from …` and the protector / `Xray core started` diagnostics. Initial start and revive
+  emit no release audit. Log order is evidence of the handover, not proof that nothing escaped.
+- The capture covers the **whole** switch and shows **no packet to the step-3 destination on the
+  underlying network** at any point. Traffic to A's and B's server addresses is expected and fine —
+  that is the proxy itself. Two accepted residuals are not a Test 23 failure and are not fixed by this
+  ordering: one in-flight segment emitted from inside `establish()`
+  ([`rotation-handover-segment-leak.md`](../known-issues/rotation-handover-segment-leak.md)) and One UI /
+  GMS port-53 queries that never enter the TUN
+  ([`oneui-gms-port53-underlying.md`](../known-issues/oneui-gms-port53-underlying.md)).
 - The step-3 traffic **stalls** during the switch and resumes after "Connected". A stall is the
-  intended trade; a leak is not.
+  intended trade; a leak of a new connection is not.
 
 **FAIL — report immediately:** any packet addressed to the step-3 destination appearing on the
-underlying interface during the switch. That is the defect this test exists to catch, and it means the
-bridge was not established, was released too early, or the handover was reordered.
+underlying interface during the switch, other than the two accepted residuals above. That means the
+bridge was not established, was released before the replacement `establish()` returned, or the handover
+was reordered back to release-before-establish. Do not treat a release-before-establish log order as
+the target.
+
+**Forced replacement failure:** if the replacement `Builder.establish()` returns `null` or throws, the
+original bridge stays available to the existing retry/give-up path. There must be no release audit, no
+close of that bridge, and no `TUN established` for a candidate that was not installed. The next attempt
+or the give-up adopts/retries that same fd. A failure only after `LiveProxy` is installed (protector or
+Xray start) is the arm that tears the candidate down and may open a new bridge.
 
 ### 23b — The exhausting-pool case (N dead candidates, one bridge)
 

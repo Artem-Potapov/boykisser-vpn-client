@@ -17,6 +17,7 @@ A tile that worked only on already-permitted users would be useless on first lau
 [Tile bound] ─┤   DISCONNECTED / ERROR     │
               │   → STATE_INACTIVE         │
               │                            │
+              │   isActiveSessionState():  │
               │   CONNECTING / CONNECTED   │
               │   / PAUSED / BLACKHOLED    │
               │   → STATE_ACTIVE           │
@@ -24,7 +25,7 @@ A tile that worked only on already-permitted users would be useless on first lau
 
 [User taps]
    │
-   ├── if state ∈ {CONNECTING, CONNECTED, PAUSED, BLACKHOLED}
+   ├── if isActiveSessionState(state)
    │       └── unlockAndRun { startForegroundService(ACTION_STOP) }
    │
    └── else (DISCONNECTED, ERROR)
@@ -39,6 +40,8 @@ A tile that worked only on already-permitted users would be useless on first lau
                   └── both OK → startForegroundService(ACTION_START + profileId)
 ```
 
+The active set is exactly those four states, via `isActiveSessionState()` in `log/VpnConnectionStateExt.kt`. `updateTile` uses `tileShowsActive(state)` for **only** the active/inactive classification. It still resolves the CONNECTED profile name, still writes localized labels through `tileLabelChoice` (including `giveUpLine` for `BLACKHOLED` and `ERROR`), and still sets `subtitle = null`. `ERROR` stays inactive. Tile Stop, Main Disconnect (`shouldShowDisconnect`, which also includes `ERROR`), `connectAction` (`BLACKHOLED` → `RECONNECT`), and the state-specific labels are different questions and do not share this helper.
+
 The tile **observes** state but does not own it. `LogRepository.connectionState` is the canonical source, written by `XrayVpnService`; the tile collects it on `onStartListening` and re-renders. Tap intent is decided from `connectionState.value` at click time, not from any tile-private state.
 
 **Tile text.** `updateTile` resolves strings through `SupportedLanguage.localize(applicationContext)` and writes the localized connection state ("Disconnected" / "Connecting" / "Paused" / "Error") into the tile's `label`. It always sets `subtitle = null` (and calls `updateTile()`), which also clears any subtitle cached from older builds that wrote state into the subtitle field. The manifest `android:label="@string/tile_label"` ("VPN") is used only by the QS *tile picker* (the system UI for adding/removing tiles); the panel never shows it once the tile is on screen. The stacked "VPN" + state rendering an earlier version produced was redundant — a user with the app installed already knows what the tile is for. The no-profile toast uses the same `SupportedLanguage.localize` path.
@@ -52,7 +55,7 @@ The tile lives in [`app/src/main/java/com/justme/xtls_core_proxy/tile/`](../../a
 | File | Responsibility |
 |---|---|
 | [`tile/XrayVpnTileService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/XrayVpnTileService.kt) | The `TileService` subclass. Observes `LogRepository.connectionState` on `onStartListening`, renders localized state (via `SupportedLanguage.localize`) or the active profile's name when CONNECTED into `qsTile.label` (always `subtitle = null`), decides start/stop at click time via the pure `decideTileClick` function (see `tile/TileClickDecision.kt`), dispatches to `XrayVpnService` via `startForegroundService` for both start and stop, hands off to `MainActivity` when first-time permissions are still missing. |
-| [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt) | Sealed `TileClickDecision` (`Stop`, `NoProfileToast`, `Start(id)`, `HandoffToMainActivity(id)`) plus the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` extracted from `XrayVpnTileService` so the click pipeline is unit-testable without the QS framework. |
+| [`tile/TileClickDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/tile/TileClickDecision.kt) | Sealed `TileClickDecision` (`Stop`, `NoProfileToast`, `Start(id)`, `HandoffToMainActivity(id)`) plus the pure `decideTileClick(state, profileId, needsVpnConsent, needsNotifPermission)` extracted from `XrayVpnTileService` so the click pipeline is unit-testable without the QS framework. `shouldStopOnTileClick` and `tileShowsActive` both delegate membership to `isActiveSessionState` (exactly four states). `tileLabelChoice` stays separate and still carries the CONNECTED profile-name lookup and the `BLACKHOLED`/`ERROR` `giveUpLine`. |
 | [`state/ActiveProfileRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/state/ActiveProfileRepository.kt) | Shared owner of the `vpn_prefs.active_profile_id` SharedPreferences key. Exposes `activeProfileIdFlow: StateFlow<Long?>` observed by `VpnViewModel` throughout its lifetime, plus `pickOrPersistActive(ctx)` which honors a valid stored id or falls back to `ProfileDao.getFirst()` when none is stored. Tile and VM share the same persistence and the same observable surface. |
 | [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt) | Owns `connectionState: StateFlow<VpnConnectionState>` (the tile collects this on `onStartListening`) and `errorEvents: SharedFlow<Int>` (replay=1, DROP_OLDEST; the VM collects this in `init`). `XrayVpnService` pairs every `setConnectionState(ERROR)` call with `emitError(@StringRes resId)`, so tile-initiated failures propagate to the in-app error Text in addition to the existing error notification channel. |
 | [`db/ProfileDao.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/db/ProfileDao.kt) | Source of `getFirst()` — `SELECT * FROM profiles ORDER BY id ASC LIMIT 1`. Used by `pickOrPersistActive` to pick a default when nothing is stored; covers manual and subscription-imported profiles alike. Also provides `getById(id)`, called by the tile when CONNECTED to resolve the active profile's name for the label. |

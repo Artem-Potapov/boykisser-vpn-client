@@ -641,7 +641,7 @@ private fun MainScreen(
                 // It therefore also renders for a genuinely DYING session, where the service has
                 // already stopSelf()'d. That tap does NOT hit a no-op: disconnect() dispatches
                 // startForegroundService(ACTION_STOP), which CREATES the service. It is safe only
-                // because that start reaches stopVpn's `!shouldStop && tunInterface == null` early
+                // because that start reaches stopVpn's `!shouldStop && tunnelOwner is None` early
                 // return, and stopVpn does not await anything — onStartCommand dispatches it via
                 // tunnelOpScope.launch, but stopVpn has no suspension points, so it runs and calls
                 // stopSelf() well inside Android's ~5 s startForeground deadline. Anything that

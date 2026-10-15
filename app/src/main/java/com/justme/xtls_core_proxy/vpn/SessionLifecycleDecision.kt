@@ -321,9 +321,10 @@ internal fun failoverMonitorNeedsRebuild(
  * What a give-up must do to end up owning an unread TUN — an fd nobody reads, so packets are dropped
  * instead of falling back to the clear network.
  *
- * The all-servers-dead path tears the TUN down before bring-up fails, so a give-up can otherwise end
- * with no fd at all, and whether the user is exposed would depend on where bring-up died. That is
- * worse than either consistent answer, hence the containment.
+ * A candidate that was installed as `LiveProxy` can be torn down before a later bring-up step fails,
+ * so a give-up can otherwise end with no fd at all, and whether the user is exposed would depend on
+ * where bring-up died. A pre-establish `null`/throw keeps the unread bridge, which give-up adopts.
+ * Either way the exposure must not depend on luck, hence the containment.
  */
 internal enum class GiveUpContainment {
     /** Nothing to do: a live tunnel already holds the traffic, or another owner drives it. */
@@ -384,21 +385,25 @@ internal fun containmentForGiveUp(
 /**
  * Whether a rotation must open a **bridge TUN** across the window in which it owns no interface.
  *
- * A rotation tears the old TUN down under `lock` and then does `buildRuntimeConfig`, geo-asset prep
- * and the split-tunnel read OFF-lock before it reaches `establish()`. For that whole span — seconds,
- * on every routine rotation, and once per dead candidate while a pool is exhausted — no VPN
- * interface exists, so every tunneled app emits cleartext on the underlying network. The bridge is
- * the give-up blackhole re-used as a stop-gap: same builder, same captured apps, no protector and no
- * Xray, so apps briefly lose connectivity instead of briefly leaking. That is the intended trade.
+ * A rotation keeps `UnreadRotationBridge` authoritative across `buildRuntimeConfig`, geo-asset prep,
+ * the per-establishment split read and `Builder.establish()`. The first rotation opens that bridge
+ * while `LiveProxy` is still authoritative (`shouldEstablishRotationBridgeBeforeTeardown`); this
+ * predicate is the later arm, used only when the owner is already `NONE` — a candidate that was
+ * installed and then torn down after an operational bring-up failure. For that span no *other*
+ * interface exists, so every tunneled app would emit on the underlying network unless this bridge is
+ * open. The bridge is the give-up blackhole re-used as a stop-gap: same capture plan, no protector and
+ * no Xray, so apps briefly lose connectivity instead of briefly leaking. That is the intended trade.
  *
  * [TunnelRole.UNREAD_ROTATION_BRIDGE] is what makes this idempotent, and it is load-bearing rather
  * than defensive: one rotation episode walks N dead candidates through the same reserved transition,
  * re-entering the teardown path each time. A second establish would strand the first fd — a leaked
  * VPN interface, held until the process dies.
  *
- * [TunnelRole.LIVE_PROXY] must be false for the same reason [containmentForGiveUp] refuses to act
- * on a live tunnel: `establish()` replaces the process's active interface, so opening a bridge over
- * a working tunnel would silently turn it into a blackhole.
+ * [TunnelRole.LIVE_PROXY] must be false here: the first rotation bridges a live proxy through
+ * [shouldEstablishRotationBridgeBeforeTeardown] and `replaceLiveProxyWithRotationBridge`, which
+ * installs the unread owner before the old live descriptor is closed. Calling this `NONE`-only
+ * predicate while a proxy is still authoritative would `establish()` a second interface over a
+ * working tunnel.
  *
  * The two refusals are different facts — a held bridge is the idempotency guard above, a held
  * proxy is the replacement guard here — and the role collapses them into one equality. That is a
@@ -419,9 +424,12 @@ internal fun shouldEstablishRotationBridge(
 /**
  * Whether a rotation that needed a bridge must abort rather than rebuild with no VPN interface.
  *
- * The caller has already torn the live TUN down under `lock`. Proceeding without a bridge reopens
- * the clear-network window for the whole off-lock rebuild. Aborting funnels into give-up, which
- * tries blackhole containment (or reports UNPROTECTED honestly if that also fails).
+ * The caller asked for a bridge and does not hold `UNREAD_ROTATION_BRIDGE` afterwards. On the
+ * post-teardown arm the live TUN is already gone, so proceeding reopens the clear-network window for
+ * the whole off-lock rebuild. On the establish-first candidate arm a `null`/throw leaves the original
+ * bridge authoritative, so this predicate stays false and that handle is preserved. Aborting, when it
+ * is true, funnels into give-up, which tries blackhole containment (or reports UNPROTECTED honestly
+ * if that also fails).
  *
  * [bridgeRequired] is the value of [shouldEstablishRotationBridge] just checked; [resultingRole] is
  * the tunnel role the session actually holds after the establish attempt. Only

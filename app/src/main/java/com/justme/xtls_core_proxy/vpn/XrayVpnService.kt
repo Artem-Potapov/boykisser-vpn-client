@@ -1310,8 +1310,9 @@ class XrayVpnService : VpnService() {
                     // ANNOUNCE THE SWITCH. The bridge holds traffic but does not carry it, so
                     // leaving the UI, the ongoing notification and the QS tile saying CONNECTED
                     // would still claim a working connection the user does not have. The
-                    // teardown-before-bring-up ordering is forced by bringUpTunnel's
-                    // check(tunnelOwner is None) and is not changed here. Every arm below
+                    // teardown-before-bring-up ordering is NOT what establish-first does. The
+                    // retained UnreadRotationBridge stays authoritative through establish();
+                    // only a non-null candidate becomes LiveProxy. Every arm below
                     // re-announces: success -> CONNECTED, retry -> CONNECTING again on the next
                     // attempt, give-up -> BLACKHOLED/ERROR.
                     LogRepository.setConnectionState(VpnConnectionState.CONNECTING)
@@ -1548,13 +1549,15 @@ class XrayVpnService : VpnService() {
     /**
      * Give up on rotation, FAIL-CLOSED.
      *
-     * "Just keep the tunnel established" does not hold on the path that matters: the all-servers-
-     * dead case tears the TUN down *before* bring-up fails, so a give-up can land with
-     * `tunnelOwner is None` and hand the user's traffic straight back to the clear network —
-     * and whether that happens would depend on where bring-up died (after `establish()` = contained,
-     * before = exposed), which is worse than either consistent answer. So when this session should
-     * own a tunnel and has none, re-establish a BLACKHOLE one: same routes and captured apps, no
-     * protector, no Xray — packets enter an fd nobody reads and are dropped.
+     * "Just keep the tunnel established" does not hold on the path that matters: a candidate already
+     * installed as `LiveProxy` can be torn down *before* a later bring-up step fails, so a give-up can
+     * land with `tunnelOwner is None` and hand the user's traffic straight back to the clear network —
+     * and whether that happens would depend on where bring-up died (after a non-null `establish()`
+     * installed `LiveProxy` = contained, before = exposed), which is worse than either consistent
+     * answer. A pre-establish `null`/throw does not take that path: it leaves the unread bridge
+     * authoritative for adoption. So when this session should own a tunnel and has none, re-establish
+     * a BLACKHOLE one: same routes and captured apps, no protector, no Xray — packets enter an fd
+     * nobody reads and are dropped.
      *
      * Note the DELIBERATE disagreement between the two "states" this leaves behind:
      * [sessionTunnelState] returns to CONNECTED because that is mechanically required — a rotation

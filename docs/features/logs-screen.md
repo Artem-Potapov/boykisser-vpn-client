@@ -153,7 +153,12 @@ request sees `REVIVING` and does nothing; a rotation reserves `CONNECTED → ROT
 `ROTATING` is deliberately **not** folded into `REVIVING` — revive reserves from `PAUSED` and rotation
 from `CONNECTED`, and sharing one state would let a kill-switch revive and a failover rotation each
 believe they own the same transition. Before `Builder.establish()`, the service requires both the
-matching epoch/expected transition and `tunInterface == null`.
+matching epoch/expected transition and an owner `prepareRealEstablishment` accepts: `None` for
+`STARTING`/`REVIVING`, and the still-authoritative `UnreadRotationBridge` for `ROTATING`. A rotation
+does **not** require the owner to be empty. The log tailer is not part of that owner check. It starts
+later, in the initial-start success block, only after `ownsTunnelTransitionLocked(sessionEpoch,
+STARTING)` admits the commit — session admission, not `LiveProxy` specifically. Do not gate the tailer
+on `LiveProxy`; a rotation that has already started it keeps tailing across `ROTATING`.
 
 **Deferred kill during revive (safety).** A kill-switch event can only tear down a `CONNECTED` tunnel.
 If a kill lands while the same session is mid-revive (`REVIVING`), `killTunnel` does **not** drop it —

@@ -218,7 +218,7 @@ private val job = AtomicReference<Job?>(null)
                     // own KDoc warns the user would otherwise be "left staring at an error state
                     // over a working connection until they stopped and restarted the VPN by hand"
                     // — would never run again for this session. Safe on a cancelled coroutine: it
-                    // re-checks session ownership, giveUpOutcome, tunnel state and tunInterface
+                    // re-checks session ownership, giveUpOutcome, tunnel state and tunnelOwner
                     // under `lock` before it acts, so a stale call is a no-op.
                     //
                     // Caught locally, UNLIKE the unhealthy listener below: this scope has no

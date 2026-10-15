@@ -552,7 +552,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         // different situations: a failover give-up that could not contain traffic (service RUNNING,
         // a real stop), and a dying session that has already stopSelf()'d — where this
         // startForegroundService CREATES the service rather than signalling one. That is safe only
-        // because ACTION_STOP reaches stopVpn's `!shouldStop && tunInterface == null` early return,
+        // because ACTION_STOP reaches stopVpn's `!shouldStop && tunnelOwner is None` early return,
         // and stopVpn does not await anything — onStartCommand dispatches it via
         // tunnelOpScope.launch, but stopVpn has no suspension points, so it runs and calls
         // stopSelf() well inside Android's ~5 s startForeground deadline; if the stop path ever
