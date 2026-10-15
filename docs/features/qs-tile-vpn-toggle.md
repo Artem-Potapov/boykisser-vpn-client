@@ -199,27 +199,26 @@ When the QS panel is pulled down from the lock screen, `TileService.isLocked` re
 added `VpnConnectionState.BLACKHOLED` — the service is still running and still owns a TUN, so the tile
 must stay a working **Stop** control, exactly like `PAUSED`. Mapping it to `STATE_INACTIVE` (as `ERROR`
 is) would dispatch `ACTION_START` on tap, which `startVpn` no-ops with "VPN already running" — a dead
-control in the state where the user most needs a live one. **Widening this enum still needs a grep
-sweep, not a green build:** the two exhaustive `when` sites are compiler-checked, but the Stop gate is
-a plain boolean chain the compiler cannot flag. It now exists in exactly **one** place —
-`shouldStopOnTileClick`, called by both `decideTileClick` and `handleClick`'s no-IO fast path (plus
-`sendStopIntent`'s comment, which is prose only) — and `TileClickDecisionTest` sweeps the whole enum
-against it, so widening the enum fails a test. Before that extraction the gate was duplicated by hand
-in `handleClick`, and adding the state to the render while missing that copy left the tile rendering
-active and behaving dead, which is strictly worse than looking dead.
+control in the state where the user most needs a live one. Active-profile highlighting, tile Stop,
+and tile active/inactive share the exhaustive `isActiveSessionState` membership helper. Both
+`decideTileClick` and `handleClick`'s no-IO fast path call `shouldStopOnTileClick`, which delegates to
+that helper; `tileShowsActive` delegates to it as well. **Widening the enum still requires a caller
+sweep:** the helper is compiler-checked, while the retained whole-enum guards in
+`TileClickDecisionTest` and `MainActivityStateTest` pin each caller's contract against drift.
+`connectAction`, labels, and Main Disconnect remain separate policies, not new consumers of this set.
 
 **The tile offers Stop only in `BLACKHOLED` — the in-app "Reconnect" has no tile equivalent.** The
 in-app connect affordance is now three-valued (`state/ConnectAction`) and renders **"Reconnect"** in
 `BLACKHOLED`, routing through `state/ReconnectFlow`'s stop-then-start; see
 [auto-failover.md](auto-failover.md#reconnect-the-affordance-a-give-up-actually-offers). A QS tile has
 one binary action, so it cannot offer both Stop and Reconnect — Stop is the correct choice, since it
-is the exit that always works and needs no server pick. **Consequence, and it is a real one:** a tile
-Stop dispatched *while a Reconnect is in flight* overrides that reconnect for up to ~10 s, because
-`ReconnectFlow` watches a source-blind state signal and reads the resulting `DISCONNECTED` as its own
-teardown completing. `VpnViewModel.cancelReconnect()` covers the **in-app** teardowns only (the
-Disconnect button and a subscription delete, both via `disconnectAbandoningReconnect`); the tile
-never reaches it. **If you touch `sendStopIntent` or the Stop gate, this is your marker.** Ledgered in
-auto-failover.md's Known limitations and QA'd as Test 21.
+is the exit that always works and needs no server pick. A tile Stop dispatched **while a Reconnect is
+in flight** marks `EXTRA_USER_INITIATED_STOP`; the service increments
+`LogRepository.userStopGeneration`. `ReconnectFlow` observes that generation and abandons its
+sequence instead of treating the external Stop's `DISCONNECTED` as its own teardown completing.
+In-app teardowns cancel directly through `VpnViewModel.cancelReconnect()` / `disconnectAbandoningReconnect`.
+The flow's marked reconnect stop does not increment the user-stop generation. Keep that distinction
+when touching `sendStopIntent` or the Stop gate; QA Test 21 covers the external-Stop case.
 
 **`ERROR` remains `STATE_INACTIVE`, and that is an accepted compromise.** `ERROR` now conflates two
 situations: "session dying, VPN off" (where `Start` *is* the right tile action) and auto-failover's

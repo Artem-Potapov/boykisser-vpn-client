@@ -636,12 +636,13 @@ permanently disarmed.
 
 ### Why "just keep the tunnel up" is not fail-closed
 
-The spec originally said give-up should keep the dead tunnel established so traffic is never exposed.
-**That does not hold on the path that matters.** The all-servers-dead path tears the TUN down *before*
-the final bring-up fails, so a give-up can land with `tunnelOwner is None` and hand the user's traffic
-straight back to the clear network — and whether that happened would depend on *where* bring-up died
-(after a non-null `establish()` installed `LiveProxy` = contained, before = exposed). A posture that is fail-closed-if-you-are-lucky is
-worse than either consistent answer.
+The original "keep the dead tunnel established" description predates the rotation bridge. Current
+candidate replacement keeps the unread bridge authoritative: config/geo/split failure or a null/thrown
+`establish()` retains that exact containment handle for retry or same-handle adoption on give-up.
+Those pre-establishment failures are **not** an exposed path. After a non-null candidate is installed
+as `LiveProxy`, a real protector-registration or core-start failure tears that candidate down. If
+reopening the bridge then fails, the session can reach give-up with `tunnelOwner is None`; that is the
+path where merely "keeping the tunnel up" cannot supply containment.
 
 So when the session should own a tunnel and has none, the give-up ends up owning a **blackhole TUN**:
 same session name, MTU, addresses, default routes, DNS servers and split-tunnel plan as a real
@@ -697,9 +698,11 @@ to this channel must keep it that way.
 
 ### `BLACKHOLED` is a friendly facade, on purpose
 
-`VpnConnectionState.BLACKHOLED` was added rather than reusing `ERROR`, because `ERROR` maps to a dead
-session on every surface (tile → `STATE_INACTIVE`, no Disconnect) while a blackholed session is very
-much **alive and holding a TUN**. The enum constant is technical because only developers read it;
+`VpnConnectionState.BLACKHOLED` was added rather than reusing `ERROR`, because the tile treats
+`ERROR` as inactive (`STATE_INACTIVE`, Start) and active-profile highlighting excludes it. Main's
+Disconnect gate deliberately **includes ERROR**, since an unprotected give-up can leave the service
+running. A blackholed session is **alive and holding a TUN**, so it belongs in shared active-session
+membership and remains a tile Stop control. The enum constant is technical because only developers read it;
 **every user-visible string mapped from it is deliberately plain and non-alarming**:
 
 - `main_state_blackholed_still_proxying` — "Server is not responding" (`CONTAINED_BY_LIVE_TUNNEL`)

@@ -13,10 +13,9 @@ import org.junit.Test
  * `MainActivity` applies to every profile row, to the island header, and (via `isConnectedProfile`)
  * to the long-press action menu.
  *
- * It had **zero** test references before this class existed, despite being one of the boolean
- * chains `AGENTS.md` calls out as needing a grep sweep rather than a green build when
- * `VpnConnectionState` is widened. [everyStateIsClassifiedExplicitly] is the guard that turns that
- * grep sweep into a failing test.
+ * `isActive` delegates state membership to the exhaustive shared `isActiveSessionState` helper.
+ * [everyStateIsClassifiedExplicitly] remains a whole-enum guard for the caller's highlighting
+ * contract, including profile identity; compiler coverage of the helper alone cannot pin that wiring.
  *
  * This is deliberately NOT the connect-affordance rule — that one is `state/connectAction`, covered
  * by `ConnectActionTest`. The two disagree on purpose: `BLACKHOLED` is *active* here (the service
@@ -56,11 +55,9 @@ class MainActivityStateTest {
 
     @Test
     fun everyStateIsClassifiedExplicitly() {
-        // `isActive` is a boolean chain over the enum, not an exhaustive `when`, so adding a
-        // VpnConnectionState constant compiles cleanly and silently lands in the inactive branch.
-        // For a new LIVE state that is a leak of the wrong kind: the UI would report nothing
-        // connected while the service still owns a TUN. Enumerating the full enum here is what
-        // makes widening it a test failure instead of a grep everyone forgets to run.
+        // Shared membership is exhaustive, but keep this independent whole-enum classification:
+        // it pins Main's highlighting contract and verifies that isActive still delegates the
+        // state half to the helper. A widened enum requires an explicit caller-policy decision.
         val live = setOf(
             VpnConnectionState.CONNECTED,
             VpnConnectionState.CONNECTING,

@@ -4,15 +4,17 @@ import kotlinx.coroutines.CancellationException
 
 /**
  * Every mutation of the session's [TunnelInterfaceOwner], expressed as a pure function of the owner
- * the caller currently holds. The service performs the I/O — building a TUN, calling `establish()`,
- * closing an fd — and this object only decides **which owner may be installed over which predecessor
- * and which handle the caller still owes a close to**.
+ * the caller currently holds. The transition functions decide **which owner may be installed over
+ * which predecessor and which handle the caller still owes a close to**; the service applies those
+ * facts and performs TUN establishment and descriptor cleanup.
  *
- * Deliberately free of lock, close, `Builder`, logging and Android types: the ordering constraints the
- * bridge depends on (the rotation bridge stays authoritative through `establish()`, then the old
- * bridge is closed; adopt-instead-of-rebuild) are properties of the *decision*, so they are testable
- * here instead of only being visible in `XrayVpnService`. The earlier production order was
- * release-then-`establish()`; that is not the current constraint.
+ * The transition table is free of lock, close, `Builder`, logging and Android types. Effectful utility
+ * helpers are separate from those decisions: [installUnreadOrClose] invokes the supplied close
+ * callback on rejected installation, and [runBestEffortDiagnostic] and [completeBringUpWithDiagnostic]
+ * invoke caller-supplied callbacks. The bridge ordering constraints (keep the rotation bridge
+ * authoritative through `establish()`, then close it after replacement; adopt-instead-of-rebuild)
+ * remain testable decisions. The earlier production order was release-then-`establish()`; that is not
+ * the current constraint.
  *
  * Every install rejects an owner it would silently overwrite. An occupied role means a leaked VPN
  * interface or a second interface the session never asked for, so the failure is a loud
@@ -98,8 +100,8 @@ internal object TunnelOwnerTransitions {
      *
      * Only `None` and the rotation bridge are acceptable predecessors: anything else means a live
      * tunnel or an unread blackhole is already installed, and replacing it would strand that fd.
-     * Reached **after** a successful `establish()` only — a failed establish must release, never
-     * install.
+     * Reached **after** a successful `establish()` only. A null or thrown establishment installs
+     * nothing and preserves its predecessor, including a held rotation bridge.
      */
     fun <Handle> installLiveProxy(
         owner: TunnelInterfaceOwner<Handle>,
@@ -144,6 +146,17 @@ internal object TunnelOwnerTransitions {
         } catch (_: Throwable) {
             // Diagnostics are not lifecycle operations.
         }
+    }
+
+    /** Completes operational bring-up, isolating only the final success diagnostic. */
+    fun completeBringUpWithDiagnostic(
+        registerProtector: () -> Result<Unit>,
+        startXray: () -> Result<Unit>,
+        diagnostic: () -> Unit,
+    ) {
+        registerProtector().getOrThrow()
+        startXray().getOrThrow()
+        runCatching { diagnostic() }
     }
 
     fun <Handle> replaceLiveProxyWithRotationBridge(
@@ -199,8 +212,9 @@ internal object TunnelOwnerTransitions {
         }
 
     /**
-     * Ends tunnel ownership. The handle comes back for the caller to close, so no transition in this
-     * object is ever the thing that closes an interface.
+     * Ends tunnel ownership without closing anything. The caller installs the returned None owner
+     * before closing [ReleaseResult.handleToClose]; unlike the effectful utility helpers, this
+     * transition only returns owner and cleanup facts.
      */
     fun <Handle> release(
         owner: TunnelInterfaceOwner<Handle>,

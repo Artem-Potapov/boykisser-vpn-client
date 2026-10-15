@@ -100,17 +100,9 @@ class TileClickDecisionTest {
 
     @Test
     fun everyStateIsClassifiedExplicitly() {
-        // The Stop gate is a boolean chain over the enum, not an exhaustive `when`, so adding a
-        // VpnConnectionState constant compiles cleanly and silently falls through to the Start
-        // branch. For a new LIVE state that reproduces the exact shipped defect this test exists
-        // for: ACTION_START reaches startVpn's "VPN already running" early return, so the tile
-        // renders STATE_ACTIVE and does nothing. Enumerating the full enum makes widening it a test
-        // failure rather than a grep nobody runs.
-        //
-        // The sweep covers BOTH tile call sites, because both go through shouldStopOnTileClick —
-        // decideTileClick on the start path, XrayVpnTileService.handleClick on its no-IO fast path.
-        // It does NOT reach MainActivity.isActive or state/connectAction; those have their own
-        // whole-enum guards in MainActivityStateTest and ConnectActionTest.
+        // Shared active-session membership is exhaustive, but this whole-enum guard remains because
+        // it pins the tile's Stop policy and its decision wiring. A widened enum still needs an
+        // explicit caller-policy choice rather than relying on a green compile.
         val stops = setOf(
             VpnConnectionState.CONNECTING,
             VpnConnectionState.CONNECTED,

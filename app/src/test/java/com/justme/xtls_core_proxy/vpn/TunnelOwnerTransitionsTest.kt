@@ -471,6 +471,96 @@ class TunnelOwnerTransitionsTest {
         assertSame(cancellation, thrown)
     }
 
+    @Test
+    fun `failed completion diagnostic preserves successful bring-up`() {
+        val events = mutableListOf<String>()
+
+        val result = runCatching {
+            TunnelOwnerTransitions.completeBringUpWithDiagnostic(
+                registerProtector = {
+                    events += "register"
+                    Result.success(Unit)
+                },
+                startXray = {
+                    events += "start"
+                    Result.success(Unit)
+                },
+                diagnostic = {
+                    events += "diagnostic"
+                    throw IllegalStateException("diagnostic failure")
+                },
+            )
+        }
+
+        assertTrue("A diagnostic must not fail successful bring-up: $result", result.isSuccess)
+        assertEquals(listOf("register", "start", "diagnostic"), events)
+    }
+
+    @Test
+    fun `protector failure propagates without starting core or reporting success`() {
+        val failure = IllegalStateException("protector registration failed")
+        val events = mutableListOf<String>()
+
+        val result = runCatching {
+            TunnelOwnerTransitions.completeBringUpWithDiagnostic(
+                registerProtector = {
+                    events += "register"
+                    Result.failure(failure)
+                },
+                startXray = {
+                    events += "start"
+                    Result.success(Unit)
+                },
+                diagnostic = { events += "diagnostic" },
+            )
+        }
+
+        assertSame(failure, result.exceptionOrNull())
+        assertEquals(listOf("register"), events)
+    }
+
+    @Test
+    fun `core start failure propagates without reporting success`() {
+        val failure = IllegalStateException("core start failed")
+        val events = mutableListOf<String>()
+
+        val result = runCatching {
+            TunnelOwnerTransitions.completeBringUpWithDiagnostic(
+                registerProtector = {
+                    events += "register"
+                    Result.success(Unit)
+                },
+                startXray = {
+                    events += "start"
+                    Result.failure(failure)
+                },
+                diagnostic = { events += "diagnostic" },
+            )
+        }
+
+        assertSame(failure, result.exceptionOrNull())
+        assertEquals(listOf("register", "start"), events)
+    }
+
+    @Test
+    fun `successful bring-up reports completion after core start`() {
+        val events = mutableListOf<String>()
+
+        TunnelOwnerTransitions.completeBringUpWithDiagnostic(
+            registerProtector = {
+                events += "register"
+                Result.success(Unit)
+            },
+            startXray = {
+                events += "start"
+                Result.success(Unit)
+            },
+            diagnostic = { events += "diagnostic" },
+        )
+
+        assertEquals(listOf("register", "start", "diagnostic"), events)
+    }
+
     // ---- owner identity and the no-side-effect guarantee ----
 
     @Test

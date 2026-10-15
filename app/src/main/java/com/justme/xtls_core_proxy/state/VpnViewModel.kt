@@ -76,14 +76,11 @@ fun autoPingServers(profiles: List<Profile>, subscriptions: List<Subscription>):
  * states offer a connect, and [connectLabelRes] keeps the label half under the same exhaustive
  * `when` so it cannot drift from the enablement half.
  *
- * It is NOT the single home for knowledge about [VpnConnectionState]'s partitions. Four other
- * hand-written enumerations over the same enum survive this one, each encoding a DIFFERENT rule:
- * `MainActivity.isActive` (which profile renders as the active one), `MainActivity`'s Disconnect
- * gate (which states are stoppable), `tile/TileClickDecision.decideTileClick` and
- * `tile/XrayVpnTileService`'s active check (what a QS-tile tap and its render mean). They are plain
- * boolean chains the compiler cannot flag, and one of them drifted once already and shipped a dead
- * QS-tile control. **Widening `VpnConnectionState` still requires the grep sweep `AGENTS.md`
- * mandates** — this enum removes one member of that class, not the class.
+ * The repository's shared active-session membership helper is consumed by the active-profile and
+ * tile surfaces, but does not replace their separate policies. `MainActivity.isActive` decides which
+ * profile row is highlighted; Main's Disconnect gate includes ERROR; tile Stop/active rendering use
+ * the same membership through their own seams. Those callers retain whole-enum guards because a new
+ * state can compile without making its caller policy explicit.
  *
  * It lives here (not in `MainActivity`) so [FastestConnectRunner] can re-check it at delivery time,
  * not only at the menu tap that started the probe — see that class's KDoc ("Delivery-time re-gate")

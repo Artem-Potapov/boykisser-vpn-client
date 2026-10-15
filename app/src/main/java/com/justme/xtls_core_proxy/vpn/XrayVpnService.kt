@@ -659,10 +659,11 @@ class XrayVpnService : VpnService() {
                 // Must succeed before Xray dials, or (with self-exclusion removed in
                 // Task 2) the proxy socket would route into the tun and loop. getOrThrow()
                 // also surfaces a controller-install failure from the Go bridge.
-                XrayBridge.registerProtector(this@XrayVpnService).getOrThrow()
-
-                XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath).getOrThrow()
-                LogRepository.append("Xray core started")
+                TunnelOwnerTransitions.completeBringUpWithDiagnostic(
+                    registerProtector = { XrayBridge.registerProtector(this@XrayVpnService) },
+                    startXray = { XrayBridge.startXray(configJson, fd, geoAssetDir.absolutePath) },
+                    diagnostic = { LogRepository.append("Xray core started") },
+                )
             }
         }
     }
@@ -1083,9 +1084,9 @@ class XrayVpnService : VpnService() {
      * mutation, and route every escape through a single fail path.
      *
      * [unprotectedRecoverySinceMs] marks this as THE single automatic recovery an UNPROTECTED
-     * give-up is granted, carrying the instant that give-up happened. Only the re-arm timer passes
-     * it; ordinary rotations (the health monitor, and this method's own recursive retry through the
-     * candidate list) pass null because they are not spending that budget.
+     * give-up is granted, carrying the instant that give-up happened. The re-arm timer passes it to
+     * recursive candidate retries, so the timestamp remains attached to that one recovery budget.
+     * Ordinary rotations (the health monitor) pass null because they are not spending that budget.
      */
     private fun rotateTunnel(sessionEpoch: Long, unprotectedRecoverySinceMs: Long? = null) {
         tunnelOpScope.launch {
@@ -1549,15 +1550,12 @@ class XrayVpnService : VpnService() {
     /**
      * Give up on rotation, FAIL-CLOSED.
      *
-     * "Just keep the tunnel established" does not hold on the path that matters: a candidate already
-     * installed as `LiveProxy` can be torn down *before* a later bring-up step fails, so a give-up can
-     * land with `tunnelOwner is None` and hand the user's traffic straight back to the clear network —
-     * and whether that happens would depend on where bring-up died (after a non-null `establish()`
-     * installed `LiveProxy` = contained, before = exposed), which is worse than either consistent
-     * answer. A pre-establish `null`/throw does not take that path: it leaves the unread bridge
-     * authoritative for adoption. So when this session should own a tunnel and has none, re-establish
-     * a BLACKHOLE one: same routes and captured apps, no protector, no Xray — packets enter an fd
-     * nobody reads and are dropped.
+     * Keeping the previous live tunnel is not sufficient for every give-up: after a non-null
+     * candidate installs `LiveProxy`, a protector-registration or core-start failure tears it down.
+     * If reopening the rotation bridge also fails, give-up reaches `None` and must try to establish
+     * a blackhole. Pre-establishment failure or null/throw instead preserves the exact unread bridge
+     * for adoption. A blackhole uses the same routes and captured apps, no protector, and no Xray —
+     * packets enter an fd nobody reads and are dropped.
      *
      * Note the DELIBERATE disagreement between the two "states" this leaves behind:
      * [sessionTunnelState] returns to CONNECTED because that is mechanically required — a rotation
