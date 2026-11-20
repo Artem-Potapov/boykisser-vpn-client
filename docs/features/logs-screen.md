@@ -313,6 +313,57 @@ byte budget is the primary fix; the `runCatching` is the backstop.
 > credential shapes found (e.g. Hysteria2 password, any `"password"`/auth fields, server-auth tokens).
 > This wave intentionally makes **no** change to `sanitize()`.
 
+## Debug-only dump actions (QA retrieval contract)
+
+The Logs overflow menu carries two actions that exist **only in the debug source set** —
+`Dump to tmp file` and `Dump to logcat` ([`DebugLogDumpActions.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt)).
+They exist so autonomous device-QA agents can retrieve the **redacted in-memory
+`LogRepository.logs` buffer** without `adb logcat` screen-scraping. Like Copy/Share/Export, they
+read exclusively from `LogRepository.logs` and never touch `filesDir/logs/xray-core.log`; the
+raw-file redaction boundary above is unchanged. The release source set ships empty
+[`DebugLogDumpActions.kt`](../../app/src/release/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt)
+stubs, and the menu labels are debug-source-set resources — release APKs contain none of the
+actions, labels, or dump logic (verified by release-build inspection, not just by the stub).
+
+**Dump text shape** (identical for both actions, built by
+[`DebugLogDumper.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumper.kt)):
+the **first line is the marker**, followed by every buffer line in order, with a trailing newline:
+
+```
+[log-dump] utc=2026-11-20T00:01:57.352931Z profile=🇫🇷Франция TLS [YT без рекламы] FR-T1 lines=179
+[17:45:06.740] Starting VPN service
+...
+```
+
+The marker's profile is the display name of the profile **CONNECTED at dump time** (resolved via
+`ActiveProfileRepository.getActiveProfileId` → `ProfileDao.getById`, off the main thread), or
+`<none>` when disconnected/unresolvable; profile-name control characters are flattened so the
+marker is always exactly one line.
+
+**Dump to tmp file** writes the dump text (UTF-8, off the main thread) to a unique
+`log-dump-<UTC yyyyMMdd-HHmmss-SSS>.txt` under `File(getExternalFilesDir(null), "tmp")` — directly
+pullable via `adb pull` with no run-as. After the write, a persistent debug-only status line on
+the Logs screen (`DebugLogDumpStatus`) shows `Dumped to: <full path>` (plus a failure line on
+error), so `uiautomator dump` captures the exact path to pull. Same-millisecond dumps resolve a
+`-N` suffix instead of overwriting.
+
+**Dump to logcat** emits the dump text on tag **`XTLS.LogDump`** as: one
+`log-dump begin chunks=<M> lines=<N>` entry, then `M` entries
+`log-dump NNNN/NNNN <payload>` (zero-padded indexes), then `log-dump end`. The text is first
+escaped (`\` → `\\`, newline → `\n`, CR → `\r`) so every entry is single-line, then chunked at
+3000 UTF-8 bytes — below logd's ~4068-byte per-entry payload limit, never splitting a Unicode
+code point. **Reassembly procedure**: take the last `begin`…`end` block for tag `XTLS.LogDump`
+(`adb logcat -d -s XTLS.LogDump`), collect entries matching
+`log-dump (\d+)/(\d+) (.*)$`, assert indexes are contiguous `1..M`, concatenate the payloads in
+order, then unescape (`\\`→`\`, `\n`→newline, `\r`→CR). The result is byte-exact: marker shape,
+buffer lines, and trailing newline all match a same-buffer file dump (verified on-device at 1 and
+8-chunk scale). A concurrent append between two dumps shows up as newer lines at the tail only —
+an earlier dump's buffer is always a byte-exact **prefix** of a later one (the buffer is
+append-only).
+
+Failure/completion results are surfaced as a toast and in the persistent status line, without
+exposing raw-log contents (error summaries carry only exception detail, never buffer data).
+
 ## The live buffer-size setting
 
 [`log/LogRepository.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogRepository.kt)
@@ -378,6 +429,8 @@ fact about this screen:
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
 | [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringTransition` (current session AND `REVIVING`/`ROTATING` — the single defer-vs-drop rule for a kill landing mid-transition). Auto-failover added the rotation half in the same file — `SessionTunnelState.ROTATING`, `canReserveRotation` (CONNECTED→ROTATING), `shouldDeferKillDuringTransition` (REVIVING **or** ROTATING), the monitor/receiver/give-up predicates and `activeProfileIdToRestoreOnRefusedStart`; see [auto-failover.md](auto-failover.md). |
 | [`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt) | Pure `bound(lines, maxBytes)` → newest-tail `BoundedLog` (`text`/`includedLines`/`totalLines`/`truncated`) under a 256 KiB budget; keeps the inline Copy/Share payload clear of the Binder transaction limit. Export bypasses it (streams). |
+| [`log/DebugLogDumper.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumper.kt) | Debug-source-set pure helpers: marker shaping (UTC + connected profile + `<none>` fallback + control-char flattening), full-buffer rendering, UTF-8-safe `chunkUtf8` (≤3000 bytes, no split code points), logcat escape/unescape, unique dump-file naming/writing. No Android imports — JVM-tested. |
+| [`log/DebugLogDumpActions.kt` (debug)](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) / [(release)](../../app/src/release/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) | Debug: the two overflow-menu items + persistent `DebugLogDumpStatus` line + dump orchestration (I/O and Room lookup off main). Release: empty stubs so no action, label, or logic is packaged. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, single overflow menu (Copy/Share/Export + a divider then the destructive **Clear** — no bare toolbar icon), fully-tappable radio rows (`selectable`), a large-log explainer dialog gating Copy/Share, level selector dialog (persist-only), buffer selector dialog (live). Copy/Share go through `LogShareBudget` + `runCatching`. |
 
 ## Error handling
@@ -440,6 +493,12 @@ fact about this screen:
 - **JUnit4 (JVM)** — `ConfigBuilderTest` forces the `log` object (including hard-coded `access =
   "none"`) for VLESS, Hysteria2 URI, and raw-JSON overwrite paths; `toPingTestConfig` forces
   `NONE` with no `error` key.
+- **JUnit4 (JVM, debug test source set)** — `app/src/testDebug/.../log/DebugLogDumperTest.kt`:
+  pins the exact marker format (timestamp/profile/`<none>`), control-character flattening,
+  full-buffer rendering (including empty), UTF-8 chunk budget inclusivity (3000-byte boundary),
+  multibyte/surrogate-pair never-split, lossless chunk reassembly, oversized single-line splitting,
+  escape round trips (literal `\n` sequences survive), and unique/safe dump-file naming + content
+  (including same-instant collision resolution).
 - **On-device (manual)**: set level = Debug, connect, confirm Xray-core lines appear; change level while
   connected, confirm the running session is unaffected, then disconnect/reconnect and confirm the new
   level takes effect; trigger kill-switch pause/revive and confirm log lines keep flowing to the same

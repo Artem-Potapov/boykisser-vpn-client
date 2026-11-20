@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-source-set-only strings for the Logs dump actions. Never merged into release
+    resources, so the release APK carries none of these labels. translatable="false"
+    keeps the two menu labels byte-exact (QA agents match them verbatim) and keeps
+    lint's MissingTranslation check quiet about the deliberately English-only set.
+-->
+<resources>
+    <string name="debug_logs_dump_to_file" translatable="false">Dump to tmp file</string>
+    <string name="debug_logs_dump_to_logcat" translatable="false">Dump to logcat</string>
+    <string name="debug_logs_dump_status_file" translatable="false">Dumped to: %1$s</string>
+    <string name="debug_logs_dump_status_logcat" translatable="false">Logcat dump: %1$d chunks (tag %2$s)</string>
+    <string name="debug_logs_dump_failed" translatable="false">Dump failed: %1$s</string>
+    <string name="debug_logs_dump_toast_file" translatable="false">Dump written to tmp file</string>
+    <string name="debug_logs_dump_toast_logcat" translatable="false">Dumped %1$d chunks to logcat</string>
+</resources>

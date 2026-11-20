@@ -162,6 +162,9 @@ private fun LogsScreen(onBack: () -> Unit) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.logs_action_export)) },
                             onClick = { menuOpen = false; exportLauncher.launch("boykisser-log.txt") })
+                        // Debug source set; the release stub renders nothing, so the
+                        // packaged release menu stays Copy/Share/Export/Clear only.
+                        DebugLogDumpMenuItems(logs = logs, closeMenu = { menuOpen = false })
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.logs_action_clear)) },
@@ -192,6 +195,7 @@ private fun LogsScreen(onBack: () -> Unit) {
                 trailingValue = stringResource(R.string.logs_buffer_lines, buffer),
                 onClick = { bufferDialog = true })
             HorizontalDivider()
+            DebugLogDumpStatus()
             Surface(Modifier.fillMaxWidth().weight(1f), tonalElevation = 1.dp) {
                 LazyColumn(state = listState, modifier = Modifier.padding(8.dp)) {
                     items(logs) { line ->
