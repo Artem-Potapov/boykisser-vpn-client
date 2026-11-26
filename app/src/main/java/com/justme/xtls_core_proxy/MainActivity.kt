@@ -516,8 +516,10 @@ private fun MainScreen(
     val subscriptions by viewModel.subscriptions.collectAsState()
     val pingStates by viewModel.pingStates.collectAsState()
     var promoGate by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(Unit) {
-        if (promoGate == null) promoGate = PromoGate.resolve(mainContext, LocalDate.now())
+    if (PromoGate.PROMOTION_ENABLED) {
+        LaunchedEffect(Unit) {
+            if (promoGate == null) promoGate = PromoGate.resolve(mainContext, LocalDate.now())
+        }
     }
     // Auto-ping on open. NOT LaunchedEffect(Unit): the Room-backed profile list is empty on first
     // composition, so a Unit-keyed effect would fire against nothing. Keyed on list-nonempty, it
@@ -538,7 +540,8 @@ private fun MainScreen(
             if (AutoPingLatch.consume()) viewModel.pingTestGroup(autoPingCandidates)
         }
     }
-    val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
+    val showPromo = PromoGate.canShow(promoGate) &&
+        !PromotedSubscription.hasValidSubscription(subscriptions)
     var bannerDismissed by rememberSaveable { mutableStateOf(false) }
 
     // Connect-to-fastest (Task 10): the ViewModel never calls connect() itself for this — it surfaces

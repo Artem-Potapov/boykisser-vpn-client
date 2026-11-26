@@ -1,9 +1,9 @@
 # QA — Auto-Failover (manual on-device)
 
-**Build under test:** branch `feat/auto-failover-core`, HEAD `a23cf36` (versionName `2.3.0R`,
-versionCode 4). Reinstall with `./gradlew :app:installDebug`. **If you edit `shared_prefs` or any
-resource between runs, install with `--rerun-tasks`** — a plain `installDebug` can be `UP-TO-DATE`
-and leave the old build on the device, which reads as the app ignoring your change.
+**Latest maintainer-verified build:** branch `auto-failover-engine-migration-development`, HEAD
+`e57953ef5f5c52e88b33f5719e9c9a99ff4b0f7b` (versionName `3.0.0PRE`). Earlier evidence remains
+labeled by source in the result log. Confirm the installed commit before any rerun; the commit minimums
+for Tests 23 and 24 below still apply.
 
 > **Test 23 requires `43e26d8` or later.** That is where the rotation bridge landed; on any earlier
 > HEAD the gap it covers is still open, so a tester on a stale build would capture cleartext during a
@@ -22,7 +22,10 @@ lose connectivity instead of briefly leaking (Test 23). When it runs out of serv
 fail-closed** — it re-establishes a *blackhole*
 TUN (an fd nobody reads) rather than releasing traffic to the clear network — and reports which of
 three physically different situations it left behind. Feature reference:
-[`docs/features/auto-failover.md`](../features/auto-failover.md).
+[`docs/features/auto-failover.md`](../features/auto-failover.md). Dormant, unreachable, and superseded
+procedures are kept out of the active run in
+[`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md); same-numbered stubs below preserve the
+original matrix layout.
 
 **Default state is OFF.** Everything below assumes you turn it on at Settings → Auto-failover first.
 
@@ -153,8 +156,8 @@ the user "your traffic is blocked" would be simply false.
 **PASS:**
 - Logs: `Failover: giving up (no healthy candidate left in pool)` then
   `Failover: no server to switch to; the current tunnel is still up and traffic stays inside it`.
-- Ongoing notification reads "**Server is not responding** — no other server to try" (i.e.
-  `vpn_status_no_response`), **not** the "paused to keep you protected" line.
+- Ongoing notification reads "**Server is not responding — couldn't switch to a working one**"
+  (`vpn_status_no_response`), **not** the "paused to keep you protected" line.
 - The alert title is "Server is not responding" and its body says you are **still protected but pages
   may not load** — not "your connection is paused".
 - The tunnel is still up: `dumpsys connectivity` still shows the VPN, and traffic to a *different*
@@ -187,100 +190,15 @@ if it did not).
 
 ---
 
-## Test 5 — The `UNPROTECTED` give-up and the full "disconnect now, stop if the re-arm fails" lifecycle ★★
+## Test 5 — Disable failover while `BLACKHOLED` (5e); historical `UNPROTECTED` lifecycle (5a–5d)
 
+### 5a–5d — Superseded/dormant; full procedures archived
 
-**Why:** **this entire path has never executed anywhere** — not in unit tests, not in the instrumented
-suite, not on hardware. It needs `Builder.establish()` itself to fail, which cannot be staged
-off-device.
-
-**How to make `establish()` fail** — try these in order, and note which one worked:
-- **Revoke VPN consent while connected**: Settings → Network → VPN → the app's gear → "Forget"/revoke,
-  or `adb shell cmd appops set com.justme.xtls_core_proxy ACTIVATE_VPN deny`. This is the most likely
-  route to a genuine `establish()` failure. **This is the route that worked (2026-08-06).** Note
-  what it does *not* do: revoking consent this way does not tear the tunnel down — the VPN stays up
-  until something else tears it down.
-- **Start another VPN app** so it takes the single VPN slot, then kill all your servers.
-- **`adb shell pm revoke`/`cmd appops`** any permission the builder needs, mid-session.
-
-If none of these produce an `UNPROTECTED` outcome, **record that in this file rather than deleting the
-test** — "we could not force it" is a useful result and the path stays unproven.
-
-### 5a — First `UNPROTECTED` give-up
-
-**PASS:**
-- Logs: `Failover: blackhole TUN could not be established: …` then
-  `Failover: WARNING - no tunnel could be established, traffic is NOT contained`.
-- State is **Error**, and the in-app error line reads "We couldn't keep your connection protected.
-  Please turn the VPN off and on again, or choose another server."
-- Ongoing notification reads "**Not protected — please reconnect**".
-- The alert title is "**Connection is not protected**", and its body does **not** claim anything is
-  contained.
-- **The service is still running** — the Disconnect button is visible in the app.
-
-**FAIL — report immediately:** any containment wording ("paused on purpose", "nothing leaks") in this
-state. That is telling the user their traffic is safe at the exact moment it is not.
-
-### 5b — The single automatic recovery rotation
-
-Stay in 5a's state. The re-arm timer fires after `rotationWindowMs` (default **10 minutes**; shorten
-it by editing `failover_rotation_window_ms` in `shared_prefs/xray_prefs.xml` and force-stopping the
-app, since the screen has no control for it).
-
-> **Two traps here, both confirmed on 2026-08-06.** The key is real
-> (`FailoverPreferences.KEY_WINDOW`), but (1) reinstalling after a prefs/resource edit may need
-> `--rerun-tasks`, or the device keeps the old build; and (2) `coerce()` applies
-> `rotationWindowMs.coerceIn(WINDOW_MIN = 60_000L, WINDOW_MAX)`, so **anything below 60 s becomes
-> 60 s**. A 30 s edit producing a 60 s wait is the floor, not a bug — shorten `WINDOW_MIN` in source
-> if you need faster than that.
-
-**PASS:** exactly **one** rotation is attempted (a rotation, **not** a monitor restart — the log must
-show `Failover: rotating …`, not `Failover monitor started`). If a server is reachable again by then,
-it connects and everything clears.
-
-**FAIL:** the log shows only `Failover monitor started` — that would mean the re-arm went back to the
-monitor path, which out of `UNPROTECTED` can never produce a rotation (there is no tunnel, so the probe
-travels the clear network and always succeeds).
-
-### 5c — The second uncontained give-up stops the service
-
-Keep every server dead and keep `establish()` failing, so the 5b rotation also ends `UNPROTECTED`.
-
-**PASS:**
-- Log: `Failover: recovery attempt also failed to bring up a tunnel; stopping the VPN`.
-- The in-app error reads "We couldn't reach any server, so the VPN has been switched off. Choose a
-  server and try again."
-- A **1102 error notification** with that same text appears **and survives** the foreground service
-  stopping (it has its own id).
-- State is **Disconnected**, the ongoing notification is gone, and `dumpsys connectivity` shows **no**
-  VPN.
-
-**FAIL:** the service keeps running in a state where it protects nothing; or it stops on the *first*
-`UNPROTECTED` (that would forfeit the automatic recovery and switch the VPN off without the user
-asking).
-
-### 5d — Disable failover mid-`UNPROTECTED` leaves a *usable* state
-
-From 5a, turn auto-failover **off** at the settings screen before the timer fires.
-
-**PASS, all four:**
-1. The pending retry is cancelled — log shows
-   `Failover: retry timer stood down (feature disabled or session ended)`, or nothing fires at all.
-   **No automatic rotation and no automatic VPN shutdown may happen after the user disabled the
-   feature.** - FAIL
-2. **The controls are still alive** — this is the check that matters and it is the mirror of 5e.3.
-   The main button still offers **Connect** and is **tappable**; tap it and a working server comes up
-   (the service restarts rather than refusing with "VPN already running"). **Disconnect** also still
-   works.
-3. The **1105 alert stays up** and the ongoing line still reads the "not protected" copy. Unlike 5e,
-   nothing here is contained, so retracting the warning would leave the user with no indication that
-   they are on the clear network.
-4. The state stays `ERROR` / not-protected. There is no TUN to preserve, so nothing about the traffic
-   path changes at the moment of the toggle.
-
-**FAIL:** Connect does nothing / logs "VPN already running" while the service keeps running with no
-TUN — the user is unprotected with only Disconnect working and the loudest warning retracted; or the
-1105 alert disappears.
+Moved to [`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md#tests-5a5d--historical-unprotected-lifecycle).
+Do not score rotation-bridge establishment failure against the old fresh-blackhole/`UNPROTECTED`
+steps. The current service establishes the rotation bridge before teardown; failure aborts the
+handover while the prior live/dead TUN remains authoritative. The separate fresh-establish permission-
+revocation path reports `VPN permission was revoked`. Test 5e below remains active.
 
 ### 5e — Disable failover while `BLACKHOLED` leaves a *usable* state
 
@@ -294,30 +212,28 @@ the episode state is what stops this stranding the user.
    it down would drop the user onto the clear network as a side effect of a settings change, and
    switching to `ERROR` would offer a plain Connect that `startVpn` refuses with "VPN already
    running" — a dead button one state over.
-3. The main button therefore still reads **"Reconnect"** and is **tappable** — tap it and a working
+3. The active profile's row still reads **"Reconnect"** and is **tappable** — tap it and a working
    server comes up (Test 19's criteria).
-4. **Disconnect** also still works.
+4. The state-row **Disconnect** button also still works.
 
 **FAIL:** the alert stays up; or the controls go dead so neither Reconnect nor Disconnect is
 available; or the TUN is torn down and traffic goes to the clear network on a settings change.
 
 ---
 
-## Test 6 — The notification Stop action, app closed, from `UNPROTECTED` ★
+## Test 6 — Notification Stop action, app closed, from a contained give-up ★
 
-**Why:** in `UNPROTECTED` the copy tells the user to turn the VPN off, and the ongoing notification is
-the only surface guaranteed present when the app UI is closed. Never exercised on hardware.
+The historical `UNPROTECTED` variant is archived in
+[`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md#test-6-unprotected-variant--notification-stop-app-closed)
+because its required 5a state is not currently reachable.
 
-**Steps:**
-1. Reach the 5a state.
+**Active steps:**
+1. Reach a contained give-up from Test 2 or Test 3.
 2. **Swipe the app away from Recents** (do not force-stop — that kills the service too).
-3. Pull down the shade and tap **Stop** on the ongoing "Not protected" notification.
+3. Pull down the shade and tap **Turn off** on the ongoing notification.
 
-**PASS:** the VPN stops. `dumpsys connectivity` shows no VPN, the ongoing notification disappears.
-**FAIL:** the action is missing, does nothing, or the service stays alive.
-
-**Also:** repeat with the app closed from the **`BLACKHOLED`** state (Test 2). The Stop action must be
-present and work there too.
+**PASS:** the VPN stops. `dumpsys connectivity` shows no VPN and the ongoing notification disappears.
+**FAIL:** the action is missing, does nothing, restarts the VPN, or leaves the service alive.
 
 ---
 
@@ -432,8 +348,11 @@ there the app really is not behind a VPN, and that outcome reports itself.
 for **all three** give-up outcomes, because a give-up leaves the session in `CONNECTED` and never
 touches the kill-switch monitor.
 
-**Steps (both features on), run once per outcome:** reach a give-up — Test 2 (`CONTAINED_BY_BLACKHOLE`),
-Test 3 (`CONTAINED_BY_LIVE_TUNNEL`), Test 5a (`UNPROTECTED`) — then foreground a kill-listed app.
+**Steps (both features on), run once per currently reachable contained outcome:** reach a give-up —
+Test 2 (`CONTAINED_BY_BLACKHOLE`) or Test 3 (`CONTAINED_BY_LIVE_TUNNEL`) — then foreground a
+kill-listed app. The historical `UNPROTECTED` variant is dormant with
+[Tests 5a–5d](auto-failover-qa-dormant.md#tests-5a5d--historical-unprotected-lifecycle); do not claim
+it from a contained-state run.
 
 **PASS:**
 - The give-up alert (**1105**) is **gone** the moment the ⚠️ "VPN is OFF — you're exposed" alert
@@ -545,11 +464,16 @@ being tested elsewhere…"), not the NO_RESPONSE one.
 earlier run, so a winner may be chosen from non-fresh data with no message at all. If you see a
 suspiciously instant winner, that is the known cause, not a new bug.
 
-### 13g — Rotation mid-probe
-Connect with auto-failover on, kill the server, and start a Connect-to-fastest run so the rotation and
-the probe overlap.
-**PASS:** no crash, no duplicate connect; whichever path wins, the highlighted server and the tile
-agree with the server traffic actually flows through.
+**Maintainer ruling 2026-11-23:** the observed result failed this wording expectation but produced the
+same outcome as the same-pool case. The maintainer overruled the failure as equal or better behavior;
+no product change is required by this result. The separate stale-success limitation above remains a
+known heuristic limitation, not a new failure.
+
+### 13g — Rotation mid-probe (dormant/unreachable)
+
+Moved to [`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md#13g--rotation-mid-probe).
+Maintainer result 2026-11-23: Connect to fastest cannot be used while connected, so this overlap
+cannot be produced through the specified control. Do not substitute a disconnected run.
 
 ### 13h — Russian rendering of the three long error strings
 Switch the app language to Russian and provoke each of the three connect-to-fastest errors
@@ -560,62 +484,12 @@ the screen or overlap the progress row on a small display.
 
 ---
 
-## Test 14 — T10b: the refused-start rollback ★★
+## Test 14 — T10b refused-start rollback (dormant/unreachable) ★★
 
-**Why:** ruled explicitly into this matrix instead of being checked over the SSH-tunnelled adb link
-(which likely would not survive an active tun). This closes "UI names B while traffic flows through A"
-on the refused-start path.
-
-**You cannot reach this by tapping Connect while connected.** Every such control is gated by the same
-rule — `state/connectAction(state)`, which returns `UNAVAILABLE` in `CONNECTED` (it replaced the old
-boolean `canConnect`): the per-server row is disabled, the long-press dialog's **Connect** and
-**Connect to fastest** rows are disabled by the *same* value (`ProfileActionsDialog`), and the QS tile
-returns **Stop** while `CONNECTED`. A tester who tries that route finds every control dead and records
-a meaningless PASS. (Note this is specifically `CONNECTED`. In `BLACKHOLED` the same rule returns
-`RECONNECT` and the controls **are** live — that is Test 19, not this one.)
-
-The reachable window is the one T10b actually guards: a start request for **B** is *authorised while
-the VPN is off*, then sits behind a system dialog while **A** comes up underneath it. `MainActivity`'s
-`onConnect` records `pendingProfileId = B` and writes **nothing** to `ActiveProfileRepository` until
-the dialog is answered — so A can take the session in between, and the grant then dispatches a start
-for B that `startVpn` refuses.
-
-**Setup:**
-- Two servers **A** and **B** with different exit IPs.
-- **A** is the *active* profile (connect to A once, then disconnect — always-on and the tile both
-  bring up whatever `ActiveProfileRepository` names).
-- **Always-on VPN enabled** for this app (Settings → Network → VPN → gear → Always-on). This also
-  means VPN consent is already granted, so `VpnService.prepare()` returns null later.
-- **Notification permission DENIED** for the app (Settings → Apps → *this app* → Notifications → off).
-  This is what makes the connect flow stop on a system dialog.
-
-**Steps:**
-1. Let always-on bring the VPN up on **A**. Confirm **Connected** and that A is highlighted.
-2. Tap **Disconnect**. The per-server Connect rows become enabled again.
-3. Immediately **tap Connect on server B**. The system **"Allow notifications?"** dialog appears.
-   **Do not answer it yet.**
-4. Wait ~10–30 s with the dialog open for the system's always-on watchdog to restart the VPN — it
-   comes up on the *active* profile, **A**, because step 3 wrote nothing. (Pull the shade down over
-   the dialog if you need to see the ongoing notification say **Connected**.)
-   *If always-on does not restart it on your device*, use the alternative in the note below.
-5. Now tap **Allow**. This runs `requestVpnPermissionAndConnect()` → `viewModel.connect(this, B)`,
-   which writes active = **B** and dispatches `ACTION_START` for B into a session already running A.
-6. Read the log: it should say `VPN already running`.
-
-**PASS:** **both** the in-app highlight **and** the QS tile label still say **A**, and an IP check
-still shows A's exit. The rollback fired.
-**FAIL:** the highlight or the tile switches to B while the tunnel is still A's — the misreported
-active server this rollback exists to prevent.
-
-**Alternative if always-on will not restart on demand (step 4):** with the app disconnected, tap
-**Connect on A**, answer its dialog, and *while A is still `CONNECTING`* tap **Connect on B**. The row
-disables itself as soon as `CONNECTING` is published, so this is a genuine race and may need several
-attempts — the always-on route above is the deterministic one. Do not substitute "tap Connect on B
-while connected": that control is disabled and proves nothing.
-
-**Known residual (expected, not a failure):** if the refusal lands while a rotation is in flight
-**and** that rotation then fails, the repository can be left naming the failed rotation target. Note it
-if you see it; it is a follow-up item, not a regression.
+Moved to [`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md#test-14--t10b-refused-start-rollback).
+The maintainer reproduced the oracle blocker on two phones with different Android versions: always-on
+did not restart after user Disconnect, including with notification permission granted. This is dormant
+pending a reliable platform helper or alternative setup, not an app PASS or FAIL.
 
 ---
 
@@ -639,27 +513,11 @@ Android's ~5 s `startForeground` deadline — miss it and you get
 
 ---
 
-## Test 16 — Connect from `UNPROTECTED` restarts without dropping foreground ★
+## Test 16 — Connect from `UNPROTECTED` (dormant/unreachable) ★
 
-**Why:** the recovery restart calls `stopVpn(stopService = false)` specifically so the FGS promotion
-stays continuous. A flicker out of foreground would risk the service being killed mid-restart.
-
-**Steps:**
-1. Reach the 5a `UNPROTECTED` state (service running, no tunnel).
-2. Bring a server back up.
-3. From the app, **tap Connect on a server** (the copy is telling the user to do exactly this).
-
-**PASS:**
-- Log shows `Restarting the tunnel to recover from an unprotected state (profile id=…)`, then a normal
-  `Starting VPN service` / connect sequence with a **fresh epoch**.
-- The connection succeeds.
-- The ongoing notification does **not** visibly disappear and reappear.
-- `adb shell dumpsys activity services com.justme.xtls_core_proxy | grep -i foreground` shows the
-  service stays foreground across the restart.
-
-**Known cosmetic issue (expected):** the restart publishes `DISCONNECTED` before `CONNECTING`, so the
-UI and tile may flicker to Disconnected/inactive for that gap. Noise, not a lie — there really is no
-tunnel at that instant.
+Moved to [`auto-failover-qa-dormant.md`](auto-failover-qa-dormant.md#test-16--connect-from-unprotected-restarts-without-dropping-foreground).
+Its required historical 5a state cannot be produced through the current pre-teardown rotation-abort
+path. Contained live-tunnel/blackhole give-ups are Reconnect scenarios, not substitutes for this test.
 
 ---
 
@@ -712,14 +570,15 @@ shut, Reconnect would work exactly once per ViewModel and look intermittent rath
 
 **Before you start:** confirm the control really is enabled in this state — an earlier revision of
 this matrix told the tester to use a control that was greyed out, and the test passed vacuously. In
-`BLACKHOLED` the main button must read **"Reconnect"** and be tappable, and the long-press dialog's
-**Connect** row must read "Reconnect" and be tappable too. If either is greyed out, that is a FAIL of
-this test, not a reason to skip it.
+`BLACKHOLED` the state-row button reads **Disconnect** and remains tappable. The active profile's row
+and its long-press **Connect** row must read **"Reconnect"** and be tappable. If the Reconnect controls
+are greyed out, that is a FAIL of this test, not a reason to skip it.
 
 **19a — `CONTAINED_BY_LIVE_TUNNEL` (a live core is closed).** Reach Test 3's state (give-up with the
-tunnel still up: no candidate or thrash cap). The main button reads **Reconnect**.
-1. Tap **Reconnect**, having first restored at least one working server.
-2. Watch the button: it must read **"Connecting…"** and be **non-tappable** during the window.
+tunnel still up: no candidate or thrash cap). The state-row button reads **Disconnect**; the active
+profile row reads **Reconnect**.
+1. Tap the row's **Reconnect**, having first restored at least one working server.
+2. Watch the row: it must read **"Connecting…"** and be **non-tappable** during the window.
 
 **PASS:** the session tears down and a new one comes up on the chosen server — state reaches
 `CONNECTED`, `dumpsys connectivity` shows a VPN, and traffic exits via the new server's IP. The 1105
@@ -1001,27 +860,28 @@ Record the outcome here as you go, so a partial run is still useful to the next 
 
 | Test | Result | Notes |
 |---|---|---|
-| 1 Basic rotation | | |
-| 2 Fail-closed give-up ★★ | | |
-| 3 Live-tunnel give-up | | |
-| 4 Thrash cap | | |
-| 5a/b/c/d UNPROTECTED lifecycle ★★ | | which method forced `establish()` to fail? |
-| 6 Notification Stop, app closed | | |
-| 7 Tile Stop from BLACKHOLED | | |
-| 8 Process-fresh arm | | |
-| 9a/b/c Failover without kill-switch | | |
-| 10 Survives kill-switch cycle | | |
-| 11 Live settings edits | | |
-| 12 Release APK + bridge ★★ | | |
-| 13a–h Connect to fastest | | |
-| 14 T10b refused-start rollback ★★ | | |
-| 15 ERROR Disconnect, dead session | | |
-| 16 Connect from UNPROTECTED | | |
-| 17 Offline guard | | |
-| 18 Teardown hygiene | | |
-| 19a/b/c Reconnect from a contained give-up ★★ | | 19c is the repeat-three-times guard |
-| 20 Second Reconnect tap during the window ★ | | first request must win |
-| 21 Tile/notification Stop overrides a Reconnect ⚠ | | known limitation — record surface + timing |
-| 22 Reconnect does not survive an Activity finish | | rotate/background must still complete |
-| 23a/b/c/d No cleartext during a switch ★★ | | capture required; record the bridge fd across 23b |
-| 24a/b/c/d Listed app opens AND closes during a switch ★★ | | 24a is the headline; record whether you had to retry to hit the window |
+| 1 Basic rotation | PASS (log/diagnostic oracle) | Established-first rotation/handover observed in maintainer-buffer evidence and agent reruns. |
+| 2 Fail-closed give-up ★★ | PASS (agent; reachable-path oracle) | Pre-dead-server path produced `CONTAINED_BY_LIVE_TUNNEL`, not `BLACKHOLED`; app/IP-check observations are not packet-capture proof. |
+| 3 Live-tunnel give-up | PASS (agent log/UI oracle) | |
+| 4 Thrash cap | PASS (maintainer + agent) | Agent observed exactly three admitted rotations then thrash-cap give-up. |
+| 5a/b/c/d UNPROTECTED lifecycle ★★ | ARCHIVED — superseded/dormant | See `auto-failover-qa-dormant.md`; rotation bridge aborts before teardown and preserves the prior live/dead TUN. Fresh-establish permission revocation instead reports `VPN permission was revoked`. |
+| 5e Disable failover while BLACKHOLED | PASS (maintainer) | |
+| 6 Notification Turn off, app closed | PASS (maintainer) | Contained-give-up variant passed. The earlier agent Stop→start observation remains historical and unreproduced; it does not reopen the row. Historical UNPROTECTED variant is archived. |
+| 7 Tile Stop from BLACKHOLED | PASS (maintainer) | Give-up tile rendering and Stop passed. |
+| 8 Process-fresh arm | PASS (agent session 2) | Process-fresh QS tile start captured the monitor-seed oracle. |
+| 9a/b/c Failover without kill-switch | PASS (maintainer) | |
+| 10 Survives kill-switch cycle | PASS (maintainer + agent) | |
+| 11 Live settings edits | PASS (maintainer + agent) | Agent captured steps 1/2/4; maintainer completed step 3. |
+| 12 Release APK + bridge ★★ | PASS (maintainer) | |
+| 13a–h Connect to fastest | a–e/h PASS (maintainer); f FAIL overruled; g ARCHIVED/dormant | 13f produced the same outcome as the same-pool case, which the maintainer judged at least as good. 13g is archived in `auto-failover-qa-dormant.md` because connect-to-fastest is unavailable while connected. |
+| 14 T10b refused-start rollback ★★ | ARCHIVED — dormant/unreachable | See `auto-failover-qa-dormant.md`. Reproduced on two phones: always-on did not restart after user Disconnect, including with notification permission granted. Reactivate only with a reliable helper or alternative setup; this is not an app PASS or FAIL. |
+| 15 ERROR Disconnect, dead session | PASS (maintainer) | |
+| 16 Connect from UNPROTECTED | ARCHIVED — dormant/unreachable | See `auto-failover-qa-dormant.md`; the current rotation-abort path does not produce historical 5a. |
+| 17 Offline guard | PASS (maintainer) | |
+| 18 Teardown hygiene | PASS (maintainer) | |
+| 19a/b/c Reconnect from a contained give-up ★★ | PASS (agent log/UI oracle) | 19c repeated. Matrix now names the actual controls: state-row Disconnect plus active-profile-row Reconnect. |
+| 20 Second Reconnect tap during the window ★ | PASS (agent log/UI oracle) | |
+| 21 Tile/notification Stop overrides a Reconnect ⚠ | PASS (maintainer) | |
+| 22 Reconnect does not survive an Activity finish | PASS (maintainer) | |
+| 23a/b/c/d No cleartext during a switch ★★ | PASS (maintainer) | With the limits recorded in `docs/known-issues/`; agent evidence was log/descriptor only. |
+| 24a/b/c/d Listed app opens AND closes during a switch ★★ | PASS (maintainer) | Agent session 2 did not hit the opportunistic window. |

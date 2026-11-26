@@ -215,22 +215,17 @@ Feature **entry points** intentionally switched off. Disabling is **at call site
 
 ### Promoted "Boykisser VPN" Subscription
 
-**Deep links dormant; in-app promo LIVE but remote-gated.**
+**Deep-link routes and in-app promotion are dormant.**
 
-Only manifest entry points switched off: in `AndroidManifest.xml` the two `subs/BoykisserLinkActivity` `<intent-filter>`s commented out → `bkvpn://add` **deep link** and `https://boykiss3r.site/app/add` **App Link** no longer resolve (`BoykisserLinkActivity` stays `android:exported="true"` but with no intent-filters nothing launches it implicitly).
+- `PromoGate.PROMOTION_ENABLED = false` guards both the Home banner and Subscriptions promo row. Neither screen launches `PromoGate.resolve` (no primary or fallback `/dowepromote` request and no promo lease access), and `PromoGate.canShow` rejects any restored positive verdict. The onboarding screen (`subs/BoykisserInfoActivity`) has no other in-app entry point. The UI, remote/date gate, and lease code are retained.
+- The two `subs/BoykisserLinkActivity` `<intent-filter>`s remain commented out in `AndroidManifest.xml`, so the `bkvpn://add` deep link and the HTTPS App Link do not resolve implicitly. The activity remains exported and can still be launched explicitly.
+- `MainActivity.maybeAddBoykisserSub(...)` still revalidates inbound extras against the approved-domain allowlist and requires user confirmation before adding a subscription. The independent name-theft warning and its `/didtheyconfess` probe wiring remain unchanged.
 
-Everything else active in code:
-- Home banner (`MainActivity`) and Subscriptions promo row (`subs/SubscriptionsActivity`) both render when `PromoGate.resolve(...) == true && !PromotedSubscription.hasValidSubscription(...)` — **not** hard-coded `showPromo = false`
-- `subs/PromoGate` is remote kill-switch (deliberate behavioral clone of name-theft gate — duplication intentional, do not extract shared helper): probes `/dowepromote` on `boykiss3r.site` then `somenewsteps.space` (HTTP 418 = show now, 409 = disarm, 451 = re-arm), persists disarm lease via `subs/PromoGateRepository` (`xray_prefs` / `promote_disarmed`), on inconclusive probe falls back to device-local date gate (shows on/after 2026-08-01)
-- Nag screen (`subs/BoykisserInfoActivity`) reachable from banner and promo row; inbound add path live: paste-and-submit hands approved URL to `MainActivity.maybeAddBoykisserSub(...)`, called (not commented out) from `onCreate`/`onNewIntent`, re-validates approved-domain allowlist (extra is forgeable)
-
-`docs/features/boykisser-vpn.md` / `boykisser-nag-screen.md` pre-date PromoGate re-enable — trust this section over them until refreshed.
+See [`docs/features/boykisser-vpn.md`](docs/features/boykisser-vpn.md) and [`docs/features/boykisser-nag-screen.md`](docs/features/boykisser-nag-screen.md).
 
 ### Sideload "Keep Android Open" Launch Popup
 
 **Disabled.** Gated behind `MainActivity.SIDELOAD_WARNING_LAUNCH_ENABLED = false`. Dialog, `SideloadWarningRepository`, strings, on-demand Settings-hub entry all remain. Flip flag to restore once-per-version launch prompt. See `docs/features/sideloading-warning.md`.
-
-**Note**: `boykiss3r.site` / `somenewsteps.space` **live** for two active probe paths — name-theft warning's status probe (`nametheft/NameTheftWarning.kt`) and promo gate's `/dowepromote` probe (`subs/PromoGate.kt`). Only promo **add** deep-link routes on those domains are dormant.
 
 ## Security Notes
 

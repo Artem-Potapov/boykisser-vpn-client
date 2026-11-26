@@ -144,9 +144,22 @@ internal object DebugLogDumper {
         throw IllegalStateException("no unique dump file name available in ${targetDir.path}")
     }
 
-    /** Creates [targetDir] if needed and writes [text] as UTF-8; returns the file written. */
+    /**
+     * Creates [targetDir] if needed and writes [text] as UTF-8; returns the file written.
+     * An unusable target (creation failed, or an existing non-directory) is reported explicitly
+     * rather than surfacing as an incidental IO error deep in the write. A benign
+     * already-exists race between the `mkdirs` check and a concurrent creator is accepted.
+     */
     fun writeDumpFile(targetDir: File, text: String, now: Instant): File {
-        targetDir.mkdirs()
+        if (!targetDir.exists()) {
+            val created = targetDir.mkdirs()
+            if (!created && !targetDir.isDirectory) {
+                throw IllegalStateException("Cannot use dump directory ${targetDir.path}: creation failed")
+            }
+        }
+        if (!targetDir.isDirectory) {
+            throw IllegalStateException("Cannot use dump directory ${targetDir.path}: not a directory")
+        }
         val file = resolveUniqueFile(targetDir, buildDumpFileName(now))
         file.writeText(text, Charsets.UTF_8)
         return file

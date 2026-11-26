@@ -175,4 +175,31 @@ class DebugLogDumperTest {
         val file = DebugLogDumper.writeDumpFile(dir, "x\n", fixedInstant)
         assertTrue(file.exists())
     }
+
+    @Test fun writeDumpFile_creationFailsUnderRegularFileParent_throwsExplicitError() {
+        val blocker = tmp.newFile("parent-is-a-file")
+        val target = File(blocker, "tmp")
+        val result = runCatching { DebugLogDumper.writeDumpFile(target, "x\n", fixedInstant) }
+        assertTrue("expected a creation-failure error, got $result", result.isFailure)
+        val message = result.exceptionOrNull()?.message
+        assertTrue("error must name the target and report creation failure, got: $message",
+            message?.startsWith("Cannot use dump directory") == true &&
+                message.contains(target.path) && message.contains("creation failed"))
+    }
+
+    @Test fun writeDumpFile_targetPathIsRegularFile_throwsExplicitError() {
+        val blocker = tmp.newFile("tmp-is-a-file")
+        val result = runCatching { DebugLogDumper.writeDumpFile(blocker, "x\n", fixedInstant) }
+        assertTrue("expected an explicit error, got $result", result.isFailure)
+        val message = result.exceptionOrNull()?.message
+        assertTrue("error must be an explicit directory error naming the target, got: $message",
+            message?.startsWith("Cannot use dump directory") == true && message.contains(blocker.path))
+    }
+
+    @Test fun writeDumpFile_existingDirectory_isAccepted() {
+        val dir = tmp.newFolder("existing-tmp")
+        val file = DebugLogDumper.writeDumpFile(dir, "x\n", fixedInstant)
+        assertEquals(dir, file.parentFile)
+        assertEquals("x\n", file.readText(Charsets.UTF_8))
+    }
 }

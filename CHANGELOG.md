@@ -3,6 +3,34 @@
 All notable changes to XTLS Core Proxy are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions track the app's `versionName`.
 
+## [3.0.0R] — 2026-11-26
+
+Tag: `3.0.0-Release`. Major release.
+
+## Auto-failover foundations, diagnostic log dumps, and release hardening
+
+### Added
+- **Fail-closed auto-failover foundations.** Shared TUN capture planning, sealed tunnel ownership,
+  establish-first rotation containment, honest active-session state handling, and shared manual-profile
+  queries support the live failover lifecycle without starting the later engine migration.
+- **Debug-only Logs dump actions.** The Logs overflow menu can write the redacted in-memory log buffer
+  to an app-external temporary file or chunk it to logcat, with a UTC timestamp, profile marker, and
+  pullable path. Release builds retain empty stubs and do not include the dump UI or implementation.
+
+### Changed
+- **Promotion disabled.** The retired Boykisser promotion remains in source but its Home and
+  Subscriptions surfaces are dormant; neither screen probes the retired promotion endpoints or reads
+  the promotion lease. The independent name-theft warning and subscription-add confirmation remain
+  unchanged.
+- **QA references and diagnostics.** Archived/unreachable failover procedures remain documented with
+  same-numbered stubs, and the confirmed Test 6 notification Stop and Test 7 tile Stop results are
+  recorded as maintainer passes.
+
+### Security
+- **Rotation containment.** A bridge TUN remains authoritative through candidate establishment and
+  is released only after the replacement owner is installed. Accepted platform residuals remain
+  documented in `docs/known-issues/` and are not claimed as fixed by this release.
+
 ## [3.0.0PRE] — 2026-09-02
 
 Tag: `3.0.0-PreRelease` (pending). Major release.

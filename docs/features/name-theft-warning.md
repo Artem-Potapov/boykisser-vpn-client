@@ -59,6 +59,7 @@ and link taps are manual QA.
 ## Related temporary changes
 
 - Sideload launch popup disabled via `MainActivity.SIDELOAD_WARNING_LAUNCH_ENABLED=false`.
-- Promoted subscription: deep-link / App Link entry points are dormant (manifest
-  intent-filters commented out); in-app surfaces are live and remote-gated via
-  `PromoGate`. See [`boykisser-vpn.md`](boykisser-vpn.md).
+- Promoted subscription: the implicit links and in-app promotion are dormant.
+  Neither promo screen runs `PromoGate` or its HTTP probes; the separate
+  name-theft warning gate described above is unchanged. See
+  [`boykisser-vpn.md`](boykisser-vpn.md).

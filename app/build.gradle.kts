@@ -20,7 +20,7 @@ val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase =
 
 // Single source of truth for the app version; reused in defaultConfig and the APK
 // output file names (androidComponents block below).
-val appVersionName = "3.0.0PRE"
+val appVersionName = "3.0.0R"
 
 val buildXrayAar by tasks.registering(Exec::class) {
     group = "build setup"
@@ -80,7 +80,7 @@ android {
         applicationId = "com.justme.xtls_core_proxy"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
+        versionCode = 6
         versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -233,6 +233,9 @@ dependencies {
 tasks.withType<Test>().configureEach {
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
     inputs.file(layout.projectDirectory.file("src/main/res/xml/network_security_config.xml"))
+    // ReleaseDumpStubGuardTest parses the release stub off the filesystem. Without this input an
+    // edit to the stub alone leaves testDebugUnitTest UP-TO-DATE and the guard never runs.
+    inputs.file(layout.projectDirectory.file("src/release/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt"))
 }
 
 // --- connectedAndroidTest post-run uninstall: OPT-IN -------------------------------------------

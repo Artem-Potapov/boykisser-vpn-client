@@ -18,6 +18,11 @@ import java.time.LocalDate
  */
 object PromoGate {
 
+    // The promoted service has shut down. Skip both activation probes and promo rendering.
+    internal const val PROMOTION_ENABLED: Boolean = false
+
+    internal fun canShow(resolved: Boolean?): Boolean = PROMOTION_ENABLED && resolved == true
+
     enum class Signal { FIRE, DISARM, REARM, UNKNOWN }
 
     /**

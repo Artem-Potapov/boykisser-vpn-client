@@ -335,34 +335,59 @@ the **first line is the marker**, followed by every buffer line in order, with a
 ...
 ```
 
-The marker's profile is the display name of the profile **CONNECTED at dump time** (resolved via
-`ActiveProfileRepository.getActiveProfileId` → `ProfileDao.getById`, off the main thread), or
-`<none>` when disconnected/unresolvable; profile-name control characters are flattened so the
-marker is always exactly one line.
+The marker's profile is the display name of the profile **the repository marks active while the
+connection state is exactly `CONNECTED`** (resolved via `ActiveProfileRepository.getActiveProfileId`
+→ `ProfileDao.getById`, off the main thread), or `<none>` when the state is anything else
+(`CONNECTING`, `PAUSED`, `REVIVING`, `ROTATING`, `BLACKHOLED`, `DISCONNECTED`, …) or when the id is
+missing/unresolvable. `ActiveProfileRepository` is the approved source and advances only after a
+successful connection, so **the marker is not evidence of the in-flight rotation target** — during
+an auto-failover `ROTATING` window the marker can name the previously connected profile or fall back
+to `<none>`, and neither value identifies the candidate currently being brought up. Do not widen the
+state predicate to make the marker a rotation oracle: that would change VPN/session behavior and
+still would not expose the true rotation target. Profile-name control characters are flattened so
+the marker is always exactly one line.
 
 **Dump to tmp file** writes the dump text (UTF-8, off the main thread) to a unique
 `log-dump-<UTC yyyyMMdd-HHmmss-SSS>.txt` under `File(getExternalFilesDir(null), "tmp")` — directly
-pullable via `adb pull` with no run-as. After the write, a persistent debug-only status line on
-the Logs screen (`DebugLogDumpStatus`) shows `Dumped to: <full path>` (plus a failure line on
-error), so `uiautomator dump` captures the exact path to pull. Same-millisecond dumps resolve a
-`-N` suffix instead of overwriting.
+pullable via `adb pull` with no run-as. Same-millisecond dumps resolve a `-N` suffix instead of
+overwriting. If `tmp` cannot be created or is not a directory, the dump fails explicitly (never as
+an incidental IO error deep in the write); an existing directory and benign directory-creation
+races are accepted. Prefer the file dump for **canonical, full-fidelity retrieval of large buffers**.
 
 **Dump to logcat** emits the dump text on tag **`XTLS.LogDump`** as: one
 `log-dump begin chunks=<M> lines=<N>` entry, then `M` entries
 `log-dump NNNN/NNNN <payload>` (zero-padded indexes), then `log-dump end`. The text is first
 escaped (`\` → `\\`, newline → `\n`, CR → `\r`) so every entry is single-line, then chunked at
 3000 UTF-8 bytes — below logd's ~4068-byte per-entry payload limit, never splitting a Unicode
-code point. **Reassembly procedure**: take the last `begin`…`end` block for tag `XTLS.LogDump`
+code point. **Request logcat dumps one at a time** — overlapping dumps have no session token and
+their same-tag chunks can interleave; the file dump is the full-fidelity path when concurrency is
+possible. **Reassembly procedure**: take the last `begin`…`end` block for tag `XTLS.LogDump`
 (`adb logcat -d -s XTLS.LogDump`), collect entries matching
 `log-dump (\d+)/(\d+) (.*)$`, assert indexes are contiguous `1..M`, concatenate the payloads in
-order, then unescape (`\\`→`\`, `\n`→newline, `\r`→CR). The result is byte-exact: marker shape,
-buffer lines, and trailing newline all match a same-buffer file dump (verified on-device at 1 and
-8-chunk scale). A concurrent append between two dumps shows up as newer lines at the tail only —
-an earlier dump's buffer is always a byte-exact **prefix** of a later one (the buffer is
-append-only).
+order, then unescape (`\\`→`\`, `\n`→newline, `\r`→CR). The result is byte-exact — marker shape,
+buffer lines, and trailing newline all match a same-buffer file dump — **after ordered
+concatenation plus exactly one unescape pass** (an earlier dump's raw `\n` sequences become literal
+backslashes through escaping, so a second unescape would corrupt them). The on-screen logcat dump
+uses the same escape/unescape pair. A concurrent append between two dumps shows up as newer lines at
+the tail only — an earlier dump's buffer is always a byte-exact **prefix** of a later one (the buffer
+is append-only).
 
-Failure/completion results are surfaced as a toast and in the persistent status line, without
-exposing raw-log contents (error summaries carry only exception detail, never buffer data).
+**Latest-action status contract.** The persistent debug-only status line (`DebugLogDumpStatus`)
+renders exactly one process-global, atomic state: the **latest requested** dump action's outcome —
+file path, logcat chunk count, or failure. Starting a new request **clears the previous result and
+shows no status line while the request is in flight** (there is no in-flight text/string). An older
+path or failure is never presented as current, and a stale asynchronous completion (guarded by an
+increasing request id) cannot overwrite a newer result. The final result reappears and persists
+across Logs-screen navigation for the rest of the process or until the next request. The dump work
+runs on a process-scoped coroutine scope, so closing the overflow menu does not cancel a launched
+action. Failure/completion results are surfaced as a toast and in that status line. `begin`,
+`complete` and toast presentation are confined to `Dispatchers.Main` — the same dispatcher as the
+menu click — in one non-suspending segment; `complete` is also atomic and accepts only the current
+request's in-flight marker, returning whether the result may be presented. A newer Main click
+therefore always wins over a queued older completion, and no separate eligibility token crosses
+dispatchers. Toast message formatting and display are inside the presentation-only boundary and
+wrapped so a failure cannot replace or crash a completed dump outcome. No raw-log contents are
+exposed (error summaries carry only exception detail, never buffer data).
 
 ## The live buffer-size setting
 
@@ -429,8 +454,9 @@ fact about this screen:
 | [`vpn/XrayVpnService.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/XrayVpnService.kt) | `startVpn` creates+truncates `filesDir/logs/xray-core.log` once, captures `sessionLog` from `LogPreferences.getLogLevel`, and assigns a session epoch under `lock`; initial success/failure, tailer ownership, and kill-switch callbacks require that epoch to remain active. `stopVpn` invalidates it and serializes global teardown before a new session can start (kill-switch pause does not stop the tailer). |
 | [`vpn/SessionLifecycleDecision.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/vpn/SessionLifecycleDecision.kt) | Pure identity/transition rules: a lifecycle callback is accepted only when the service is running and its epoch equals the active epoch (`acceptsSessionLifecycleCallback` / `ownsTunnelTransition`); `canReserveRevive` (PAUSED→REVIVING); `shouldDeferKillDuringTransition` (current session AND `REVIVING`/`ROTATING` — the single defer-vs-drop rule for a kill landing mid-transition). Auto-failover added the rotation half in the same file — `SessionTunnelState.ROTATING`, `canReserveRotation` (CONNECTED→ROTATING), `shouldDeferKillDuringTransition` (REVIVING **or** ROTATING), the monitor/receiver/give-up predicates and `activeProfileIdToRestoreOnRefusedStart`; see [auto-failover.md](auto-failover.md). |
 | [`log/LogShareBudget.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogShareBudget.kt) | Pure `bound(lines, maxBytes)` → newest-tail `BoundedLog` (`text`/`includedLines`/`totalLines`/`truncated`) under a 256 KiB budget; keeps the inline Copy/Share payload clear of the Binder transaction limit. Export bypasses it (streams). |
-| [`log/DebugLogDumper.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumper.kt) | Debug-source-set pure helpers: marker shaping (UTC + connected profile + `<none>` fallback + control-char flattening), full-buffer rendering, UTF-8-safe `chunkUtf8` (≤3000 bytes, no split code points), logcat escape/unescape, unique dump-file naming/writing. No Android imports — JVM-tested. |
-| [`log/DebugLogDumpActions.kt` (debug)](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) / [(release)](../../app/src/release/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) | Debug: the two overflow-menu items + persistent `DebugLogDumpStatus` line + dump orchestration (I/O and Room lookup off main). Release: empty stubs so no action, label, or logic is packaged. |
+| [`log/DebugLogDumper.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumper.kt) | Debug-source-set pure helpers: marker shaping (UTC + active profile only while `CONNECTED` + `<none>` fallback + control-char flattening), full-buffer rendering, UTF-8-safe `chunkUtf8` (≤3000 bytes, no split code points), logcat escape/unescape, unique dump-file naming/writing with explicit unusable-directory errors. No Android imports — JVM-tested. |
+| [`log/DebugLogDumpStatus.kt`](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumpStatus.kt) | Debug-source-set last-action-wins state + reducer and the JVM-testable holder instance used by the UI: one state per latest request; atomic `complete` accepts only the matching in-flight request (rejecting stale/duplicate/orphan completions) and returns whether that result may be presented. Production confines begin/complete/present to Main. JVM-tested end to end. |
+| [`log/DebugLogDumpActions.kt` (debug)](../../app/src/debug/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) / [(release)](../../app/src/release/java/com/justme/xtls_core_proxy/log/DebugLogDumpActions.kt) | Debug: the two overflow-menu items + persistent `DebugLogDumpStatus` line + dump orchestration (I/O and Room lookup off main, process-scoped work surviving menu dismissal). Release: empty stubs so no action, label, or logic is packaged; a JVM guard in the CI suite parses the stub and fails on any non-empty body, with the source file declared as a Gradle test input. |
 | [`log/LogsActivity.kt`](../../app/src/main/java/com/justme/xtls_core_proxy/log/LogsActivity.kt) | Screen: auto-following `LazyColumn` of `LogRepository.logs`, "jump to latest" FAB, single overflow menu (Copy/Share/Export + a divider then the destructive **Clear** — no bare toolbar icon), fully-tappable radio rows (`selectable`), a large-log explainer dialog gating Copy/Share, level selector dialog (persist-only), buffer selector dialog (live). Copy/Share go through `LogShareBudget` + `runCatching`. |
 
 ## Error handling
@@ -497,8 +523,20 @@ fact about this screen:
   pins the exact marker format (timestamp/profile/`<none>`), control-character flattening,
   full-buffer rendering (including empty), UTF-8 chunk budget inclusivity (3000-byte boundary),
   multibyte/surrogate-pair never-split, lossless chunk reassembly, oversized single-line splitting,
-  escape round trips (literal `\n` sequences survive), and unique/safe dump-file naming + content
-  (including same-instant collision resolution).
+  escape round trips (literal `\n` sequences survive), unique/safe dump-file naming + content
+  (including same-instant collision resolution), explicit unusable-directory errors (regular file at
+  the directory path), and accepting an existing directory.
+- **JUnit4 (JVM, debug test source set)** — `app/src/testDebug/.../log/DebugLogDumpStatusTest.kt`:
+  pins the atomic last-action-wins transitions on the **production holder instance** the composable
+  collects — start replaces a prior outcome, success↔failure and file↔logcat show only the latest
+  result, and a stale or duplicate completion (older request id) is atomically rejected without
+  publishing or returning presentation eligibility — including when a newer request begins before
+  the older completion is processed. Current completions are accepted exactly once.
+- **JUnit4 (JVM, main test source set; runs in CI)** —
+  `app/src/test/.../ReleaseDumpStubGuardTest.kt`: parses
+  `app/src/release/.../log/DebugLogDumpActions.kt`, requires both debug composable signatures to be
+  present with empty bodies (no UI/behavior), and is declared as a Gradle test input so stub edits
+  invalidate the suite. The release APK inspection remains the packaging oracle.
 - **On-device (manual)**: set level = Debug, connect, confirm Xray-core lines appear; change level while
   connected, confirm the running session is unaffected, then disconnect/reconnect and confirm the new
   level takes effect; trigger kill-switch pause/revive and confirm log lines keep flowing to the same

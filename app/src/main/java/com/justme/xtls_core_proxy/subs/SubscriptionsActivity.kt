@@ -179,10 +179,13 @@ private fun SubscriptionsScreen(
     var pendingDelete by remember { mutableStateOf<Subscription?>(null) }
     val promoContext = LocalContext.current
     var promoGate by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(Unit) {
-        if (promoGate == null) promoGate = PromoGate.resolve(promoContext, LocalDate.now())
+    if (PromoGate.PROMOTION_ENABLED) {
+        LaunchedEffect(Unit) {
+            if (promoGate == null) promoGate = PromoGate.resolve(promoContext, LocalDate.now())
+        }
     }
-    val showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
+    val showPromo = PromoGate.canShow(promoGate) &&
+        !PromotedSubscription.hasValidSubscription(subscriptions)
 
     Scaffold(
         topBar = {

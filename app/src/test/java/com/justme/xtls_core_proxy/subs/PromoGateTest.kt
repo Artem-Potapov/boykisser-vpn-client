@@ -3,6 +3,7 @@ package com.justme.xtls_core_proxy.subs
 import com.justme.xtls_core_proxy.subs.PromoGate.Outcome
 import com.justme.xtls_core_proxy.subs.PromoGate.Signal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.time.LocalDate
 
@@ -11,6 +12,11 @@ class PromoGateTest {
     private val before = LocalDate.of(2026, 7, 31)
     private val onDate = LocalDate.of(2026, 8, 1)
     private val after = LocalDate.of(2026, 8, 2)
+
+    @Test fun retiredPromo_hidesEvenWithSavedPositiveVerdict() {
+        assertFalse(PromoGate.PROMOTION_ENABLED)
+        assertFalse(PromoGate.canShow(true))
+    }
 
     @Test fun signalFor_maps418ToFire() = assertEquals(Signal.FIRE, PromoGate.signalFor(418))
     @Test fun signalFor_maps409ToDisarm() = assertEquals(Signal.DISARM, PromoGate.signalFor(409))

@@ -1,28 +1,18 @@
 # Boykisser Nag Screen
 
-Maintainer reference for the Boykisser onboarding / conversion screen — internally the "nag screen" —
-that walks an un-subscribed user through obtaining a VPN key. Reached from the home banner CTA and the
-"VPN by Boykisser (Recommended)" row on the subscriptions screen when those surfaces are visible
-(see [Entry / visibility](#entry--visibility)).
+Maintainer reference for the retained Boykisser onboarding screen (the "nag screen").
+The promoted service has shut down, and the screen has no active entry point.
 
 ## Entry / visibility
 
-The nag screen has **no independent gate** — `BoykisserInfoActivity` does not call `PromoGate` or
-check subscriptions itself. It is `android:exported="false"` with no intent-filters, so it is
-reachable only when the user taps a promo surface that is already showing:
+`BoykisserInfoActivity` is `android:exported="false"` with no intent-filters. Its only launch
+sites are the Home banner and the Subscriptions promo row, both dormant while
+`PromoGate.PROMOTION_ENABLED` is `false`. Both screens skip the promo's HTTP probes and ignore
+any saved positive verdict. The nag screen has no independent gate.
 
-```kotlin
-showPromo = promoGate == true && !PromotedSubscription.hasValidSubscription(subscriptions)
-```
-
-(`promoGate` is resolved once per screen via `LaunchedEffect { PromoGate.resolve(...) }` in both
-`MainActivity` and `SubscriptionsActivity`; the home banner additionally requires
-`!bannerDismissed`.)
-
-The remote `PromoGate` probe semantics (418 / 409 / 451, date fallback, disarm lease) are documented
-in [`boykisser-vpn.md`](boykisser-vpn.md#remote-gate-subspromogatekt) — the nag screen inherits
-whatever those call sites decide. Deep-link / App Link entry (`BoykisserLinkActivity`) remains
-dormant per manifest; it does not open the nag screen.
+The retained remote gate is documented in [`boykisser-vpn.md`](boykisser-vpn.md#remote-gate-subspromogatekt).
+`BoykisserLinkActivity` does not open the nag screen; its implicit deep-link and App Link routes
+remain disabled.
 
 ## Why this exists
 
