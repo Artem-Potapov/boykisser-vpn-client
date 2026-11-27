@@ -75,9 +75,20 @@ That includes:
 R8 will otherwise strip or rename it; breakage shows up **only at runtime** (e.g., `bridge/XrayBridge.kt` → `xraybridge.**`, `go.**`). Green build doesn't prove safety — install release APK and exercise the path.
 
 ### Release Signing
-- Release signing reads `key.properties` (gitignored) into `signingConfigs("release")`
-- Keystore key must be **RSA or EC**; Android's APK Signature Scheme v2/v3 rejects **EdDSA/Ed25519**
-- R8 `mapping.txt` (`app/build/outputs/mapping/release/`) deobfuscates production stack traces
+- Ordinary release builds read `key.properties` (gitignored) into `signingConfigs("release")`.
+  Do not distribute artifacts signed with the dummy CI key.
+- For local production signing, run `./scripts/release.bash --real-release` in your own trusted
+  terminal. It defaults to `~/.keys/boykisser-release-key.jks` and reads the store password from
+  stdin without echoing it. Press Enter at the second prompt to reuse the same password, or enter
+  the distinct key password. Use `--key-alias ALIAS` if the keystore has multiple private keys.
+  For disposable-key tests, `XTLS_REAL_RELEASE_KEYSTORE` can select a different keystore.
+- The helper leaves `key.properties` untouched and builds APKs locally; it does not tag, push,
+  or publish. Invalid credentials abort before build tasks run; there is no CI key fallback.
+  Passwords are passed only in the Gradle invocation's environment, not in its arguments.
+  Do not put real passwords in shell commands, chat, or logs. Before distribution, verify each
+  APK's signer with `apksigner verify --print-certs` against the expected production fingerprint.
+- Keystore key must be **RSA or EC**; Android's APK Signature Scheme v2/v3 rejects **EdDSA/Ed25519**.
+- R8 `mapping.txt` (`app/build/outputs/mapping/release/`) deobfuscates production stack traces.
 
 ### Release APK Output
 `assembleRelease` emits:

@@ -1,7 +1,10 @@
 import java.util.Properties
-import java.io.FileInputStream
 import java.io.File
+import java.io.IOException
+import java.security.GeneralSecurityException
+import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.PrivateKey
 
 plugins {
     alias(libs.plugins.android.application)
@@ -9,10 +12,65 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-val keystorePropertiesFile: File? = rootProject.file("key.properties")
+val realReleaseStoreFile = System.getenv("XTLS_REAL_RELEASE_STORE_FILE")
+val realReleaseStorePassword = System.getenv("XTLS_REAL_RELEASE_STORE_PASSWORD")
+val realReleaseKeyPassword = System.getenv("XTLS_REAL_RELEASE_KEY_PASSWORD")
+val requestedRealReleaseAlias = System.getenv("XTLS_REAL_RELEASE_KEY_ALIAS")
+val hasRealReleaseOverride = listOf(
+    realReleaseStoreFile, realReleaseStorePassword, realReleaseKeyPassword, requestedRealReleaseAlias,
+).any { it != null }
+
 val keystoreProperties = Properties()
-if (keystorePropertiesFile!!.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+val realReleaseKeyAlias = if (hasRealReleaseOverride) {
+    if (realReleaseStoreFile.isNullOrBlank() || realReleaseStorePassword.isNullOrEmpty() ||
+        realReleaseKeyPassword.isNullOrEmpty()
+    ) {
+        throw GradleException("Release signing override requires a keystore path and both passwords.")
+    }
+
+    // Validate before any build task runs. Never fall back to the CI key after an override.
+    val storeFile = file(realReleaseStoreFile)
+    if (!storeFile.isFile || !storeFile.canRead()) {
+        throw GradleException("Release signing keystore is not a readable file.")
+    }
+    val store = KeyStore.getInstance("JKS")
+    val storePassword = realReleaseStorePassword.toCharArray()
+    val keyPassword = realReleaseKeyPassword.toCharArray()
+    try {
+        try {
+            storeFile.inputStream().use { store.load(it, storePassword) }
+        } catch (_: IOException) {
+            throw GradleException("Cannot open the release keystore. Check the file and store password.")
+        } catch (_: GeneralSecurityException) {
+            throw GradleException("Cannot load the release keystore.")
+        }
+        val alias = requestedRealReleaseAlias?.takeIf { it.isNotEmpty() }
+            ?: store.aliases().toList().singleOrNull {
+                store.entryInstanceOf(it, KeyStore.PrivateKeyEntry::class.java)
+            }
+            ?: throw GradleException("Release keystore does not have exactly one private key; specify --key-alias.")
+        if (!store.entryInstanceOf(alias, KeyStore.PrivateKeyEntry::class.java)) {
+            throw GradleException("The selected release alias is not a private-key entry.")
+        }
+        val key = try {
+            store.getKey(alias, keyPassword)
+        } catch (_: GeneralSecurityException) {
+            throw GradleException("Cannot unlock the release signing key. Check the key password.")
+        }
+        if (key !is PrivateKey || key.algorithm !in setOf("RSA", "EC")) {
+            throw GradleException("The release signing key must be an RSA or EC private key.")
+        }
+        alias
+    } finally {
+        storePassword.fill('\u0000')
+        keyPassword.fill('\u0000')
+    }
+} else {
+    val keystorePropertiesFile = rootProject.file("key.properties")
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+    }
+    null
 }
 
 val xrayAarFile = layout.projectDirectory.file("libs/xray.aar").asFile
@@ -96,7 +154,12 @@ android {
 
     signingConfigs {
         create("release") {
-            if (keystoreProperties.containsKey("storeFile")) {
+            if (hasRealReleaseOverride) {
+                storeFile = file(realReleaseStoreFile!!)
+                storePassword = realReleaseStorePassword
+                keyAlias = realReleaseKeyAlias
+                keyPassword = realReleaseKeyPassword
+            } else if (keystoreProperties.containsKey("storeFile")) {
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias = keystoreProperties["keyAlias"] as String
