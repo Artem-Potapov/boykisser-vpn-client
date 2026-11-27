@@ -80,7 +80,7 @@ val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase =
 // output file names (androidComponents block below).
 val appVersionName = "3.0.0R"
 
-val buildXrayAar by tasks.registering(Exec::class) {
+val buildXrayAar = tasks.register<Exec>("buildXrayAar") {
     group = "build setup"
     description = "Builds app/libs/xray.aar from xray-go via gomobile."
     workingDir = rootProject.projectDir
@@ -113,7 +113,7 @@ val buildXrayAar by tasks.registering(Exec::class) {
     outputs.file(xrayAarFile)
 }
 
-val verifyXrayAar by tasks.registering {
+val verifyXrayAar = tasks.register("verifyXrayAar") {
     group = "verification"
     description = "Ensures app/libs/xray.aar exists before Android build."
     //dependsOn(buildXrayAar)
@@ -277,10 +277,10 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    testImplementation("org.json:json:20260522")
+    testImplementation(libs.json)
     testImplementation(libs.junit)
-    testImplementation("org.mockito.kotlin:mockito-kotlin:6.3.0")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation(libs.mockito.kotlin)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.espresso.intents)
@@ -321,7 +321,7 @@ if (project.hasProperty("uninstallAfterTest")) {
                 val factory = javaClass.getMethod("getTestRunnerFactory").invoke(this)
                 @Suppress("UNCHECKED_CAST")
                 val keep = factory.javaClass.getMethod("getKeepInstalledApks").invoke(factory)
-                    as org.gradle.api.provider.Property<Boolean>
+                        as org.gradle.api.provider.Property<Boolean>
                 keep.set(false)
             }
             if (result.isSuccess) {
@@ -329,7 +329,7 @@ if (project.hasProperty("uninstallAfterTest")) {
             } else {
                 logger.warn(
                     "[uninstallAfterTest] $name: could NOT override keepInstalledApks " +
-                        "(${result.exceptionOrNull()?.message}); app will stay installed (fail-safe)."
+                            "(${result.exceptionOrNull()?.message}); app will stay installed (fail-safe)."
                 )
             }
         }
